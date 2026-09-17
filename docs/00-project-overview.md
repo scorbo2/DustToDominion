@@ -36,7 +36,7 @@ The game will have a fully hermetic test suite:
 - seeded RNG and injected clock for deterministic behavior
 - use of environment variables to override default persistence location(s) to system temp dir
   - `DUST_TO_DOMINION_CONFIG`: overrides the default `$HOME/.DustToDominion/game.json`
-  - `DUST_TO_DOMINION_HOME`: overrides the default `$HOME/.DustToDomionion/`
+  - `DUST_TO_DOMINION_HOME`: overrides the default `$HOME/.DustToDominion/`
 
 A feature is not complete unless it has reasonably comprehensive unit tests.
 The hermetic environment should ensure that if the test suite passes on the development
@@ -71,7 +71,8 @@ Game specifics:
 - **Framerate:** Locked at 60 FPS via `clock.tick(60)`
   - In simulation mode (for testing), we advance in fixed steps using the accumulator pattern,
     and `clock.tick(60)` only paces the rendering. Tests drive the simulation with the
-    injected clock directly.
+    injected clock directly. The accumulator lives in the test harness, not in the game.
+    The fixed step is a `SIM_STEP = 1/60` constant in `dtd/game_constants.py`.
 - Unless otherwise noted in future spec docs, all non-configurable game properties
   should by default be stored in a central `game_constants.py` module,
   to make them easy to adjust without hunting through code.
@@ -83,8 +84,12 @@ in the user's home dir (`Path.home()`, represented in these documents as `$HOME`
 
 - `$HOME/.DustToDominion/`
 
-This can be optionally overridden by setting the `DUST_TO_DOMINION_HOME` env var
-with the full path of any existing, writable directory.
+This location can be optionally overridden by setting the `DUST_TO_DOMINION_HOME` env var
+with the full path of any existing, writable directory. 
+
+The directory is silently created on startup if it does not exist. Failure to create
+this directory is a critical error that should abort startup. If the directory exists
+but is not readable, this is also a critical error that should abort startup.
 
 By default, the main `game.json` config file lives in this persistence directory.
 But, that can be optionally overridden by setting the `DUST_TO_DOMINION_CONFIG` env

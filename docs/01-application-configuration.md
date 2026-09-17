@@ -49,12 +49,25 @@ The config module is responsible for merging keys into the target config file.
 Clients need only specify the config keys that they care about, without having to know
 or care about any other keys that may be present in the target file. The config module
 will merge in the supplied keys, overwriting any keys of the same name that were previously
-there.
+there. This is a shallow (top-level) merge - each subsystem owns its top-level section wholesale
+and always writes the complete section. Subsystems have no mechanism to delete their
+key - stale keys remain in place, and are validated but ignored.
+
+If a write is attempted to an existing but malformed file (for example, not a Json file),
+raise an `InvalidConfigError`.
 
 ### Versioning
 
 The config module does not concern itself with versioning. Clients can specify
 a `version` property if they wish, but they must manage its contents.
+
+## Errors
+
+`dtd/errors.py` should contain a `ConfigError` base class. All errors
+referenced in this document live in `dtd/errors.py` and extend this base class:
+- `MissingConfigError`
+- `ConfigUnavailableError`
+- `InvalidConfigError`
 
 ## Game configuration
 
@@ -64,22 +77,21 @@ a main configuration file in a known location:
 - `${HOME}/.DustToDominion/game.json`
 
 It is never an error if this file does not exist or can't be read!
-The `MissingConfigError` raised by the config module will be trapped, logged
+Any `ConfigError` raised by the config module will be trapped, logged
 as a warning, and the game will proceed with default values. All game
 code should assume sensible default values if the configuration file cannot be read.
 
-Any `InvalidConfigError` raised by the config module when reading `game.json`
-should be logged as a warning. The game should proceed with defaults.
-
 The location of the game config file can be overridden by the `DUST_TO_DOMINION_CONFIG` env var.
 The same handling of `MissingConfigError` applies in this case - log as a warning, proceed with defaults.
+Note that if the env var is supplied by has no value (empty or blank string), then the
+explicit path is used, as though the env var had not been supplied.
 
 ## Testing
 
 Unit tests for the config module should include:
-- `MissingConfigError` is raised if config is requested with neither file nor env var specified.
-- `InvalidConfigError` is raised if the config file is present but contains unexpected data.
+- The game assumes default configuration if `game.json` is missing or unreadable.
 - The config module returns valid data if the file to be queried exists and contains valid data.
+- Attempting to load a malformed Json file should raise `InvalidConfigError`.
 - Writing config data to a non-existent config file should create that file.
 - Writing updated config data to an existing config file should update that file with the new values.
 - Writing config to a read-only file should raise `PermissionError`.
@@ -89,7 +101,8 @@ Unit tests for the config module should include:
 - There is a `config` module that can be accessed by game code.
 - The `config` module has NO knowledge of game-specific configuration properties.
 - The `config` module allows reading of existing configuration files.
-- The `config` module allows updating of existing configuration files.
+- Invalid, missing, or malformed `game.json` causes a log warning, and the game loads with defaults.
+- The `config` module allows updating of existing configuration files (shallow top-level merge).
 - The `config` module allows creation of new configuration files.
 - The location of config files can be specified by full path OR by an environment variable, with the env var taking precedence.
 
