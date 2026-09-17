@@ -1,5 +1,5 @@
 ---
-status: proposed
+status: active
 ---
 
 # Window handling

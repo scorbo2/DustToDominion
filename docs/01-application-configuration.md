@@ -1,5 +1,5 @@
 ---
-status: proposed
+status: active
 ---
 
 # Application configuration
@@ -79,7 +79,7 @@ referenced in this document live in `dtd/errors.py` and extend this base class:
 The game itself is a client of the configuration module. The game defines
 a main configuration file in a known location:
 
-- `${HOME}/.DustToDominion/game.json`
+- inside the persistence directory (see `00-project-overview.md`, Persistence), which is `${HOME}/.DustToDominion/game.json` by default
 
 It is never an error if this file does not exist or can't be read!
 Any `ConfigError` raised by the config module will be trapped, logged
