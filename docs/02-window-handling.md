@@ -4,6 +4,8 @@ status: proposed
 
 # Window handling
 
+A `main_window.py` module will encapsulate the creation and management of the main game window.
+
 The game supports two modes (always in 16:9):
 
 - **Windowed mode** (default): the game displays in a non-resizable fixed-size window at 1280x720.
@@ -12,23 +14,39 @@ The game supports two modes (always in 16:9):
   - 1920x1080
   - 2560x1440
 
-Pressing `F11` at runtime will toggle between windowed mode and fullscreen mode.
+Pressing `F11` at runtime will toggle between windowed mode and fullscreen mode. The resolution
+to use is determined by querying the display device on whichever display the window is located.
+If the display device's current resolution matches any of our supported resolutions, use that one.
+Otherwise, the default choice is "1920x1080". Successfully switching to the chosen resolution
+triggers an immediate config save with the new mode/resolution. 
 
 The safe fallback, if any requested fullscreen resolution is not supported on the current display
-device, is windowed mode (with a log warning).
+device, is windowed mode (with a log warning). Pressing `F11` to enter fullscreen mode on a mode
+that is not available on the current display device is a no-op (with log warning).
+
+The game must have a way of programmatically switching between modes, with an option to
+specify which resolution to use in fullscreen mode. For example, if the game is currently
+in windowed mode, the game should have the ability to switch to fullscreen mode on any
+attached display, with any supported resolution. If the game does not specify a resolution
+to use for fullscreen mode, the automatic determination rules for the `F11` key are used.
+If the game requests a resolution that is not supported, the display mode is not switched,
+and a log warning is issued.
 
 The window title is always the full name of the game ("Dust to Dominion").
 
 ## Configuration
 
 This specification adds a new top-level `mainWindow` property to `game.json`:
-- `mode` (required): either `windowed` or `fullscreen`. Raise `InvalidConfigError` for any other value, or if not specified.
+- `mode` (required, if `mainWindow` key is present): either `windowed` or `fullscreen`.
+  Raise `InvalidConfigError` for any other value, or if not present inside the `mainWindow` object.
 - `resolution` (required for `fullscreen` mode, ignored for `windowed` mode). Fixed string corresponding to our three
   supported resolutions. Raise `InvalidConfigError` for any other value, or if `mode` is `fullscreen` and `resolution`
-  is not supplied.
+  is not supplied. The value is always validated if present and should raise `InvalidConfigError` if invalid (even if the
+  value would be ignored anyway).
 - `display` (optional, for `fullscreen` mode). The numeric index of the display to use for fullscreen mode. If not
   specified, default to `0` (primary display). Silently ignored if `mode` is `windowed`. If the given index is invalid
-  or does not exist, default to `0` (primary display) with a log warning.
+  or does not exist, default to `0` (primary display) with a log warning. The value is always validated if present
+  and should raise `InvalidConfigError` if invalid (even if the value would be ignored anyway).
 
 ### Windowed mode example
 
@@ -42,7 +60,7 @@ In `game.json`:
 }
 ```
 
-(This is also the default mode, so if this configuration is missing from `game.json`, or if `game.json`
+(This is also the default mode, so if the `mainWindow` key is missing from `game.json`, or if `game.json`
 itself is missing, this is the configuration that will be used).
 
 ### Fullscreen mode example
@@ -68,4 +86,21 @@ The `display` field is optional. If missing, default to the index of the primary
 Unit tests should cover reading the configuration:
 - missing configuration should result in defaults being used.
 - invalid configuration should raise `InvalidConfigError`
+
+From windowed mode:
+- programmatically triggering an `F11` should attempt a mode switch.
+- programmatically switching modes with a specific resolution should attempt the mode switch.
+- programmatically switching modes with no resolution specified should attempt 1920x1080
+
+From fullscreen mode:
+- programmatically switching modes (either via `F11` or via programmatic request) should 
+  switch back to a 1280x720 non-resizable window.
+
+## Acceptance criteria
+
+- Starting the game with no `config.json` displays a non-resizable 1280x720 window with a title "Dust to Dominion".
+- Hitting F11 at runtime on a display set to any of our supported resolutions should switch to fullscreen mode in that resolution.
+- Hitting F11 at runtime on a display set to some other resolution should attempt to enter fullscreen mode at 1920x1080 (default).
+- Hitting F11 in windowed mode when the current display supports none of our resolutions should be a no-op.
+- Hitting F11 and triggering a successful mode switch should update `game.json` with the new setting.
 

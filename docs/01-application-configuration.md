@@ -4,7 +4,7 @@ status: proposed
 
 # Application configuration
 
-A generic configuration module will allow the rest of the codebase to read/write
+A generic configuration module (`config.py`) will allow the rest of the codebase to read/write
 configuration files in Json format. The configuration module itself will NOT have
 knowledge of specific configuration properties hard-coded. Instead, client code
 will supply this information dynamically, using a pydantic model.
@@ -20,13 +20,17 @@ two ways:
 - supplying the name of an environment variable which contains the full path to the file
 
 If neither are set, `MissingConfigError` is raised. If both are set, the environment variable
-is used. If the file to be accessed does not exist, or cannot be read, `MissingConfigError` is raised.
+is used. If the file to be accessed does not exist, or cannot be read, `ConfigUnavailableError` is raised.
 
 ## Unexpected properties
 
 The configuration module will use `extra: 'forbid'` to force a `ValidationError` on
 unexpected properties in the configuration file. This `ValidationError` should be
 translated into an `InvalidConfigError`. 
+
+## Invalid/malformed Json
+
+Raise an `InvalidConfigError`.
 
 ## Reading and writing
 
@@ -39,9 +43,15 @@ Client code may write new or updated config to any config file. The config modul
 should do so atomically (temp file write + atomic file move) to avoid partial writes.
 It is not an error to attempt to write config to a file that does not exist - create it.
 The config module does NOT create parent directories automatically! Attempting to
-write to a config file in a directory that does not exist should raise `OsError` or similar.
+write to a config file in a directory that does not exist should raise `OSError`.
 
-## Versioning
+The config module is responsible for merging keys into the target config file.
+Clients need only specify the config keys that they care about, without having to know
+or care about any other keys that may be present in the target file. The config module
+will merge in the supplied keys, overwriting any keys of the same name that were previously
+there.
+
+### Versioning
 
 The config module does not concern itself with versioning. Clients can specify
 a `version` property if they wish, but they must manage its contents.
@@ -58,6 +68,9 @@ The `MissingConfigError` raised by the config module will be trapped, logged
 as a warning, and the game will proceed with default values. All game
 code should assume sensible default values if the configuration file cannot be read.
 
+Any `InvalidConfigError` raised by the config module when reading `game.json`
+should be logged as a warning. The game should proceed with defaults.
+
 The location of the game config file can be overridden by the `DUST_TO_DOMINION_CONFIG` env var.
 The same handling of `MissingConfigError` applies in this case - log as a warning, proceed with defaults.
 
@@ -69,7 +82,7 @@ Unit tests for the config module should include:
 - The config module returns valid data if the file to be queried exists and contains valid data.
 - Writing config data to a non-existent config file should create that file.
 - Writing updated config data to an existing config file should update that file with the new values.
-- Writing config to a read-only file should raise `PermissionError`/`OsError`.
+- Writing config to a read-only file should raise `PermissionError`.
 
 ## Acceptance criteria
 

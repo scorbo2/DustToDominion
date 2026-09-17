@@ -33,16 +33,19 @@ these possible values:
 
 - `proposed`: the document has not yet been implemented.
 - `active`: the document has been implemented and reflects the current state of the code.
-- `superseded`: the document was implemented but has since fallen out of date. An additional
+- `superseded`: the document has fallen out of date since implementation, or was never implemented. An additional
   Yaml field called `replacement` contains the name of the document which supersedes this one.
 
-If the frontmatter section of a document is missing, the document is assumed to be in `active` state.
+If the frontmatter section of a document is missing, the document is assumed to be in `proposed` state.
+
+Note that the `00-project-overview.md` document does not have Yaml frontmatter, as it is the only
+specification document that is not intended to produce runnable code - it is a guideline document.
 
 ### Example of a superseded document
 
 ```
 ---
-status: supeseded
+status: superseded
 replacement: 09-new-ship-handling.md
 ---
 ```

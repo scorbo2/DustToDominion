@@ -1,7 +1,3 @@
----
-status: proposed
----
-
 # Dust to Dominion - project overview
 
 "Dust to Dominion" is a game written in Python using the `pygame-ce` library.
@@ -22,6 +18,10 @@ into two main elements:
   ships, or purchase new ships. The player can also hire crew
   for their ships, which improve ship stats.
 
+In both of these views, interactions with NPCs, both friendly and hostile,
+are possible through both on-screen text and spoken (pre-recorded, not TTS) dialogue.
+The player's interactions are via multiple-choice option lists (no STT).
+
 The name of the game describes the journey of starting with nothing
 but asteroid dust, and ending up with a dominant mining fleet operation.
 
@@ -35,6 +35,8 @@ The game will have a fully hermetic test suite:
 - fully simulated environment with dummy video and audio drivers
 - seeded RNG and injected clock for deterministic behavior
 - use of environment variables to override default persistence location(s) to system temp dir
+  - `DUST_TO_DOMINION_CONFIG`: overrides the default `$HOME/.DustToDominion/game.json`
+  - `DUST_TO_DOMINION_HOME`: overrides the default `$HOME/.DustToDomionion/`
 
 A feature is not complete unless it has reasonably comprehensive unit tests.
 The hermetic environment should ensure that if the test suite passes on the development
@@ -50,17 +52,28 @@ We target Python 3.12 with the following dependencies:
 
 The project is structured as follows:
 - `docs`: project architecture docs and specifications
-- `src`: all game code
+- `src`: all game code goes here
+  - `dtd`: top-level package
+    - `game_constants.py`
+    - `config.py`
+    - `errors.py`
+    - other top-level modules go here as needed (to be defined in later spec docs)
+    - subdirectories as needed for code organization
 - `resources`:
-  - `audio`: audio files needed by the game
-  - `graphics`: sprites and images used by the game
+  - `audio`: audio files needed by the game (to be defined in later spec docs)
+  - `graphics`: sprites and images used by the game (to be defined in later spec docs)
   - `data`: miscellaneous data files (dialogue scripts, ship data files, etc.)
+    Details will be defined in later spec docs.
 - `tests`: all unit tests
 - `tools`: any standalone tools that accompany the game (sprite editor, sound editor, etc.)
 
 Game specifics:
 - **Framerate:** Locked at 60 FPS via `clock.tick(60)`
-- All non-configurable game properties should be stored in a central `game_constants.py` module,
+  - In simulation mode (for testing), we advance in fixed steps using the accumulator pattern,
+    and `clock.tick(60)` only paces the rendering. Tests drive the simulation with the
+    injected clock directly.
+- Unless otherwise noted in future spec docs, all non-configurable game properties
+  should by default be stored in a central `game_constants.py` module,
   to make them easy to adjust without hunting through code.
 
 ## Persistence
@@ -70,8 +83,12 @@ in the user's home dir (`Path.home()`, represented in these documents as `$HOME`
 
 - `$HOME/.DustToDominion/`
 
-Unless otherwise noted in a specification document, all runtime persistence will
-be done in that location.
+This can be optionally overridden by setting the `DUST_TO_DOMINION_HOME` env var
+with the full path of any existing, writable directory.
+
+By default, the main `game.json` config file lives in this persistence directory.
+But, that can be optionally overridden by setting the `DUST_TO_DOMINION_CONFIG` env
+var to any existing, readable file.
 
 ## Roadmap
 
