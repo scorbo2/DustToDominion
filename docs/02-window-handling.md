@@ -88,11 +88,12 @@ The `display` field is optional. If missing, default to the index of the primary
 Unit tests should cover reading the configuration:
 - missing configuration should result in defaults being used.
 - invalid configuration should raise `InvalidConfigError`
+  - For example: `mainWindow` is present but does not specify `mode`: `InvalidConfigError`
 
 From windowed mode:
 - programmatically triggering an `F11` should attempt a mode switch.
 - programmatically switching modes with a specific resolution should attempt the mode switch.
-- programmatically switching modes with no resolution specified should attempt the display's native
+- programmatically switching modes with no resolution specified should attempt the display's current
   resolution if supported, with a fallback attempt to 1920x1080 if not supported.
 
 From fullscreen mode:

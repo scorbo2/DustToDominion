@@ -50,11 +50,16 @@ Clients need only specify the config keys that they care about, without having t
 or care about any other keys that may be present in the target file. The config module
 will merge in the supplied keys, overwriting any keys of the same name that were previously
 there. This is a shallow (top-level) merge - each subsystem owns its top-level section wholesale
-and always writes the complete section. Subsystems have no mechanism to delete their
-key - stale keys remain in place, and are validated but ignored.
+and always writes the complete section. A section rewrite replaces the section wholesale
+(fields omitted by the client drop from the file). A key unknown to the current model, at
+any level, is an unexpected property (InvalidConfigError); for `game.json` the standard
+warn-and-defaults fallback applies. 'Validated but ignored' applies only to fields the
+model still defines but the feature doesn't use (e.g. resolution in windowed mode).
 
 If a write is attempted to an existing but malformed file (for example, not a Json file),
 raise an `InvalidConfigError`.
+
+Any config write must invalidate or update the cache; a merge must never read a stale cached copy.
 
 ### Versioning
 
@@ -82,8 +87,8 @@ as a warning, and the game will proceed with default values. All game
 code should assume sensible default values if the configuration file cannot be read.
 
 The location of the game config file can be overridden by the `DUST_TO_DOMINION_CONFIG` env var.
-The same handling of `MissingConfigError` applies in this case - log as a warning, proceed with defaults.
-Note that if the env var is supplied by has no value (empty or blank string), then the
+The same handling of `ConfigError` applies in this case - log as a warning, proceed with defaults.
+Note that if the env var is supplied but has no value (empty or blank string), then the
 explicit path is used, as though the env var had not been supplied.
 
 ## Testing
@@ -92,6 +97,9 @@ Unit tests for the config module should include:
 - The game assumes default configuration if `game.json` is missing or unreadable.
 - The config module returns valid data if the file to be queried exists and contains valid data.
 - Attempting to load a malformed Json file should raise `InvalidConfigError`.
+- Attempting to load config when neither file path nor env var are specified should raise `MissingConfigError`.
+- Attempting to load config with an unexpected key present should raise `InvalidConfigError`.
+- Attempting to load from a missing or unreadable file should raise `ConfigUnavailableError`.
 - Writing config data to a non-existent config file should create that file.
 - Writing updated config data to an existing config file should update that file with the new values.
 - Writing config to a read-only file should raise `PermissionError`.

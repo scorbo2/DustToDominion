@@ -87,9 +87,10 @@ in the user's home dir (`Path.home()`, represented in these documents as `$HOME`
 This location can be optionally overridden by setting the `DUST_TO_DOMINION_HOME` env var
 with the full path of any existing, writable directory. 
 
-The directory is silently created on startup if it does not exist. Failure to create
-this directory is a critical error that should abort startup. If the directory exists
-but is not readable, this is also a critical error that should abort startup.
+The directory is silently created on startup if it does not exist (`mkdir -p` or equivalent,
+to silently create all needed parent directories). Failure to create this path
+is a critical error that should abort startup. If the given directory exists
+but is not readable or writable, this is also a critical error that should abort startup.
 
 By default, the main `game.json` config file lives in this persistence directory.
 But, that can be optionally overridden by setting the `DUST_TO_DOMINION_CONFIG` env
