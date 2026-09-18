@@ -10,7 +10,8 @@ Rules implemented here (spec 01):
   are set; an env var that is set but blank is treated as if it had not been
   supplied
 - missing or unreadable file -> ``ConfigUnavailableError``; malformed JSON or
-  validation failure (including unexpected properties) -> ``InvalidConfigError``
+  validation failure (including unexpected top-level properties) ->
+  ``InvalidConfigError``
 - atomic writes (temp file + rename); parent directories are never created
 - shallow top-level merge: a section rewrite replaces the section wholesale
 - read results may be cached; any write invalidates the cached entry so a
@@ -117,6 +118,7 @@ def _read_json_object(resolved: Path) -> dict[str, Any]:
         raise InvalidConfigError(
             f"config file must contain a top-level JSON object: {resolved}"
         )
+    # Cached even if validation fails below - harmless: live edits need a restart (spec 01).
     _CACHE[resolved] = data
     return data
 
@@ -129,9 +131,10 @@ def _validate(model: type[M], raw: dict[str, Any], resolved: Path) -> M:
         raise InvalidConfigError(
             f"config file failed validation: {resolved}: {exc}"
         ) from exc
-    # Spec 01: unexpected properties are ALWAYS an error. Client models are
-    # expected to set extra='forbid' (caught by the ValidationError above);
-    # this is the module-level backstop for models that do not.
+    # Spec 01: unexpected TOP-LEVEL properties are ALWAYS an error, even for
+    # client models that did not set extra='forbid' - this is the module's
+    # backstop. Nested unexpected keys are deliberately out of scope; policing
+    # them is the client model's business (extra='forbid').
     unexpected = sorted(set(raw) - set(model.model_fields))
     if unexpected:
         raise InvalidConfigError(

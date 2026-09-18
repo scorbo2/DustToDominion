@@ -10,13 +10,10 @@ from typing import Literal
 
 import pygame
 from loguru import logger
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from dtd import game_constants
 from dtd.errors import ConfigError
-
-#: One of the three resolutions the game supports (spec 02).
-Resolution = Literal["1280x720", "1920x1080", "2560x1440"]
 
 
 class MainWindowConfig(BaseModel):
@@ -24,7 +21,7 @@ class MainWindowConfig(BaseModel):
 
     ``mode`` is required whenever the ``mainWindow`` key is present, and
     ``resolution`` is required in fullscreen mode. Both ``resolution`` and
-    ``display`` are always validated when present, even if the current mode
+    ``display`` are always validated when present, even in a mode that
     ignores them (spec 02). ``display`` only gets an integer check here; the
     display-count check happens at runtime, where it can fall back to the
     primary display with a log warning (spec 02).
@@ -33,10 +30,21 @@ class MainWindowConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     mode: Literal["windowed", "fullscreen"]
-    resolution: Resolution | None = None
+    # One of game_constants.SUPPORTED_RESOLUTIONS (the single source of truth
+    # per spec 00) - validated by field validator rather than a Literal,
+    # which would duplicate that list in this file.
+    resolution: str | None = None
     # strict=True so non-integer values (1.5, "1") are a config error
     # (spec 02: "Non-integer values... should result in an InvalidConfigError").
     display: int | None = Field(default=None, strict=True)
+
+    @field_validator("resolution")
+    @classmethod
+    def _require_supported_resolution(cls, value: str | None) -> str | None:
+        if value is not None and value not in game_constants.SUPPORTED_RESOLUTIONS:
+            supported = ", ".join(game_constants.SUPPORTED_RESOLUTIONS)
+            raise ValueError(f"unsupported resolution {value!r} (supported: {supported})")
+        return value
 
     @model_validator(mode="after")
     def _require_resolution_for_fullscreen(self) -> MainWindowConfig:
@@ -50,7 +58,7 @@ def default_main_window_config() -> MainWindowConfig:
     return MainWindowConfig(mode="windowed")
 
 
-def parse_resolution(resolution: Resolution) -> tuple[int, int]:
+def parse_resolution(resolution: str) -> tuple[int, int]:
     """Parse a ``WxH`` resolution string into a (width, height) tuple."""
     width, _, height = resolution.partition("x")
     return int(width), int(height)
@@ -61,7 +69,7 @@ class MainWindow:
 
     def __init__(self) -> None:
         self._is_fullscreen = False
-        self._resolution: Resolution | None = None
+        self._resolution: str | None = None
         self._display_index = 0
 
     # ------------------------------------------------------------------ #
@@ -108,7 +116,7 @@ class MainWindow:
     def switch_mode(
         self,
         mode: str,
-        resolution: Resolution | None = None,
+        resolution: str | None = None,
         display: int | None = None,
     ) -> bool:
         """Programmatic mode switch (spec 02). True if it succeeded.
@@ -123,22 +131,32 @@ class MainWindow:
 
     def switch_to_fullscreen(
         self,
-        resolution: Resolution | None = None,
+        resolution: str | None = None,
         display: int | None = None,
     ) -> bool:
         """Enter fullscreen mode (spec 02). True if the switch succeeded.
 
         With no explicit resolution the F11 auto-determination rules apply:
         the display's current resolution if it is one of the supported ones,
-        otherwise the 1920x1080 default.
+        otherwise the 1920x1080 default. With no explicit display, the
+        window's current display is used (spec 02: the display the window is
+        located on) - F11 must not drag the window to the primary display.
         """
+        if display is None:
+            display = self._current_window_display()
         target_display = self._resolve_display_index(display)
         if resolution is None:
             resolution = self._determine_f11_resolution(target_display)
         return self._enter_fullscreen(resolution, target_display, persist=True)
 
     def switch_to_windowed(self, display: int | None = None) -> bool:
-        """Return to the fixed-size 1280x720 windowed mode (spec 02)."""
+        """Return to the fixed-size 1280x720 windowed mode (spec 02).
+
+        With no explicit display, the window's current display is used so an
+        F11 toggle returns the window to the display it was on.
+        """
+        if display is None:
+            display = self._current_window_display()
         target_display = self._resolve_display_index(display)
         return self._enter_windowed(target_display, persist=True)
 
@@ -162,7 +180,7 @@ class MainWindow:
             self._persist_config()
         return True
 
-    def _enter_fullscreen(self, resolution: Resolution, display_index: int, persist: bool) -> bool:
+    def _enter_fullscreen(self, resolution: str, display_index: int, persist: bool) -> bool:
         if not self._resolution_supported(resolution, display_index):
             # Spec 02: requesting an unavailable fullscreen mode is a no-op
             # (with a log warning), never a crash.
@@ -199,7 +217,10 @@ class MainWindow:
             from dtd import game_config
 
             game_config.save_game_config_section("mainWindow", self._current_config())
-        except ConfigError as exc:
+        except (ConfigError, OSError) as exc:
+            # OSError included: the persistence dir can vanish or the disk can
+            # fill mid-game; a failed save must never take the game down
+            # (spec 02: log a warning and continue).
             logger.warning("failed to persist main window configuration: {}", exc)
 
     def _current_config(self) -> MainWindowConfig:
@@ -213,7 +234,7 @@ class MainWindow:
             )
         return MainWindowConfig(mode="windowed", display=self._display_index)
 
-    def _determine_f11_resolution(self, display_index: int) -> Resolution:
+    def _determine_f11_resolution(self, display_index: int) -> str:
         """F11 rule (spec 02): the display's current resolution if it matches
         one of the supported ones, else the 1920x1080 default."""
         current = self._display_current_resolution(display_index)
@@ -222,6 +243,41 @@ class MainWindow:
                 if parse_resolution(candidate) == current:
                     return candidate
         return game_constants.DEFAULT_FULLSCREEN_RESOLUTION
+
+    def _current_window_display(self) -> int:
+        """The display the window physically occupies right now (spec 02).
+
+        ``self._display_index`` is only updated by our own mode switches, so
+        it goes stale the moment the user drags the window; this method asks
+        the OS (via pygame) instead. pygame-ce exposes no direct "which
+        display is this window on" API, so we map the window's center point
+        (virtual desktop coordinates) against the x-spans derived from
+        ``get_desktop_sizes()``. The left-to-right scan assumes displays are
+        arranged side by side: pygame exposes no per-display origins, so
+        staggered/vertical layouts are unrepresentable with this API. If the
+        window position cannot be determined at all, fall back to the last
+        display this class knows about.
+        """
+        try:
+            position = pygame.display.get_window_position()
+            size = pygame.display.get_window_size()
+            desktop_sizes = pygame.display.get_desktop_sizes()
+        except pygame.error:
+            return self._display_index
+        if not desktop_sizes:
+            return self._display_index
+        # The window's center, so a window straddling two displays is
+        # attributed to the one it mostly occupies.
+        center_x = position[0] + size[0] // 2
+        origin_x = 0
+        for display_index, (width, _height) in enumerate(desktop_sizes):
+            if center_x < origin_x + width:
+                return display_index
+            origin_x += width
+        # The center is past the right edge of the last display (e.g. the
+        # window is mid-drag off the desktop edge); the last display is the
+        # closest reasonable attribution.
+        return len(desktop_sizes) - 1
 
     def _resolve_display_index(self, display: int | None) -> int:
         """Runtime display check (spec 02): an index that does not exist
@@ -247,7 +303,7 @@ class MainWindow:
             return (sizes[display_index][0], sizes[display_index][1])
         return None
 
-    def _resolution_supported(self, resolution: Resolution, display_index: int) -> bool:
+    def _resolution_supported(self, resolution: str, display_index: int) -> bool:
         """Whether the display can run ``resolution`` in fullscreen mode."""
         if not _display_exists(display_index):
             return False

@@ -11,6 +11,12 @@ from pydantic import BaseModel, ConfigDict
 from dtd import config
 from dtd.errors import ConfigUnavailableError, InvalidConfigError, MissingConfigError
 
+# chmod-based permission tests are meaningless when running as root (Unix) or
+# on a platform without os.geteuid (e.g. Windows); skip in both cases. The
+# guard must not call os.geteuid() unguarded - it is evaluated at collection
+# time and would raise AttributeError on Windows, failing the whole module.
+_SKIP_PERMISSION_TESTS = not hasattr(os, "geteuid") or os.geteuid() == 0
+
 
 class _Nested(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -22,6 +28,14 @@ class _SampleConfig(BaseModel):
     alpha: int = 1
     beta: str = "default"
     nested: _Nested | None = None
+
+
+class _PermissiveConfig(BaseModel):
+    """Deliberately no extra='forbid': exercises the module-level backstop,
+    which per spec 01 covers top-level keys only."""
+
+    alpha: int = 1
+    nested: dict = {}
 
 
 def _write(path: Path, payload: object) -> Path:
@@ -48,7 +62,10 @@ class TestLoadConfig:
         with pytest.raises(ConfigUnavailableError):
             config.load_config(missing, None, _SampleConfig)
 
-    @pytest.mark.skipif(os.geteuid() == 0, reason="root bypasses file permission checks")
+    @pytest.mark.skipif(
+        _SKIP_PERMISSION_TESTS,
+        reason="file permission checks are bypassed (root) or N/A (no os.geteuid, e.g. Windows)",
+    )
     def test_with_unreadable_file_should_raise_config_unavailable_error(
         self, tmp_path: Path
     ) -> None:
@@ -101,6 +118,24 @@ class TestLoadConfig:
         with pytest.raises(InvalidConfigError):
             config.load_config(path, None, _SampleConfig)
 
+    def test_with_unexpected_top_level_key_and_permissive_model_should_raise_invalid_config_error(
+        self, tmp_path: Path
+    ) -> None:
+        # Spec 01: the module backstops top-level keys even when the client
+        # model does not set extra='forbid'.
+        path = _write(tmp_path / "perm-top.json", {"alpha": 1, "surprise": True})
+        with pytest.raises(InvalidConfigError):
+            config.load_config(path, None, _PermissiveConfig)
+
+    def test_with_unexpected_nested_key_and_permissive_model_should_be_ignored(
+        self, tmp_path: Path
+    ) -> None:
+        # Spec 01: nested unexpected keys are the client model's business;
+        # a permissive model silently keeps them.
+        path = _write(tmp_path / "perm-nested.json", {"alpha": 1, "nested": {"surprise": True}})
+        result = config.load_config(path, None, _PermissiveConfig)
+        assert result.nested == {"surprise": True}
+
     def test_env_var_should_take_precedence_over_path(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -148,7 +183,10 @@ class TestSaveConfig:
         with pytest.raises(OSError):
             config.save_config(tmp_path / "gone" / "dir" / "cfg.json", None, {"alpha": 1})
 
-    @pytest.mark.skipif(os.geteuid() == 0, reason="root bypasses file permission checks")
+    @pytest.mark.skipif(
+        _SKIP_PERMISSION_TESTS,
+        reason="file permission checks are bypassed (root) or N/A (no os.geteuid, e.g. Windows)",
+    )
     def test_to_read_only_file_should_raise_permission_error(self, tmp_path: Path) -> None:
         locked = _write(tmp_path / "ro.json", {"alpha": 1})
         locked.chmod(0o444)

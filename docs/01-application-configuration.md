@@ -24,9 +24,16 @@ is used. If the file to be accessed does not exist, or cannot be read, `ConfigUn
 
 ## Unexpected properties
 
-The configuration module will use `extra: 'forbid'` to force a `ValidationError` on
-unexpected properties in the configuration file. This `ValidationError` should be
-translated into an `InvalidConfigError`. 
+Unexpected **top-level** properties in the configuration file are always an error,
+regardless of the client model: any pydantic `ValidationError` is translated into
+an `InvalidConfigError`, and the module additionally backstops top-level keys that
+the model does not declare, even for models that do not set `extra: 'forbid'`.
+
+Unexpected properties **inside** a section (nested keys) are the client model's
+responsibility. The module does not check them; a client that wants nested typos
+rejected opts in with `extra: 'forbid'` on its pydantic model, and the resulting
+`ValidationError` is likewise translated into an `InvalidConfigError`. Whether a
+model forbids extra properties at all is entirely up to the client.
 
 ## Invalid/malformed Json
 
@@ -51,8 +58,9 @@ or care about any other keys that may be present in the target file. The config 
 will merge in the supplied keys, overwriting any keys of the same name that were previously
 there. This is a shallow (top-level) merge - each subsystem owns its top-level section wholesale
 and always writes the complete section. A section rewrite replaces the section wholesale
-(fields omitted by the client drop from the file). A key unknown to the current model, at
-any level, is an unexpected property (InvalidConfigError); for `game.json` the standard
+(fields omitted by the client drop from the file). A top-level key unknown to the
+current model is an unexpected property (InvalidConfigError); nested keys are
+rejected only if the client model sets `extra: 'forbid'`. For `game.json` the standard
 warn-and-defaults fallback applies. 'Validated but ignored' applies only to fields the
 model still defines but the feature doesn't use (e.g. resolution in windowed mode).
 
@@ -98,7 +106,10 @@ Unit tests for the config module should include:
 - The config module returns valid data if the file to be queried exists and contains valid data.
 - Attempting to load a malformed Json file should raise `InvalidConfigError`.
 - Attempting to load config when neither file path nor env var are specified should raise `MissingConfigError`.
-- Attempting to load config with an unexpected key present should raise `InvalidConfigError`.
+- Attempting to load config with an unexpected top-level key present should raise `InvalidConfigError`,
+  for both `extra: 'forbid'` models and permissive ones.
+- Attempting to load config with an unexpected *nested* key present should raise `InvalidConfigError`
+  for `extra: 'forbid'` models, and be silently ignored for permissive ones.
 - Attempting to load from a missing or unreadable file should raise `ConfigUnavailableError`.
 - Writing config data to a non-existent config file should create that file.
 - Writing updated config data to an existing config file should update that file with the new values.
