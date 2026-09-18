@@ -1,8 +1,7 @@
 # Dust to Dominion
 
-"Dust to Dominion" is a 2D top-down mining game written in Python with
-pygame-ce. You start with a single, poorly-equipped mining ship and work your
-way up to a dominant asteroid-mining fleet.
+"Dust to Dominion" is a work in progress. Check back later.
+Contents below were AI-generated and are subject to a complete rewrite later.
 
 This repository is developed spec-first: see [docs/](docs/README.md) for the
 project specifications and their current status. A skeletal entry point
