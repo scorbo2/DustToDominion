@@ -19,6 +19,8 @@ suitability before implementation is very important.
   - It is not an error if this frontmatter is missing (default to "proposed" state), but flag it as a concern.
 - Does it have a valid "status" tag? (proposed/active/superseded)
   - If "superseded" and a "replacement" document is named, does that document exist?
+- Does the frontmatter include a "description" field?
+  - A required field for all spec docs: a one-sentence summary of what the document covers. Flag a missing description as a concern.
 - Does the document have an "Open questions" section with unanswered questions?
   - This is acceptable in the "proposed" state. For any other state, flag this as suspicious.
 - If the document is in "active" state, does it match the actual code behavior?

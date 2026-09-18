@@ -1,4 +1,5 @@
 ---
+description: The main game window: windowed vs fullscreen modes, F11 and programmatic mode switching, the mainWindow game.json section, and fallbacks for unsupported resolutions or displays.
 status: active
 ---
 

@@ -28,7 +28,9 @@ should briefly describe the document contents.
 
 Example: `00-project-overview.md`
 
-All documents are in Markdown format with Yaml frontmatter. The frontmatter contains a `status` field with
+All documents are in Markdown format with Yaml frontmatter. Every spec document's frontmatter must include
+a `description` field: a one-sentence summary of what the document covers, so that the spec set can be
+scanned quickly without opening each document. The frontmatter also contains a `status` field with
 these possible values:
 
 - `proposed`: the document has not yet been implemented.
@@ -45,6 +47,7 @@ specification document that is not intended to produce runnable code - it is a g
 
 ```
 ---
+description: Purchase and handover of new ships for the player's fleet.
 status: superseded
 replacement: 09-new-ship-handling.md
 ---

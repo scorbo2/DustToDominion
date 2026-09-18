@@ -1,4 +1,5 @@
 ---
+description: The generic Json configuration module: locating config files, validating them with pydantic models, atomic writes with shallow top-level merge, and the warn-and-defaults fallback for game.json.
 status: active
 ---
 
