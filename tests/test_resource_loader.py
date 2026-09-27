@@ -1,5 +1,5 @@
-"""Unit tests for the resource loader, dev mode (stage 2) and
-distribution mode (stage 4).
+"""Unit tests for the resource loader: dev mode (stage 2), distribution mode
+(stage 4), and auto-download fallback (stage 5).
 
 Dev mode contract: scan the default ``resources/`` directory (always) plus
 every configured ``location`` (relative to the *project* directory, never
@@ -7,18 +7,18 @@ the CWD), recursively, loading each supported-extension file under an ID
 relative to its containing directory. Unsupported extensions are silently
 skipped; the first unloadable resource raises ``ResourceLoadError``.
 
-Distribution mode contract: scan the project directory (always) plus every
-configured ``location`` for ``*.pak`` files (top level only, no recursion),
-loading them in alphabetical order by filename. The first invalid package
-raises ``ResourceLoadError``; no packages at all raises
-``NoResourcesFoundError`` (the autoDownload fallback is stage 5).
-
-Mode selection: a dev scan that finds no valid resources at all falls back
-to distribution mode; a resource that fails to LOAD never falls back.
+Auto-download fallback contract: when distribution mode finds no ``*.pak``
+files, the loader calls ``_auto_download_paks``. If ``config.autoDownload``
+is absent or empty, ``NoResourcesFoundError`` is raised. If URLs are present,
+each is downloaded (via the patchable ``_download_pak``) to the project
+directory. A file that already exists is skipped with a log warning but is
+still loaded. A failed download raises ``ResourceDownloadError``; a
+successfully downloaded but invalid pak raises ``ResourceLoadError``.
 """
 from __future__ import annotations
 
 import json
+import shutil
 import wave
 import zipfile
 from pathlib import Path
@@ -28,7 +28,7 @@ import pytest
 from loguru import logger
 
 from dtd import resource_loader
-from dtd.errors import NoResourcesFoundError, ResourceLoadError
+from dtd.errors import NoResourcesFoundError, ResourceDownloadError, ResourceLoadError
 from dtd.game_config import ResourcesConfig
 from dtd.pak import MANIFEST_ENTRY, create_pak, xor_bytes
 from dtd.resource_loader import ResourceLoader, project_directory
@@ -648,18 +648,204 @@ class TestDevToFallbackDistribution:
         with pytest.raises(ResourceLoadError, match="valid pak"):
             ResourceLoader().load(None)
 
-    def test_with_auto_download_urls_but_no_paks_should_raise_no_resources_found(
+
+class TestAutoDownload:
+    """Stage 5: auto-download fallback (spec 03: Auto-download)."""
+
+    def test_with_valid_url_should_download_pak_and_load_resources(
+        self, project: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # GIVEN no local paks and an autoDownload URL, where the download
+        # delivers a valid pak:
+        tree = project / "tree"
+        _make_text_file(tree, "note.txt", "downloaded content")
+        source_pak = project / "source.pak"
+        _make_pak(tree, source_pak)
+
+        def fake_download(url: str, dest: Path) -> None:
+            shutil.copy(source_pak, dest)
+
+        monkeypatch.setattr(resource_loader, "_download_pak", fake_download)
+
+        loader = ResourceLoader()
+        loader.load(ResourcesConfig(
+            mode="distribution",
+            autoDownload=["http://example.com/game_assets.pak"],
+        ))
+
+        assert loader.get_text_resource("note.txt") == "downloaded content"
+
+    def test_with_multiple_urls_should_download_all_paks(
+        self, project: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # GIVEN two URLs, each pointing to a different pak:
+        tree_a = project / "tree_a"
+        _make_text_file(tree_a, "a.txt", "from a")
+        pak_a = project / "src_a.pak"
+        _make_pak(tree_a, pak_a)
+
+        tree_b = project / "tree_b"
+        _make_text_file(tree_b, "b.txt", "from b")
+        pak_b = project / "src_b.pak"
+        _make_pak(tree_b, pak_b)
+
+        url_map = {
+            "http://example.com/a.pak": pak_a,
+            "http://example.com/b.pak": pak_b,
+        }
+
+        def fake_download(url: str, dest: Path) -> None:
+            shutil.copy(url_map[url], dest)
+
+        monkeypatch.setattr(resource_loader, "_download_pak", fake_download)
+
+        loader = ResourceLoader()
+        loader.load(ResourcesConfig(
+            mode="distribution",
+            autoDownload=list(url_map.keys()),
+        ))
+
+        assert loader.get_text_resource("a.txt") == "from a"
+        assert loader.get_text_resource("b.txt") == "from b"
+
+    def test_with_no_urls_configured_should_raise_no_resources_found(
         self, project: Path
     ) -> None:
-        # Stage boundary: autoDownload arrives in stage 5, so configured URLs
-        # are ignored for now (spec 03: they only matter when autoDownload is
-        # actually triggered):
-        config = ResourcesConfig(
-            mode="distribution",
-            autoDownload=["http://example.com/game_assets/package1.pak"],
-        )
+        # Spec 03: autoDownload absent → NoResourcesFoundError:
         with pytest.raises(NoResourcesFoundError):
-            ResourceLoader().load(config)
+            ResourceLoader().load(ResourcesConfig(mode="distribution"))
+
+    def test_with_empty_urls_list_should_raise_no_resources_found(
+        self, project: Path
+    ) -> None:
+        # Spec 03: autoDownload explicitly empty → NoResourcesFoundError:
+        with pytest.raises(NoResourcesFoundError):
+            ResourceLoader().load(ResourcesConfig(
+                mode="distribution", autoDownload=[]
+            ))
+
+    def test_with_download_failure_should_raise_resource_download_error(
+        self, project: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Spec 03: "if autoDownload is triggered but any download fails for
+        # any reason: ResourceDownloadError and exit code 1":
+        def failing_download(url: str, dest: Path) -> None:
+            raise ResourceDownloadError(f"network error for {url}")
+
+        monkeypatch.setattr(resource_loader, "_download_pak", failing_download)
+
+        with pytest.raises(ResourceDownloadError):
+            ResourceLoader().load(ResourcesConfig(
+                mode="distribution",
+                autoDownload=["http://example.com/game_assets.pak"],
+            ))
+
+    def test_with_invalid_downloaded_pak_should_raise_resource_load_error(
+        self, project: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Spec 03: "if autoDownload is triggered but yields an invalid package:
+        # ResourceLoadError and exit code 1":
+        def bad_download(url: str, dest: Path) -> None:
+            dest.write_bytes(b"this is not a valid zip / pak file")
+
+        monkeypatch.setattr(resource_loader, "_download_pak", bad_download)
+
+        with pytest.raises(ResourceLoadError):
+            ResourceLoader().load(ResourcesConfig(
+                mode="distribution",
+                autoDownload=["http://example.com/game_assets.pak"],
+            ))
+
+    def test_with_already_present_pak_should_skip_download_with_warning(
+        self, project: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # GIVEN a pak file already in the project dir under the same name as
+        # the URL's filename (simulates the game being run after a previous
+        # successful download). We patch _scan_pak_files to return [] so that
+        # the auto-download fallback is triggered even though the file is
+        # already on disk (spec 03: "ONLY if the named resource is not already
+        # present - skip with log warning if present"):
+        tree = project / "tree"
+        _make_text_file(tree, "note.txt", "already there")
+        _make_pak(tree, project / "game_assets.pak")
+
+        monkeypatch.setattr(resource_loader, "_scan_pak_files", lambda _: [])
+
+        download_calls: list[str] = []
+
+        def tracking_download(url: str, dest: Path) -> None:
+            download_calls.append(url)
+
+        monkeypatch.setattr(resource_loader, "_download_pak", tracking_download)
+
+        records, sink_id = _warning_records()
+        try:
+            loader = ResourceLoader()
+            loader.load(ResourcesConfig(
+                mode="distribution",
+                autoDownload=["http://example.com/game_assets.pak"],
+            ))
+        finally:
+            logger.remove(sink_id)
+
+        # The download was skipped because the file was present...
+        assert download_calls == []
+        # ...a warning was logged...
+        assert any("skipping" in r.lower() for r in records)
+        # ...but the file was still loaded successfully:
+        assert loader.get_text_resource("note.txt") == "already there"
+
+    def test_with_paks_found_locally_should_not_trigger_auto_download(
+        self, project: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Spec 03: autoDownload "ONLY serves as a fallback mechanism if no
+        # local resources are found in any given location". When a pak is
+        # present, the downloader must never be called:
+        tree = project / "tree"
+        _make_text_file(tree, "local.txt", "local content")
+        _make_pak(tree, project / "local.pak")
+
+        download_calls: list[str] = []
+
+        def tracking_download(url: str, dest: Path) -> None:
+            download_calls.append(url)
+
+        monkeypatch.setattr(resource_loader, "_download_pak", tracking_download)
+
+        loader = ResourceLoader()
+        loader.load(ResourcesConfig(
+            mode="distribution",
+            autoDownload=["http://example.com/extra.pak"],
+        ))
+
+        assert loader.get_text_resource("local.txt") == "local content"
+        assert download_calls == []
+
+    def test_with_auto_download_triggered_from_dev_mode_fallback(
+        self, project: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Spec 03 Determining mode: empty dev scan → distribution fallback →
+        # no local paks → autoDownload. autoDownload configured in dev mode
+        # (or with no explicit mode) must still work via the fallback chain:
+        (project / "resources").mkdir()
+
+        tree = project / "tree"
+        _make_text_file(tree, "note.txt", "from auto-download")
+        source_pak = project / "source.pak"
+        _make_pak(tree, source_pak)
+
+        def fake_download(url: str, dest: Path) -> None:
+            shutil.copy(source_pak, dest)
+
+        monkeypatch.setattr(resource_loader, "_download_pak", fake_download)
+
+        # No explicit mode (dev mode assumed by default):
+        loader = ResourceLoader()
+        loader.load(ResourcesConfig(
+            autoDownload=["http://example.com/game_assets.pak"]
+        ))
+
+        assert loader.get_text_resource("note.txt") == "from auto-download"
 
 
 class TestRealProjectResources:

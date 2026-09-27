@@ -1,6 +1,7 @@
 """Game resource loading and the consumer API (spec 03: Resource packaging).
 
-STAGES 2 and 4: dev mode and distribution mode are implemented.
+STAGES 2, 4, and 5: dev mode, distribution mode, and auto-download are
+implemented.
 
 Dev mode: the loader scans the default ``resources/`` directory (always,
 even if omitted from config) plus every configured ``location`` directory,
@@ -25,16 +26,22 @@ exit code 1 at the caller).
 Mode selection (spec 03: Determining mode): a dev-mode scan that finds no
 valid resources at all falls back to distribution mode. A resource or
 package that fails to LOAD is fatal and prevents any fallback. A
-distribution-mode scan that finds no ``*.pak`` files at all raises
-``NoResourcesFoundError`` right where spec 03 will later insert the
-autoDownload fallback.
+distribution-mode scan that finds no ``*.pak`` files triggers the
+autoDownload fallback (stage 5).
+
+Auto-download (spec 03: Auto-download): when distribution mode finds no
+``*.pak`` files, ``_auto_download_paks`` is called. If ``config.autoDownload``
+is empty or absent, ``NoResourcesFoundError`` is raised (fatal, exit code 1
+at the caller). Otherwise, each URL is downloaded to the project directory
+via ``_download_pak`` (a module-level function tests can monkeypatch so no
+real network access is needed). A pre-existing file with the same name is
+skipped with a log warning. A failed download raises ``ResourceDownloadError``
+(fatal, exit code 1 at the caller). A successfully downloaded but invalid pak
+raises ``ResourceLoadError`` (fatal, exit code 1 at the caller).
 
 Both modes decode resources through the shared ``pak.load_resource_from_bytes``
 and cache them in one shared ``pak.ResourceStore``, so dev mode and
 distribution mode cannot interpret a resource format differently.
-
-NOT implemented yet (stage 5): ``autoDownload``. Configured URLs are ignored
-until that stage.
 
 pygame-ce gotcha for in-memory audio (verified against 2.5.8):
 ``pygame.mixer.Sound(buffer=...)`` treats the object as RAW PCM in the
@@ -46,14 +53,16 @@ decoded like a file.
 """
 from __future__ import annotations
 
+import urllib.request
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 import pygame
 from loguru import logger
 
 from dtd import game_constants, pak
-from dtd.errors import NoResourcesFoundError, ResourceLoadError
+from dtd.errors import NoResourcesFoundError, ResourceDownloadError, ResourceLoadError
 from dtd.game_config import ResourcesConfig
 
 
@@ -181,11 +190,10 @@ class ResourceLoader:
         locations = _distribution_mode_locations(config)
         pak_files = _scan_pak_files(locations)
         if not pak_files:
-            scanned = ", ".join(str(location) for location in locations)
-            raise NoResourcesFoundError(
-                f"no *.pak package files found in distribution mode "
-                f"(scanned: {scanned})"
-            )
+            # autoDownload fallback (spec 03: Auto-download / Determining mode).
+            # Raises NoResourcesFoundError (no URLs) or ResourceDownloadError
+            # (download failure); either is fatal at the caller.
+            pak_files = _auto_download_paks(config)
         loaded = 0
         for pak_path in pak_files:
             # load_pak does the in-memory extraction plus all validation
@@ -352,3 +360,69 @@ def _scan_resource_files(root: Path) -> list[Path]:
         and path.suffix in game_constants.SUPPORTED_RESOURCE_EXTENSIONS
     ]
     return sorted(candidates, key=lambda path: path.relative_to(root).as_posix())
+
+
+# ---------------------------------------------------------------------- #
+# auto-download helpers (spec 03: Auto-download, stage 5)
+# ---------------------------------------------------------------------- #
+
+def _download_pak(url: str, dest: Path) -> None:
+    """Download a single ``*.pak`` file from ``url`` to ``dest``.
+
+    This is a module-level function so tests can monkeypatch it to avoid
+    real network calls (spec 03: Hermetic test suite reminder). The real
+    implementation uses ``urllib.request.urlretrieve``.
+
+    Raises:
+        ResourceDownloadError: the download fails for any reason (network
+            error, HTTP 404, etc.).
+    """
+    try:
+        urllib.request.urlretrieve(url, str(dest))
+    except Exception as exc:
+        raise ResourceDownloadError(
+            f"auto-download of {url!r} failed: {exc}"
+        ) from exc
+
+
+def _auto_download_paks(config: ResourcesConfig) -> list[Path]:
+    """Download configured ``autoDownload`` URLs to the project directory.
+
+    Called only when no local ``*.pak`` files were found in the distribution-
+    mode scan. Returns the list of pak file paths (newly downloaded or
+    already present) for the caller to load directly via ``pak.load_pak``.
+
+    A URL whose filename already exists in the project directory is skipped
+    with a log warning - the existing file will still be loaded (spec 03:
+    Auto-download). If the already-present file is corrupt, ``load_pak``
+    raises ``ResourceLoadError``, which is the intended behaviour (spec 03).
+
+    Raises:
+        NoResourcesFoundError: ``config.autoDownload`` is ``None`` or empty
+            (spec 03: Determining mode).
+        ResourceDownloadError: a download attempt fails for any reason
+            (spec 03: Auto-download).
+    """
+    urls = config.autoDownload or []
+    if not urls:
+        raise NoResourcesFoundError(
+            "no *.pak package files found and no autoDownload URLs configured"
+        )
+
+    project_dir = project_directory()
+    pak_paths: list[Path] = []
+    for url in urls:
+        filename = Path(urlparse(url).path).name
+        dest = project_dir / filename
+        if dest.exists():
+            logger.warning(
+                "auto-download target {!r} already present in {}; "
+                "skipping download",
+                filename,
+                project_dir,
+            )
+        else:
+            logger.info("auto-downloading {} -> {}", url, dest.name)
+            _download_pak(url, dest)
+        pak_paths.append(dest)
+    return pak_paths

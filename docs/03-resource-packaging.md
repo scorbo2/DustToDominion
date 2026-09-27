@@ -489,5 +489,5 @@ The spec is too large to implement all at once. The following staged dev plan is
 4. Implement distribution mode, loading resources from package files. Implement the fallback from dev mode
    to distribution mode. Still no auto-loader. Write all tests for distribution mode. **Completed 2026-09-27**
 5. Implement auto-loader with configurable URLs for package files. Implement the fallback from distribution
-   mode to the auto-downloader. Write all tests for the auto-downloader.
+   mode to the auto-downloader. Write all tests for the auto-downloader. **Completed 2026-09-27**
 
