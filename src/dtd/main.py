@@ -4,7 +4,8 @@ Startup order per spec 03 (stage 1 wiring):
 
 1. Boot the persistence directory (spec 00; fatal on failure).
 2. Load the game configuration (spec 01; never fatal).
-3. Initialize pygame, including the mixer (spec 03 step 2; fatal on failure).
+3. Initialize pygame, including the mixer (spec 03 step 2; fatal if the
+   required display or mixer module fails).
 4. Invoke the resource loader (spec 03 step 3; any ``ResourceError`` is fatal).
 5. Initialize and display the main window (spec 03 step 4 / spec 02).
 
@@ -71,16 +72,23 @@ def run() -> int:
 def _init_pygame() -> None:
     """Initialize pygame, including the mixer (spec 03 step 2).
 
-    Must succeed. ``pygame.init`` never raises for per-module failures - it
-    only reports how many modules failed - so the spec's "raise
-    ``pygame.error`` on failure and stop" is implemented here.
+    The game requires only the display and mixer modules; failures of
+    unrelated built-in modules (joystick, midi, ...) are logged and
+    tolerated (spec 03: startup order). ``pygame.init`` never raises for
+    per-module failures - it only reports how many failed - so the required
+    modules are verified explicitly afterwards.
     """
     _success, failures = pygame.init()
     if failures:
-        raise pygame.error(f"{failures} pygame module(s) failed to initialize")
-    # pygame.init() initializes the mixer when it can; the spec requires the
-    # mixer to be up (audio resources), so verify it explicitly rather than
-    # trusting the aggregate count alone.
+        logger.warning(
+            "{} pygame module(s) failed to initialize; continuing because "
+            "only display and mixer are required",
+            failures,
+        )
+    # Verify the two modules the game actually depends on rather than
+    # trusting the aggregate success count.
+    if not pygame.display.get_init():
+        raise pygame.error("pygame display failed to initialize")
     if not pygame.mixer.get_init():
         raise pygame.error("pygame mixer failed to initialize")
 

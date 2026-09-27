@@ -263,7 +263,8 @@ class TestNoResourcesFound:
     ) -> None:
         # Spec 03: nothing found anywhere (and no autoDownload configured)
         # is NoResourcesFoundError. The distribution-mode fallback now runs
-        # here too and also finds no *.pak file; autoDownload is stage 5.
+        # here too and also finds no *.pak file, and the autoDownload
+        # fallback has no URLs configured.
         with pytest.raises(NoResourcesFoundError):
             ResourceLoader().load(None)
 
@@ -518,8 +519,8 @@ class TestDistributionModeFailures:
     def test_with_no_pak_files_should_raise_no_resources_found(
         self, project: Path
     ) -> None:
-        # Spec 03: no *.pak anywhere (and autoDownload is stage 5) ->
-        # NoResourcesFoundError:
+        # Spec 03: no *.pak anywhere (and no autoDownload URLs configured)
+        # -> NoResourcesFoundError:
         with pytest.raises(NoResourcesFoundError):
             ResourceLoader().load(ResourcesConfig(mode="distribution"))
 

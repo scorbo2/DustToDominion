@@ -26,7 +26,10 @@ be executed before the resource loader is invoked. So, the game's startup order 
 
 1. General configuration loading
 2. Pygame initialization (including `mixer.init()` so we can load audio resources).
-   Pygame initialization must succeed! Raise `pygame.error` on failure and stop.
+   The game requires only the display and mixer modules; initialization of
+   those two must succeed. Raise `pygame.error` if either fails and stop.
+   Failures of unrelated modules (e.g. joystick or midi on a headless box)
+   are not fatal: log a warning and continue.
 3. ResourceLoader is invoked.
 4. Main window initialization and display (assuming previous steps did not stop on error).
 
@@ -454,6 +457,8 @@ Unit tests should cover both modes thoroughly:
   - creation unhappy path: invalid resources can NOT be packaged (log error on stderr and exit code 1)
   - inspection happy path: valid packages can be inspected and report an accurate count of resources. All SHA hashes match.
   - inspection unhappy path: invalid packages report an error on stderr and exit code 1.
+- pygame initialization: failing unrelated modules (e.g. joystick, midi) must
+  not abort startup; a failing display or mixer must abort with exit code 1.
 
 ### Hermetic test suite reminder
 

@@ -46,6 +46,43 @@ class TestRun:
         # The window was created with the default (windowed) config.
         assert observed["size"] == (1280, 720)
 
+    def test_when_unrelated_pygame_modules_fail_should_open_window_and_exit_cleanly(
+        self, bootstrapped_persistence: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # GIVEN a machine whose unrelated pygame modules fail (e.g. a
+        # headless server without MIDI or joystick drivers) - simulated by
+        # inflating the failure count pygame.init reports - while display
+        # and mixer come up fine (spec 03: only those two are required):
+        pygame.init()
+        real_init = pygame.init
+
+        def init_with_unrelated_failures():
+            successes, failures = real_init()
+            return successes, failures + 3
+
+        monkeypatch.setattr(pygame, "init", init_with_unrelated_failures)
+
+        # Post a QUIT event on the first event pump so the (otherwise
+        # infinite) skeletal loop terminates hermetically:
+        first_pump = True
+        real_event_get = pygame.event.get
+
+        def event_get(*args, **kwargs):
+            nonlocal first_pump
+            if first_pump:
+                first_pump = False
+                pygame.event.post(pygame.event.Event(pygame.QUIT))
+            return real_event_get(*args, **kwargs)
+
+        monkeypatch.setattr(pygame.event, "get", event_get)
+
+        # WHEN run() is invoked:
+        exit_code = app_main.run()
+
+        # THEN startup proceeds normally - unrelated module failures are
+        # not fatal:
+        assert exit_code == 0
+
     def test_should_return_nonzero_when_persistence_dir_cannot_be_created(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -106,12 +143,62 @@ class TestStartupOrder:
         assert order == ["config", "pygame", "resources", "window"]
 
 
+class TestInitPygame:
+    """The required-modules rule for pygame initialization (spec 03 step 2)."""
+
+    def test_when_unrelated_pygame_modules_fail_should_not_raise(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # GIVEN a machine where unrelated pygame modules (midi, joystick,
+        # ...) fail but display and mixer initialize fine. Simulated by
+        # inflating the failure count pygame.init reports:
+        pygame.init()
+        real_init = pygame.init
+
+        def init_with_unrelated_failures():
+            successes, failures = real_init()
+            return successes, failures + 2
+
+        monkeypatch.setattr(pygame, "init", init_with_unrelated_failures)
+
+        # WHEN _init_pygame is invoked:
+        # THEN no error is raised (spec 03: only display and mixer must
+        # succeed):
+        app_main._init_pygame()
+
+    def test_when_display_fails_to_initialize_should_raise_pygame_error(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # GIVEN pygame whose display module fails to initialize (spec 03:
+        # display is a required module, so this is fatal):
+        pygame.init()
+        monkeypatch.setattr(pygame.display, "get_init", lambda: False)
+
+        # WHEN _init_pygame is invoked:
+        # THEN a pygame.error naming the display is raised:
+        with pytest.raises(pygame.error, match="display"):
+            app_main._init_pygame()
+
+    def test_when_mixer_fails_to_initialize_should_raise_pygame_error(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # GIVEN pygame whose mixer module fails to initialize (spec 03: the
+        # mixer is a required module - audio resources - so this is fatal):
+        pygame.init()
+        monkeypatch.setattr(pygame.mixer, "get_init", lambda: False)
+
+        # WHEN _init_pygame is invoked:
+        # THEN a pygame.error naming the mixer is raised:
+        with pytest.raises(pygame.error, match="mixer"):
+            app_main._init_pygame()
+
+
 class TestStartupFailures:
     def test_when_pygame_init_fails_should_exit_1_without_opening_window(
         self, bootstrapped_persistence: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        # GIVEN a persistence dir and a failing pygame initialization (spec 03:
-        # "Pygame initialization must succeed! ... on failure and stop"):
+        # GIVEN a persistence dir and a failing pygame initialization (spec
+        # 03: a failing required module - display or mixer - is fatal):
         def failing_init_pygame():
             raise pygame.error("no video device available")
 
@@ -135,8 +222,8 @@ class TestStartupFailures:
     ) -> None:
         # Spec 03: no resources anywhere, no autoDownload specified ->
         # NoResourcesFoundError and exit code 1. (The distribution-mode
-        # fallback now runs here but finds no *.pak files either; the
-        # autoDownload fallback arrives in a later stage.)
+        # fallback now runs here but finds no *.pak files either, and the
+        # autoDownload fallback has no URLs configured.)
         (tmp_path / "resources").mkdir()  # exists, but holds nothing
         monkeypatch.setattr(resource_loader, "project_directory", lambda: tmp_path)
         window_opened: list[object] = []
