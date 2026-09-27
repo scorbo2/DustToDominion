@@ -9,7 +9,7 @@ warning, and the game proceeds with default values.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Literal, Mapping
 
 from loguru import logger
 from pydantic import BaseModel, ConfigDict
@@ -23,17 +23,37 @@ GAME_CONFIG_ENV_VAR = "DUST_TO_DOMINION_CONFIG"
 GAME_CONFIG_FILENAME = "game.json"
 
 
+class ResourcesConfig(BaseModel):
+    """The ``resources`` section of game.json (spec 03: Configuration).
+
+    ``mode`` accepts only ``dev`` or ``distribution``. Any other value is a
+    validation error, which ``load_game_config`` turns into a warning plus
+    the default config - i.e. dev mode (spec 03). ``location`` entries may be
+    relative; they are resolved against the *project* directory (where the
+    game script resides), not the current working directory (spec 03: a note
+    about relative paths). Resolving them is the resource loader's job, not
+    this model's.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    mode: Literal["dev", "distribution"] = "dev"
+    location: list[str] | None = None
+    autoDownload: list[str] | None = None
+
+
 class GameConfig(BaseModel):
     """Top-level model for game.json.
 
     Each spec that adds a config section adds a field here (spec 02 added
-    ``mainWindow``). extra='forbid' keeps typos loud (spec 01: unexpected
-    properties are always an error).
+    ``mainWindow``, spec 03 added ``resources``). extra='forbid' keeps typos
+    loud (spec 01: unexpected properties are always an error).
     """
 
     model_config = ConfigDict(extra="forbid")
 
     mainWindow: MainWindowConfig | None = None
+    resources: ResourcesConfig | None = None
 
 
 def game_config_path() -> Path:

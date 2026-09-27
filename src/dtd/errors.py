@@ -1,8 +1,8 @@
-"""Project error types (spec 01: Errors).
+"""Project error types (spec 01: Errors, spec 03: New error types).
 
 Spec 01 requires a ``ConfigError`` base class in this module; the config
-error subclasses it lists live here as well. Future specs may add their own
-error types to this module.
+error subclasses it lists live here as well. Spec 03 adds the ``ResourceError``
+hierarchy. Future specs may add their own error types to this module.
 """
 from __future__ import annotations
 
@@ -21,3 +21,28 @@ class ConfigUnavailableError(ConfigError):
 
 class InvalidConfigError(ConfigError):
     """The config file exists but is malformed or fails validation (spec 01)."""
+
+
+# --- Resource packaging (spec 03) --------------------------------------
+
+
+class ResourceError(Exception):
+    """Base class for all resource loading/download errors (spec 03).
+
+    Distinct from the config error family on purpose: a malformed
+    ``resources`` *config section* is a spec 01 ``ConfigError``; these
+    errors cover problems found while actually loading resources.
+    Any ``ResourceError`` raised during startup is fatal (exit code 1).
+    """
+
+
+class NoResourcesFoundError(ResourceError):
+    """No resources could be found at startup (spec 03)."""
+
+
+class ResourceLoadError(ResourceError):
+    """A resource or package file could not be loaded/parsed (spec 03)."""
+
+
+class ResourceDownloadError(ResourceError):
+    """An auto-download failed for any reason (spec 03)."""

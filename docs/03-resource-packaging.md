@@ -18,7 +18,7 @@ In both modes, the game should not make assumptions about the number of resource
 The intention is that additional resource packages can be made and distributed after the game ships,
 as add-on packs.
 
-This document proposes a new `ResourceLoader` module that is responsible for finding and loading
+This document proposes a new `resource_loader` module that is responsible for finding and loading
 game resources at game startup. This resource loader is invoked during startup, after the game configuration
 has been processed, but before the main window is displayed. This is so that configuration errors are detected
 early and the game does not start up in an invalid state. This requires pygame's initialization to
@@ -468,3 +468,23 @@ for filesystem tests, and configure the code to download to that directory.
    we defer those details to a future spec doc specific to ships? Or should this document contain all
    schema details for all supported resource types? **Resolved**: defer specific properties to a future
    specification. The resource loader does not know or care about them - we simply load raw resources here.
+
+## Implementation plan
+
+The spec is too large to implement all at once. The following staged dev plan is suggested:
+
+1. Create a stubbed-out `resource_loader` module with no-op functions for resource loading and consumer API.
+   No resources are loaded at this stage. Update the game startup code as outlined in this document - first
+   load game configuration, then initialize pygame, then invoke the stubbed-out resource loader, then initialize
+   and show the main window.
+2. Implement dev mode - scanning for and loading resources in individual files in any configured `location`.
+   Handle load/parse errors. **Nothing in the game actually uses the loaded resources yet**. This is fine.
+   Write tests for dev mode resource loading. No package files yet, no auto-loader yet, no packager yet.
+3. Implement the packager tool so that we can create valid package files. Write all tests for the packager.
+   This requires implementation of the package file format, including encryption of all entries, and the
+   handling of `manifest.json`.
+4. Implement distribution mode, loading resources from package files. Implement the fallback from dev mode
+   to distribution mode. Still no auto-loader. Write all tests for distribution mode.
+5. Implement auto-loader with configurable URLs for package files. Implement the fallback from distribution
+   mode to the auto-downloader. Write all tests for the auto-downloader.
+

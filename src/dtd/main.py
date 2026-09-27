@@ -1,19 +1,28 @@
 """Application entry point (skeletal).
 
-Boots the persistence directory, loads the game configuration, opens the
-main window, and runs a minimal event loop. The real game loop (fixed-step
-simulation, input handling, rendering) arrives with a future spec; this file
-only keeps the window on screen and honors the already-implemented spec 02
-behavior (F11 mode switching).
+Startup order per spec 03 (stage 1 wiring):
+
+1. Boot the persistence directory (spec 00; fatal on failure).
+2. Load the game configuration (spec 01; never fatal).
+3. Initialize pygame, including the mixer (spec 03 step 2; fatal on failure).
+4. Invoke the resource loader (spec 03 step 3; any ``ResourceError`` is fatal).
+5. Initialize and display the main window (spec 03 step 4 / spec 02).
+
+The real game loop (fixed-step simulation, input handling, rendering) arrives
+with a future spec; this file only keeps the window on screen and honors the
+already-implemented spec 02 behavior (F11 mode switching).
 """
 from __future__ import annotations
 
 import sys
 
 import pygame
+from loguru import logger
 
 from dtd import game_config, persistence
+from dtd.errors import ResourceError
 from dtd.main_window import MainWindow
+from dtd.resource_loader import ResourceLoader
 
 
 def run() -> int:
@@ -30,6 +39,26 @@ def run() -> int:
     # already logs a warning and falls back to defaults.
     config = game_config.load_game_config()
 
+    # Spec 03 step 2: pygame (including the mixer) must be initialized before
+    # any resource loading, so audio resources can be loaded. Failure is
+    # fatal: log and stop (exit code 1).
+    try:
+        _init_pygame()
+    except pygame.error as exc:
+        logger.error("pygame initialization failed; aborting startup: {}", exc)
+        return 1
+
+    # Spec 03 step 3: load all game resources BEFORE the window is displayed,
+    # so the game never starts up in an invalid state. Any ResourceError
+    # subtype is fatal (exit code 1).
+    resource_loader = ResourceLoader()
+    try:
+        resource_loader.load(config.resources)
+    except ResourceError as exc:
+        logger.error("resource loading failed; aborting startup: {}", exc)
+        return 1
+
+    # Spec 03 step 4: main window initialization and display.
     window = MainWindow()
     window.open(config.mainWindow)
     try:
@@ -37,6 +66,23 @@ def run() -> int:
     finally:
         window.close()
     return 0
+
+
+def _init_pygame() -> None:
+    """Initialize pygame, including the mixer (spec 03 step 2).
+
+    Must succeed. ``pygame.init`` never raises for per-module failures - it
+    only reports how many modules failed - so the spec's "raise
+    ``pygame.error`` on failure and stop" is implemented here.
+    """
+    _success, failures = pygame.init()
+    if failures:
+        raise pygame.error(f"{failures} pygame module(s) failed to initialize")
+    # pygame.init() initializes the mixer when it can; the spec requires the
+    # mixer to be up (audio resources), so verify it explicitly rather than
+    # trusting the aggregate count alone.
+    if not pygame.mixer.get_init():
+        raise pygame.error("pygame mixer failed to initialize")
 
 
 def _run_event_loop(window: MainWindow) -> None:
