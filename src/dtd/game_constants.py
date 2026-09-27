@@ -49,6 +49,10 @@ SUPPORTED_RESOURCE_EXTENSIONS = (
 #: ``audio/musicbox/...`` is a sound effect.
 MUSIC_RESOURCE_ID_PREFIX = "audio/music/"
 
+#: The file extension of package files (spec 03: Distribution mode).
+#: Matching is case-sensitive everywhere, including autoDownload URLs.
+PAK_FILE_EXTENSION = ".pak"
+
 #: XOR encryption key for *.pak file entries (spec 03: The pak format).
 #: Repeating-key XOR is intentionally weak - the goal is to deter casual
 #: browsing of game assets, not provide strong security (spec 03).

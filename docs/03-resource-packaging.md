@@ -327,6 +327,11 @@ ONLY if the named resource is not already present (skip with log warning if pres
 Note that if the already-present resource is corrupt, we are guaranteed to trigger
 a ResourceLoadError when it is parsed. This is acceptable.
 
+Each autoDownload URL must point directly at a package file: the URL's path
+must have a filename component ending in `.pak` (case-sensitive). A URL that
+does not (for example a bare directory URL like `http://example.com/`) is a
+download problem and raises `ResourceDownloadError` (exit code 1).
+
 Download failures (connection error, 404, network trouble) should raise `ResourceDownloadError`
 and exit the game with exit code 1.
 
