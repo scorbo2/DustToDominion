@@ -399,7 +399,7 @@ to avoid duplication. In order to verify that resources can be loaded, the packa
 pygame initialization with dummy video and audio drivers. Output an error to stderr if this initialization fails.
 
 Package validation rules:
-- Package files MUST contain an entry called `manifest.json`. This entry MUST contain valid Json. 
+- Package files MUST contain an entry called `manifest.json`. This entry MUST be valid UTF-8 and MUST contain valid Json. 
 - Each entry in the manifest MUST contain a unique ID and a SHA-256 hash.
 - Each entry in the manifest MUST resolve to an entry in the zip file.
 - Each zip file entry named in the manifest MUST have a SHA-256 hash that matches the hash in the manifest.

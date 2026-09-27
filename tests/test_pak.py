@@ -7,15 +7,15 @@ Tests cover:
 - ``create_pak``: happy path, unsupported-extension warnings, invalid resources,
   empty source directory, manifest correctness
 - ``load_pak``: happy path (all resource types), empty file, bad zip, missing
-  manifest, empty manifest, SHA-256 mismatch, corrupt resource, unsafe IDs,
-  bad extensions, missing zip entries, duplicate IDs, extra ignored entries,
-  music vs sfx split
+  manifest, malformed manifest JSON, non-UTF-8 manifest, missing/unsupported
+  manifest version, empty manifest, SHA-256 mismatch, corrupt resource,
+  unsafe IDs, bad extensions, missing zip entries, duplicate IDs, extra
+  ignored entries, music vs sfx split
 - Round-trip: create then load produces the original content
 - Packager CLI (``tools/packager``): create and inspect commands via subprocess
 """
 from __future__ import annotations
 
-import io
 import json
 import subprocess
 import sys
@@ -89,6 +89,9 @@ def _build_raw_pak(
     *,
     tamper_sha: str | None = None,
     omit_manifest: bool = False,
+    omit_version: bool = False,
+    manifest_version: object | None = None,
+    raw_manifest: bytes | None = None,
     extra_entry: tuple[str, bytes] | None = None,
 ) -> Path:
     """Helper: build a pak file programmatically (bypasses create_pak).
@@ -96,6 +99,14 @@ def _build_raw_pak(
     ``resources`` maps resource_id -> raw (unencrypted) bytes.
     ``tamper_sha``: if set, replaces the sha256 of the named ID with a bad hash.
     ``omit_manifest``: skip writing manifest.json entirely.
+    ``omit_version``: write the manifest without the ``version`` key.
+    ``manifest_version``: the ``version`` value to write (anything
+        JSON-serializable). Defaults to
+        ``game_constants.PAK_MANIFEST_VERSION`` unless this or
+        ``omit_version`` is given.
+    ``raw_manifest``: if set, write these bytes verbatim as manifest.json,
+        bypassing all manifest construction (for testing non-UTF-8 or
+        otherwise malformed manifests).
     ``extra_entry``: add an extra zip entry not in the manifest.
     """
     pak_path = tmp_path / "test.pak"
@@ -111,10 +122,18 @@ def _build_raw_pak(
 
     with zipfile.ZipFile(pak_path, "w") as zf:
         if not omit_manifest:
-            manifest = json.dumps(
-                {"version": game_constants.PAK_MANIFEST_VERSION, "resources": manifest_entries}
-            )
-            zf.writestr(MANIFEST_ENTRY, manifest)
+            if raw_manifest is not None:
+                zf.writestr(MANIFEST_ENTRY, raw_manifest)
+            else:
+                manifest: dict[str, object] = {}
+                if not omit_version:
+                    manifest["version"] = (
+                        game_constants.PAK_MANIFEST_VERSION
+                        if manifest_version is None
+                        else manifest_version
+                    )
+                manifest["resources"] = manifest_entries
+                zf.writestr(MANIFEST_ENTRY, json.dumps(manifest))
         for res_id, enc in encrypted_map.items():
             zf.writestr(res_id, enc)
         if extra_entry is not None:
@@ -456,26 +475,48 @@ class TestLoadPak:
     def test_missing_manifest_raises_resource_load_error(
         self, tmp_path: Path
     ) -> None:
-        pak_path = tmp_path / "no_manifest.pak"
-        with zipfile.ZipFile(pak_path, "w") as zf:
-            zf.writestr("graphics/ship.png", b"fake")
+        # GIVEN a zip with resource entries but no manifest.json:
+        pak_path = _build_raw_pak(
+            tmp_path, {"graphics/ship.png": b"fake"}, omit_manifest=True
+        )
+
+        # WHEN load_pak is invoked:
+        # THEN the missing manifest is reported before any entry is loaded:
         with pytest.raises(ResourceLoadError, match="manifest"):
             load_pak(pak_path)
 
     def test_malformed_manifest_json_raises(self, tmp_path: Path) -> None:
-        pak_path = tmp_path / "bad.pak"
-        with zipfile.ZipFile(pak_path, "w") as zf:
-            zf.writestr(MANIFEST_ENTRY, "{not valid json")
+        # GIVEN a pak whose manifest.json is not parseable JSON:
+        pak_path = _build_raw_pak(tmp_path, {}, raw_manifest=b"{not valid json")
+
+        # WHEN load_pak is invoked:
+        # THEN the malformed manifest is reported:
         with pytest.raises(ResourceLoadError, match="manifest"):
             load_pak(pak_path)
 
+    def test_manifest_with_non_utf8_bytes_raises_resource_load_error(
+        self, tmp_path: Path
+    ) -> None:
+        # GIVEN a pak whose manifest.json contains bytes that are not valid
+        # UTF-8 (spec 03: Verifying package integrity):
+        pak_path = _build_raw_pak(
+            tmp_path,
+            {"note.txt": b"hello"},
+            raw_manifest=b"\xff\xfe manifest bytes that are not UTF-8",
+        )
+
+        # WHEN load_pak is invoked:
+        # THEN the failure surfaces as a ResourceLoadError, not a bare
+        # UnicodeDecodeError:
+        with pytest.raises(ResourceLoadError, match="UTF-8"):
+            load_pak(pak_path)
+
     def test_empty_manifest_resources_list_raises(self, tmp_path: Path) -> None:
-        pak_path = tmp_path / "empty_manifest.pak"
-        with zipfile.ZipFile(pak_path, "w") as zf:
-            zf.writestr(
-                MANIFEST_ENTRY,
-                json.dumps({"version": "1.0", "resources": []}),
-            )
+        # GIVEN a pak with a valid manifest but an empty resources list:
+        pak_path = _build_raw_pak(tmp_path, {})
+
+        # WHEN load_pak is invoked:
+        # THEN the empty package is rejected:
         with pytest.raises(ResourceLoadError, match="empty"):
             load_pak(pak_path)
 
@@ -483,14 +524,9 @@ class TestLoadPak:
         self, tmp_path: Path
     ) -> None:
         # GIVEN a pak whose manifest.json has no 'version' field at all:
-        enc = xor_bytes(b"hello")
-        pak_path = tmp_path / "no_version.pak"
-        with zipfile.ZipFile(pak_path, "w") as zf:
-            manifest = json.dumps({
-                "resources": [{"id": "note.txt", "sha256": compute_sha256(enc)}],
-            })
-            zf.writestr(MANIFEST_ENTRY, manifest)
-            zf.writestr("note.txt", enc)
+        pak_path = _build_raw_pak(
+            tmp_path, {"note.txt": b"hello"}, omit_version=True
+        )
 
         # WHEN load_pak is invoked:
         # THEN the missing version is rejected before any resource is loaded:
@@ -503,15 +539,9 @@ class TestLoadPak:
         self, tmp_path: Path
     ) -> None:
         # GIVEN a pak whose manifest declares a version this build cannot load:
-        enc = xor_bytes(b"hello")
-        pak_path = tmp_path / "bad_version.pak"
-        with zipfile.ZipFile(pak_path, "w") as zf:
-            manifest = json.dumps({
-                "version": "99.0",
-                "resources": [{"id": "note.txt", "sha256": compute_sha256(enc)}],
-            })
-            zf.writestr(MANIFEST_ENTRY, manifest)
-            zf.writestr("note.txt", enc)
+        pak_path = _build_raw_pak(
+            tmp_path, {"note.txt": b"hello"}, manifest_version="99.0"
+        )
 
         # WHEN load_pak is invoked:
         # THEN the unsupported version is reported, not silently accepted:
@@ -522,15 +552,9 @@ class TestLoadPak:
         self, tmp_path: Path
     ) -> None:
         # GIVEN a manifest whose 'version' is a JSON number, not a string:
-        enc = xor_bytes(b"hello")
-        pak_path = tmp_path / "numeric_version.pak"
-        with zipfile.ZipFile(pak_path, "w") as zf:
-            manifest = json.dumps({
-                "version": 1.0,
-                "resources": [{"id": "note.txt", "sha256": compute_sha256(enc)}],
-            })
-            zf.writestr(MANIFEST_ENTRY, manifest)
-            zf.writestr("note.txt", enc)
+        pak_path = _build_raw_pak(
+            tmp_path, {"note.txt": b"hello"}, manifest_version=1.0
+        )
 
         # WHEN load_pak is invoked:
         # THEN a number is not a supported string version and is rejected:
@@ -554,64 +578,42 @@ class TestLoadPak:
     def test_corrupt_resource_raises_resource_load_error(
         self, tmp_path: Path
     ) -> None:
-        # Build a pak manually: the zip entry for the PNG is corrupt (not a valid PNG).
-        corrupted = b"this is not a valid PNG image"
-        enc = xor_bytes(corrupted)
-        pak_path = tmp_path / "corrupt.pak"
-        with zipfile.ZipFile(pak_path, "w") as zf:
-            manifest = json.dumps({
-                "version": game_constants.PAK_MANIFEST_VERSION,
-                "resources": [{"id": "graphics/ship.png", "sha256": compute_sha256(enc)}],
-            })
-            zf.writestr(MANIFEST_ENTRY, manifest)
-            zf.writestr("graphics/ship.png", enc)
+        # GIVEN a pak whose only zip entry is not a valid PNG image:
+        pak_path = _build_raw_pak(
+            tmp_path, {"graphics/ship.png": b"this is not a valid PNG image"}
+        )
+
+        # WHEN load_pak is invoked:
+        # THEN the corrupt resource is reported by its ID:
         with pytest.raises(ResourceLoadError, match="graphics/ship.png"):
             load_pak(pak_path)
 
     def test_unsafe_absolute_resource_id_raises(self, tmp_path: Path) -> None:
-        pak_path = tmp_path / "unsafe.pak"
-        enc = xor_bytes(b"data")
-        with zipfile.ZipFile(pak_path, "w") as zf:
-            manifest = json.dumps({
-                "version": game_constants.PAK_MANIFEST_VERSION,
-                "resources": [
-                    {"id": "/etc/passwd", "sha256": compute_sha256(enc)}
-                ],
-            })
-            zf.writestr(MANIFEST_ENTRY, manifest)
-            zf.writestr("/etc/passwd", enc)
+        # GIVEN a manifest entry whose ID is an absolute path:
+        pak_path = _build_raw_pak(tmp_path, {"/etc/passwd": b"data"})
+
+        # WHEN load_pak is invoked:
+        # THEN the unsafe ID is rejected before the entry is read:
         with pytest.raises(ResourceLoadError, match="unsafe"):
             load_pak(pak_path)
 
     def test_unsafe_traversal_resource_id_raises(self, tmp_path: Path) -> None:
-        pak_path = tmp_path / "unsafe.pak"
-        enc = xor_bytes(b"data")
-        with zipfile.ZipFile(pak_path, "w") as zf:
-            manifest = json.dumps({
-                "version": game_constants.PAK_MANIFEST_VERSION,
-                "resources": [
-                    {"id": "../evil.txt", "sha256": compute_sha256(enc)}
-                ],
-            })
-            zf.writestr(MANIFEST_ENTRY, manifest)
-            zf.writestr("../evil.txt", enc)
+        # GIVEN a manifest entry whose ID traverses above the resource tree:
+        pak_path = _build_raw_pak(tmp_path, {"../evil.txt": b"data"})
+
+        # WHEN load_pak is invoked:
+        # THEN the traversal ID is rejected:
         with pytest.raises(ResourceLoadError, match="unsafe"):
             load_pak(pak_path)
 
     def test_unrecognized_extension_in_manifest_raises(
         self, tmp_path: Path
     ) -> None:
-        enc = xor_bytes(b"data")
-        pak_path = tmp_path / "bad_ext.pak"
-        with zipfile.ZipFile(pak_path, "w") as zf:
-            manifest = json.dumps({
-                "version": game_constants.PAK_MANIFEST_VERSION,
-                "resources": [
-                    {"id": "audio/sfx/hello.rar", "sha256": compute_sha256(enc)}
-                ],
-            })
-            zf.writestr(MANIFEST_ENTRY, manifest)
-            zf.writestr("audio/sfx/hello.rar", enc)
+        # GIVEN a manifest entry whose ID has an unsupported extension:
+        pak_path = _build_raw_pak(tmp_path, {"audio/sfx/hello.rar": b"data"})
+
+        # WHEN load_pak is invoked:
+        # THEN the extension is rejected (distribution mode is strict):
         with pytest.raises(ResourceLoadError, match="unrecognized extension"):
             load_pak(pak_path)
 

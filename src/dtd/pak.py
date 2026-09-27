@@ -238,8 +238,8 @@ def load_resource_from_bytes(resource_id: str, data: bytes) -> tuple[str, Any]:
 # Manifest parsing
 # ------------------------------------------------------------------ #
 
-def _parse_manifest(raw_json: str, source_label: str) -> list[dict[str, str]]:
-    """Parse and structurally validate a manifest JSON string.
+def _parse_manifest(manifest_bytes: bytes, source_label: str) -> list[dict[str, str]]:
+    """Parse and structurally validate raw manifest bytes.
 
     Returns the list of resource entry dicts.  Each entry is guaranteed to
     have non-empty ``"id"`` and ``"sha256"`` string fields, and all IDs in
@@ -248,15 +248,25 @@ def _parse_manifest(raw_json: str, source_label: str) -> list[dict[str, str]]:
     ``source_label`` is used only for error messages (typically the pak
     path).
 
-    The ``version`` field is validated against
-    ``game_constants.PAK_MANIFEST_VERSION``: the manifest must declare exactly
-    the version this build understands, otherwise we would silently
-    misinterpret a future format revision (spec 03: Manifest).
+    The bytes are decoded as UTF-8 before JSON parsing: a manifest that is
+    not valid UTF-8 is malformed, just like one that is not valid JSON
+    (spec 03: Verifying package integrity). The ``version`` field is
+    validated against ``game_constants.PAK_MANIFEST_VERSION``: the manifest
+    must declare exactly the version this build understands, otherwise we
+    would silently misinterpret a future format revision (spec 03:
+    Manifest).
 
     Raises ``UnsupportedResourceVersionError`` if the ``version`` field is
-    missing or holds any other value, and ``ResourceLoadError`` on any other
-    structural problem or duplicate IDs.
+    missing or holds any other value, and ``ResourceLoadError`` on non-UTF-8
+    bytes, invalid JSON, any other structural problem, or duplicate IDs.
     """
+    try:
+        raw_json = manifest_bytes.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise ResourceLoadError(
+            f"{source_label}: manifest.json is not valid UTF-8: {exc}"
+        ) from exc
+
     try:
         manifest = json.loads(raw_json)
     except json.JSONDecodeError as exc:
@@ -406,8 +416,9 @@ def load_pak(pak_path: Path) -> ResourceStore:
 
     1. File is non-empty.
     2. File is a valid zip archive.
-    3. ``manifest.json`` is present, contains valid JSON, declares a
-       supported ``version``, and holds a non-empty ``resources`` list.
+    3. ``manifest.json`` is present, is valid UTF-8, contains valid JSON,
+       declares a supported ``version``, and holds a non-empty
+       ``resources`` list.
     4. All manifest IDs are unique, safe (no absolute paths / traversal), and
        use supported extensions.
     5. Every manifest entry resolves to a zip entry.
@@ -444,7 +455,7 @@ def load_pak(pak_path: Path) -> ResourceStore:
             )
 
         manifest_bytes = zf.read(MANIFEST_ENTRY)
-        entries = _parse_manifest(manifest_bytes.decode("utf-8"), str(pak_path))
+        entries = _parse_manifest(manifest_bytes, str(pak_path))
 
         loaded = ResourceStore()
 
