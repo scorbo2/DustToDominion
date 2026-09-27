@@ -33,6 +33,9 @@ The game will use loguru for logging.
 
 The game will have a fully hermetic test suite:
 - fully simulated environment with dummy video and audio drivers
+- pygame's process-wide state (display, mixer, event queue) is reset before and after
+  every test, so no test may rely on - or leak into - another test's pygame
+  initialization state
 - seeded RNG and injected clock for deterministic behavior
 - use of environment variables to override default persistence location(s) to system temp dir
   - `DUST_TO_DOMINION_CONFIG`: overrides the default `$HOME/.DustToDominion/game.json`

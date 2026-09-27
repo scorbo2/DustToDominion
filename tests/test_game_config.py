@@ -8,7 +8,7 @@ import pytest
 
 from dtd import game_config
 from dtd.errors import ConfigError
-from dtd.game_config import GameConfig
+from dtd.game_config import GameConfig, ResourcesConfig
 from dtd.main_window import MainWindowConfig
 
 
@@ -59,6 +59,74 @@ class TestLoadGameConfig:
         monkeypatch.setenv("DUST_TO_DOMINION_CONFIG", str(other))
         result = game_config.load_game_config()
         assert result.mainWindow == MainWindowConfig(mode="windowed")
+
+
+class TestResourcesConfig:
+    """The ``resources`` section of game.json (spec 03: Configuration)."""
+
+    def test_with_missing_resources_key_should_default_to_none(self) -> None:
+        # Spec 03: absent key -> the loader assumes dev mode defaults.
+        assert GameConfig().resources is None
+
+    def test_with_empty_resources_section_should_default_to_dev_mode(
+        self, hermetic_persistence: Path
+    ) -> None:
+        # Spec 03: a missing ``mode`` key assumes "dev" with no log warning.
+        _write_game_json(hermetic_persistence, {"resources": {}})
+        assert game_config.load_game_config().resources == ResourcesConfig()
+
+    def test_with_dev_mode_and_locations_should_parse_section(
+        self, hermetic_persistence: Path
+    ) -> None:
+        _write_game_json(
+            hermetic_persistence,
+            {"resources": {"mode": "dev", "location": ["resources/", "/home/user/custom_assets/"]}},
+        )
+        assert game_config.load_game_config().resources == ResourcesConfig(
+            mode="dev", location=["resources/", "/home/user/custom_assets/"]
+        )
+
+    def test_with_distribution_mode_and_auto_download_should_parse_section(
+        self, hermetic_persistence: Path
+    ) -> None:
+        _write_game_json(
+            hermetic_persistence,
+            {
+                "resources": {
+                    "mode": "distribution",
+                    "location": ["."],
+                    "autoDownload": ["http://example.com/game_assets/package1.pak"],
+                }
+            },
+        )
+        assert game_config.load_game_config().resources == ResourcesConfig(
+            mode="distribution",
+            location=["."],
+            autoDownload=["http://example.com/game_assets/package1.pak"],
+        )
+
+    def test_with_unexpected_mode_value_should_return_defaults(
+        self, hermetic_persistence: Path
+    ) -> None:
+        # Spec 03: an invalid mode is an InvalidConfigError with a warning log
+        # message, and the game assumes dev mode (here: whole-config default,
+        # per spec 01's atomic fallback).
+        _write_game_json(hermetic_persistence, {"resources": {"mode": "retro"}})
+        assert game_config.load_game_config().resources is None
+
+    def test_with_unexpected_nested_key_should_return_defaults(
+        self, hermetic_persistence: Path
+    ) -> None:
+        # Malformed ``resources`` config is a spec 01 config problem
+        # (InvalidConfigError), not a ResourceError (spec 03).
+        _write_game_json(hermetic_persistence, {"resources": {"volume": 0.5}})
+        assert game_config.load_game_config().resources is None
+
+    def test_with_non_string_location_entry_should_return_defaults(
+        self, hermetic_persistence: Path
+    ) -> None:
+        _write_game_json(hermetic_persistence, {"resources": {"location": [42]}})
+        assert game_config.load_game_config().resources is None
 
 
 class TestSaveGameConfigSection:

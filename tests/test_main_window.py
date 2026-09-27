@@ -237,6 +237,27 @@ class TestOpen:
             handle.close()
 
 
+class TestClose:
+    def test_with_open_window_and_initialized_mixer_should_shut_down_all_pygame_modules(
+        self, mixer_ready: None
+    ) -> None:
+        # GIVEN an opened window (display up) with the mixer also
+        # initialized, mirroring spec 03 startup which initializes the
+        # whole of pygame:
+        handle = MainWindow()
+        handle.open()
+        assert pygame.display.get_init()
+        assert pygame.mixer.get_init()
+
+        # WHEN the window is closed:
+        handle.close()
+
+        # THEN the shutdown is a full pygame shutdown, not just the
+        # display (spec 02: closing the main window):
+        assert not pygame.display.get_init()
+        assert not pygame.mixer.get_init()
+
+
 class TestF11Toggle:
     def test_from_windowed_should_use_current_resolution_when_supported(
         self,

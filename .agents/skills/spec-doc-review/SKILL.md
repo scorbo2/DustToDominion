@@ -34,6 +34,7 @@ suitability before implementation is very important.
 - Does the document clearly specify what is to be implemented?
   - If it mentions error handling, are the specific error types mentioned?
   - Are the error cases clearly specified?
+- Is the proposed design optimal? Does the doc propose an elaborate custom design that could be done much more easily with a built-in library function, for example?
 - Does the spec doc introduce new configuration properties for the game ("Configuration" section)?
   - Are they named?
   - Is the new top-level configuration key named? Does it conflict with any known existing top-level key names?
@@ -48,7 +49,8 @@ suitability before implementation is very important.
 
 If you were given this specification document to implement, would you have enough information
 to provide a solid and well-tested implementation for it? If not, list what is missing in the document
-that would allow you to succeed.
+that would allow you to succeed. If there are alternative design approaches that might be better,
+suggest them. If the suggested design approach might cause problems later on, flag it.
 
 ## What NOT to do
 
@@ -64,6 +66,8 @@ Never modify the actual `~/.DustToDominion/` directory contents. You can redirec
 
 Do NOT automatically apply your suggestions to the document! 
 Your primary goal is to provide feedback on the document to the user.
+The exception to this rule is if the user explicitly asks you to apply changes 
+to the document (example: "Your suggestions sound good to me. Please update the spec doc with them.")
 
 ## Review format
 
