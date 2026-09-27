@@ -1,6 +1,6 @@
 ---
 description: Describes how the game loads resources (sprites, sound effects, music, etc.)
-status: proposed
+status: active
 ---
 
 # Resource packaging
@@ -462,7 +462,7 @@ for filesystem tests, and configure the code to download to that directory.
 - Does the consumer API return None as expected for invalid IDs?
 - Does an unexpected "mode" value in the game config file log a warning and proceed with dev mode?
 
-## Open questions
+## Open questions (all resolved)
 
 1. Should all properties of all resource types be defined now? Ship stats might be considerable. Should
    we defer those details to a future spec doc specific to ships? Or should this document contain all
