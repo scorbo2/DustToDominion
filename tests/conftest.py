@@ -78,3 +78,17 @@ class FakeClock:
 def fake_clock() -> FakeClock:
     """A controllable clock; advance it manually to drive the sim."""
     return FakeClock()
+
+
+@pytest.fixture
+def mixer_ready() -> None:
+    """Ensure the pygame mixer subsystem is initialised (spec 03).
+
+    Spec 03 startup step 2 requires the mixer to be up before audio resources
+    can be loaded. Tests that exercise audio loading mirror that precondition.
+    ``SDL_AUDIODRIVER=dummy`` is already set by this file so no real audio
+    device is touched.
+    """
+    import pygame as _pygame
+    if not _pygame.mixer.get_init():
+        _pygame.mixer.init()

@@ -34,13 +34,6 @@ def project(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     return tmp_path
 
 
-@pytest.fixture
-def mixer_ready() -> None:
-    # Spec 03 startup step 2: the mixer must be up before any audio resource
-    # can load. Tests that load audio mirror that precondition.
-    if not pygame.mixer.get_init():
-        pygame.mixer.init()
-
 
 def _write_png(path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)

@@ -1,0 +1,403 @@
+"""Pak file format: create, validate, and load *.pak resource packages (spec 03).
+
+A ``*.pak`` file is a renamed zip archive. Each resource entry is
+XOR-encrypted with ``game_constants.PAK_ENCRYPTION_KEY``.
+``manifest.json`` is stored unencrypted. SHA-256 hashes in the manifest are
+computed on the *encrypted* bytes (before zip compression), so the hash can
+be checked immediately after reading, before decryption.
+
+This module is shared by the game (distribution-mode loading, stage 4) and
+the packager tool (``tools/packager``, stage 3).
+
+pygame must be initialized by the caller before any function that loads
+resources (``create_pak`` validates each resource; ``load_pak`` decodes all).
+"""
+from __future__ import annotations
+
+import hashlib
+import io
+import json
+import zipfile
+from dataclasses import dataclass, field
+from pathlib import Path, PurePosixPath
+from typing import Any, Callable
+
+import pygame
+
+from dtd import game_constants
+from dtd.errors import NoResourcesFoundError, ResourceLoadError
+
+# ------------------------------------------------------------------ #
+# Constants
+# ------------------------------------------------------------------ #
+
+MANIFEST_ENTRY = "manifest.json"
+MANIFEST_VERSION = "1.0"
+
+
+# ------------------------------------------------------------------ #
+# Encryption and hashing helpers
+# ------------------------------------------------------------------ #
+
+def xor_bytes(data: bytes) -> bytes:
+    """XOR-encrypt or decrypt ``data`` with the pak key (symmetric operation).
+
+    Repeating-key XOR: byte ``i`` is XOR'd with
+    ``PAK_ENCRYPTION_KEY[i % len(key)]``.
+    """
+    key = game_constants.PAK_ENCRYPTION_KEY
+    key_len = len(key)
+    return bytes(b ^ key[i % key_len] for i, b in enumerate(data))
+
+
+def compute_sha256(data: bytes) -> str:
+    """Hex-encoded SHA-256 digest of ``data``."""
+    return hashlib.sha256(data).hexdigest()
+
+
+def is_safe_resource_id(resource_id: str) -> bool:
+    """True if ``resource_id`` is a safe relative path with no traversal.
+
+    Rejects: absolute paths (leading ``/``), any ``..`` component, or an
+    empty string.
+    """
+    try:
+        path = PurePosixPath(resource_id)
+    except Exception:
+        return False
+    if path.is_absolute():
+        return False
+    if ".." in path.parts:
+        return False
+    if not path.parts:
+        return False
+    return True
+
+
+# ------------------------------------------------------------------ #
+# Loaded pak container
+# ------------------------------------------------------------------ #
+
+@dataclass
+class LoadedPak:
+    """Resources extracted and decoded from a single pak file."""
+
+    sprites: dict[str, pygame.Surface] = field(default_factory=dict)
+    sound_effects: dict[str, pygame.mixer.Sound] = field(default_factory=dict)
+    music: dict[str, bytes] = field(default_factory=dict)
+    texts: dict[str, str] = field(default_factory=dict)
+    json_resources: dict[str, Any] = field(default_factory=dict)
+
+    @property
+    def resource_count(self) -> int:
+        return (
+            len(self.sprites)
+            + len(self.sound_effects)
+            + len(self.music)
+            + len(self.texts)
+            + len(self.json_resources)
+        )
+
+
+# ------------------------------------------------------------------ #
+# Per-resource loading from bytes (shared between create and load)
+# ------------------------------------------------------------------ #
+
+def _load_resource_from_bytes(resource_id: str, data: bytes) -> tuple[str, Any]:
+    """Decode one resource from raw (decrypted) bytes.
+
+    Returns ``(type_name, value)`` where ``type_name`` is one of
+    ``"sprite"``, ``"sfx"``, ``"music"``, ``"text"``, or ``"json"``.
+
+    The ``resource_id`` is used only to determine the extension and the
+    music/sfx split; it is also used as the ``namehint`` for
+    ``pygame.image.load`` so that the image decoder gets the format hint
+    even without a filesystem path.
+
+    Raises ``ResourceLoadError`` if the data cannot be decoded.
+    """
+    ext = PurePosixPath(resource_id).suffix
+
+    if ext in game_constants.SPRITE_RESOURCE_EXTENSIONS:
+        try:
+            surface = pygame.image.load(io.BytesIO(data), resource_id)
+        except pygame.error as exc:
+            raise ResourceLoadError(
+                f"could not load sprite resource {resource_id!r}: {exc}"
+            ) from exc
+        return "sprite", surface
+
+    if ext in game_constants.AUDIO_RESOURCE_EXTENSIONS:
+        # Validate by attempting a full decode into a Sound object.
+        # pygame.mixer.Sound(BytesIO) content-sniffs the format (verified
+        # against pygame-ce 2.5.8 - see resource_loader module docstring).
+        try:
+            sound = pygame.mixer.Sound(io.BytesIO(data))
+        except (pygame.error, OSError) as exc:
+            raise ResourceLoadError(
+                f"could not load audio resource {resource_id!r}: {exc}"
+            ) from exc
+        # Music is cached as raw bytes; the client calls
+        # mixer.music.load(io.BytesIO(bytes)) itself (spec 03: Consumer API).
+        if resource_id.startswith(game_constants.MUSIC_RESOURCE_ID_PREFIX):
+            return "music", data
+        return "sfx", sound
+
+    if ext in game_constants.TEXT_RESOURCE_EXTENSIONS:
+        try:
+            text = data.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise ResourceLoadError(
+                f"resource {resource_id!r} is not valid UTF-8 text: {exc}"
+            ) from exc
+        return "text", text
+
+    if ext in game_constants.JSON_RESOURCE_EXTENSIONS:
+        try:
+            text = data.decode("utf-8")
+            decoded = json.loads(text)
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise ResourceLoadError(
+                f"resource {resource_id!r} is not valid JSON: {exc}"
+            ) from exc
+        return "json", decoded
+
+    raise ResourceLoadError(
+        f"resource {resource_id!r} has unsupported extension {ext!r}"
+    )
+
+
+# ------------------------------------------------------------------ #
+# Manifest parsing
+# ------------------------------------------------------------------ #
+
+def _parse_manifest(raw_json: str, source_label: str) -> list[dict[str, str]]:
+    """Parse and structurally validate a manifest JSON string.
+
+    Returns the list of resource entry dicts.  Each entry is guaranteed to
+    have non-empty ``"id"`` and ``"sha256"`` string fields, and all IDs in
+    the list are unique.
+
+    ``source_label`` is used only for error messages (typically the pak
+    path).
+
+    Raises ``ResourceLoadError`` on any structural problem or duplicate IDs.
+    """
+    try:
+        manifest = json.loads(raw_json)
+    except json.JSONDecodeError as exc:
+        raise ResourceLoadError(
+            f"{source_label}: manifest.json is not valid JSON: {exc}"
+        ) from exc
+
+    if not isinstance(manifest, dict):
+        raise ResourceLoadError(
+            f"{source_label}: manifest.json must be a JSON object"
+        )
+
+    resources = manifest.get("resources")
+    if not isinstance(resources, list):
+        raise ResourceLoadError(
+            f"{source_label}: manifest.json missing 'resources' array"
+        )
+    if len(resources) == 0:
+        raise ResourceLoadError(
+            f"{source_label}: manifest.json 'resources' list is empty"
+        )
+
+    seen_ids: set[str] = set()
+    for entry in resources:
+        if not isinstance(entry, dict):
+            raise ResourceLoadError(
+                f"{source_label}: manifest.json entry is not an object"
+            )
+        resource_id = entry.get("id")
+        sha256 = entry.get("sha256")
+        if not isinstance(resource_id, str) or not resource_id:
+            raise ResourceLoadError(
+                f"{source_label}: manifest.json entry missing 'id'"
+            )
+        if not isinstance(sha256, str) or not sha256:
+            raise ResourceLoadError(
+                f"{source_label}: manifest.json entry {resource_id!r} missing 'sha256'"
+            )
+        if resource_id in seen_ids:
+            raise ResourceLoadError(
+                f"{source_label}: manifest.json duplicate ID {resource_id!r}"
+            )
+        seen_ids.add(resource_id)
+
+    return resources  # type: ignore[return-value]
+
+
+# ------------------------------------------------------------------ #
+# Creating pak files
+# ------------------------------------------------------------------ #
+
+def create_pak(
+    source_dir: Path,
+    output_path: Path,
+    warn_fn: Callable[[str], None] | None = None,
+) -> int:
+    """Scan ``source_dir`` recursively, validate all resources, and write a pak.
+
+    Files with supported extensions are validated (must be parseable) then
+    XOR-encrypted. The SHA-256 hash of the *encrypted* bytes is stored in
+    ``manifest.json``.
+
+    Files with unsupported extensions trigger ``warn_fn(message)`` (if
+    provided) and are skipped.  This differs from the game's silent-skip
+    behavior (spec 03: packager tool section).
+
+    Returns the number of resources packaged.
+
+    Raises:
+        NoResourcesFoundError: ``source_dir`` contains no supported resources.
+        ResourceLoadError: the first resource that cannot be parsed.
+        OSError: filesystem read/write failures.
+    """
+    if not source_dir.is_dir():
+        raise NoResourcesFoundError(
+            f"source directory does not exist: {source_dir}"
+        )
+
+    all_files = sorted(
+        p for p in source_dir.rglob("*") if p.is_file()
+    )
+
+    manifest_entries: list[dict[str, str]] = []
+    pak_entries: list[tuple[str, bytes]] = []
+
+    for path in all_files:
+        resource_id = path.relative_to(source_dir).as_posix()
+
+        if path.suffix not in game_constants.SUPPORTED_RESOURCE_EXTENSIONS:
+            if warn_fn is not None:
+                warn_fn(
+                    f"skipping {resource_id!r}: unrecognized extension {path.suffix!r}"
+                )
+            continue
+
+        raw_data = path.read_bytes()
+
+        # Validate before packaging - the first bad resource is fatal.
+        _load_resource_from_bytes(resource_id, raw_data)
+
+        encrypted = xor_bytes(raw_data)
+        sha256 = compute_sha256(encrypted)
+
+        manifest_entries.append({"id": resource_id, "sha256": sha256})
+        pak_entries.append((resource_id, encrypted))
+
+    if not pak_entries:
+        raise NoResourcesFoundError(
+            f"no supported resources found in {source_dir}"
+        )
+
+    manifest_json = json.dumps(
+        {"version": MANIFEST_VERSION, "resources": manifest_entries},
+        indent=2,
+    ).encode("utf-8")
+
+    with zipfile.ZipFile(output_path, "w", zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr(MANIFEST_ENTRY, manifest_json)
+        for entry_name, encrypted_bytes in pak_entries:
+            zf.writestr(entry_name, encrypted_bytes)
+
+    return len(pak_entries)
+
+
+# ------------------------------------------------------------------ #
+# Loading and validating pak files
+# ------------------------------------------------------------------ #
+
+def load_pak(pak_path: Path) -> LoadedPak:
+    """Validate and load all resources from a pak file.
+
+    Validation steps (in order; first failure raises ``ResourceLoadError``):
+
+    1. File is non-empty.
+    2. File is a valid zip archive.
+    3. ``manifest.json`` is present and contains valid JSON with a non-empty
+       ``resources`` list.
+    4. All manifest IDs are unique, safe (no absolute paths / traversal), and
+       use supported extensions.
+    5. Every manifest entry resolves to a zip entry.
+    6. SHA-256 of the zip entry's (encrypted) bytes matches the manifest.
+    7. Decrypted bytes decode into a valid resource of the expected type.
+
+    Zip entries not mentioned in the manifest are silently ignored (spec 03).
+
+    Returns ``LoadedPak`` with all resources decoded and ready to use.
+
+    Raises ``ResourceLoadError`` on any validation or decode failure.
+    """
+    if not pak_path.exists() or pak_path.stat().st_size == 0:
+        raise ResourceLoadError(
+            f"pak file {pak_path} is empty or does not exist"
+        )
+
+    try:
+        zf_obj = zipfile.ZipFile(pak_path, "r")
+    except zipfile.BadZipFile as exc:
+        raise ResourceLoadError(
+            f"{pak_path} is not a valid pak (zip) file: {exc}"
+        ) from exc
+
+    with zf_obj as zf:
+        zip_names = set(zf.namelist())
+
+        if MANIFEST_ENTRY not in zip_names:
+            raise ResourceLoadError(
+                f"{pak_path}: missing manifest.json"
+            )
+
+        manifest_bytes = zf.read(MANIFEST_ENTRY)
+        entries = _parse_manifest(manifest_bytes.decode("utf-8"), str(pak_path))
+
+        loaded = LoadedPak()
+
+        for entry in entries:
+            resource_id: str = entry["id"]
+            expected_sha256: str = entry["sha256"]
+
+            if not is_safe_resource_id(resource_id):
+                raise ResourceLoadError(
+                    f"{pak_path}: unsafe resource ID {resource_id!r}"
+                )
+
+            ext = PurePosixPath(resource_id).suffix
+            if ext not in game_constants.SUPPORTED_RESOURCE_EXTENSIONS:
+                raise ResourceLoadError(
+                    f"{pak_path}: resource {resource_id!r} has unrecognized "
+                    f"extension {ext!r}"
+                )
+
+            if resource_id not in zip_names:
+                raise ResourceLoadError(
+                    f"{pak_path}: manifest entry {resource_id!r} not found in zip"
+                )
+
+            encrypted_bytes = zf.read(resource_id)
+            actual_sha256 = compute_sha256(encrypted_bytes)
+            if actual_sha256 != expected_sha256:
+                raise ResourceLoadError(
+                    f"{pak_path}: SHA-256 mismatch for {resource_id!r} "
+                    f"(expected {expected_sha256!r}, got {actual_sha256!r})"
+                )
+
+            raw_bytes = xor_bytes(encrypted_bytes)
+            type_name, value = _load_resource_from_bytes(resource_id, raw_bytes)
+
+            if type_name == "sprite":
+                loaded.sprites[resource_id] = value
+            elif type_name == "sfx":
+                loaded.sound_effects[resource_id] = value
+            elif type_name == "music":
+                loaded.music[resource_id] = value
+            elif type_name == "text":
+                loaded.texts[resource_id] = value
+            elif type_name == "json":
+                loaded.json_resources[resource_id] = value
+
+    return loaded

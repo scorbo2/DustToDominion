@@ -1,0 +1,162 @@
+#!/usr/bin/env python3
+"""Packager tool for creating and inspecting *.pak resource files (spec 03).
+
+Usage::
+
+    python3 tools/packager create --source <dir> --output <file.pak>
+    python3 tools/packager inspect --source <file.pak>
+
+The ``src`` directory is added to ``sys.path`` automatically so this script
+can be run from anywhere within (or outside) the project tree.
+"""
+from __future__ import annotations
+
+import argparse
+import os
+import sys
+from pathlib import Path
+
+# Resolve the project root from this file's location and put src/ on the
+# path so we can import dtd.* regardless of where the script is launched from.
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(_PROJECT_ROOT / "src"))
+
+# Packager uses dummy SDL drivers: it is a headless command-line tool and
+# never needs a real display or audio device (spec 03: Verifying package
+# integrity). setdefault preserves any override the caller may have set.
+os.environ.setdefault("SDL_VIDEODRIVER", "dummy")
+os.environ.setdefault("SDL_AUDIODRIVER", "dummy")
+
+import pygame  # noqa: E402  (must come after env vars are set)
+
+from dtd.errors import NoResourcesFoundError, ResourceLoadError  # noqa: E402
+from dtd.pak import create_pak, load_pak  # noqa: E402
+
+
+# ------------------------------------------------------------------ #
+# pygame initialisation (shared between both commands)
+# ------------------------------------------------------------------ #
+
+def _init_pygame() -> bool:
+    """Initialise pygame subsystems needed to validate resources.
+
+    Returns True on success; prints an error to stderr and returns False
+    if initialisation fails (spec 03: "Output an error to stderr if this
+    initialization fails").
+    """
+    if not pygame.get_init():
+        pygame.init()
+
+    if not pygame.mixer.get_init():
+        try:
+            pygame.mixer.init()
+        except pygame.error as exc:
+            print(f"error: pygame mixer initialisation failed: {exc}", file=sys.stderr)
+            return False
+
+    return True
+
+
+# ------------------------------------------------------------------ #
+# create subcommand
+# ------------------------------------------------------------------ #
+
+def cmd_create(args: argparse.Namespace) -> int:
+    if not _init_pygame():
+        return 1
+
+    source = Path(args.source)
+    output = Path(args.output)
+
+    def _warn(msg: str) -> None:
+        print(f"warning: {msg}", file=sys.stderr)
+
+    try:
+        count = create_pak(source, output, warn_fn=_warn)
+    except (NoResourcesFoundError, ResourceLoadError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    except OSError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+
+    print(f"created {output} with {count} resource(s)")
+    return 0
+
+
+# ------------------------------------------------------------------ #
+# inspect subcommand
+# ------------------------------------------------------------------ #
+
+def cmd_inspect(args: argparse.Namespace) -> int:
+    if not _init_pygame():
+        return 1
+
+    source = Path(args.source)
+
+    try:
+        loaded = load_pak(source)
+    except (ResourceLoadError, OSError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+
+    count = loaded.resource_count
+    print(
+        f"{source}: {count} resource(s) - "
+        "all hashes match and all resources are parseable"
+    )
+    return 0
+
+
+# ------------------------------------------------------------------ #
+# CLI entry point
+# ------------------------------------------------------------------ #
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(
+        prog="packager",
+        description="Create and inspect *.pak resource package files (spec 03).",
+    )
+    subparsers = parser.add_subparsers(dest="command", required=True)
+
+    create_parser = subparsers.add_parser(
+        "create",
+        help="Package a resource directory into a *.pak file.",
+    )
+    create_parser.add_argument(
+        "--source",
+        required=True,
+        metavar="DIR",
+        help="Source directory to package recursively.",
+    )
+    create_parser.add_argument(
+        "--output",
+        required=True,
+        metavar="FILE",
+        help="Output *.pak file path.",
+    )
+
+    inspect_parser = subparsers.add_parser(
+        "inspect",
+        help="Validate and report the contents of a *.pak file.",
+    )
+    inspect_parser.add_argument(
+        "--source",
+        required=True,
+        metavar="FILE",
+        help="Pak file to inspect.",
+    )
+
+    args = parser.parse_args(argv)
+
+    if args.command == "create":
+        return cmd_create(args)
+    if args.command == "inspect":
+        return cmd_inspect(args)
+
+    parser.print_help()
+    return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

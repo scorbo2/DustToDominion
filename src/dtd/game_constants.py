@@ -44,3 +44,8 @@ SUPPORTED_RESOURCE_EXTENSIONS = (
 #: sound effect (cached as a pygame.mixer.Sound). The trailing slash matters:
 #: ``audio/musicbox/...`` is a sound effect.
 MUSIC_RESOURCE_ID_PREFIX = "audio/music/"
+
+#: XOR encryption key for *.pak file entries (spec 03: The pak format).
+#: Repeating-key XOR is intentionally weak - the goal is to deter casual
+#: browsing of game assets, not provide strong security (spec 03).
+PAK_ENCRYPTION_KEY = b"Please do not steal these resources."
