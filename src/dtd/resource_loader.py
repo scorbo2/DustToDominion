@@ -1,7 +1,7 @@
 """Game resource loading and the consumer API (spec 03: Resource packaging).
 
-STAGES 2, 4, and 5: dev mode, distribution mode, and auto-download are
-implemented.
+All spec 03 loading modes are implemented: dev mode, distribution mode,
+and auto-download.
 
 Dev mode: the loader scans the default ``resources/`` directory (always,
 even if omitted from config) plus every configured ``location`` directory,
@@ -27,7 +27,7 @@ Mode selection (spec 03: Determining mode): a dev-mode scan that finds no
 valid resources at all falls back to distribution mode. A resource or
 package that fails to LOAD is fatal and prevents any fallback. A
 distribution-mode scan that finds no ``*.pak`` files triggers the
-autoDownload fallback (stage 5).
+autoDownload fallback (spec 03: Auto-download).
 
 Auto-download (spec 03: Auto-download): when distribution mode finds no
 ``*.pak`` files, ``_auto_download_paks`` is called. If ``config.autoDownload``
@@ -113,9 +113,12 @@ class ResourceLoader:
 
         Raises:
             NoResourcesFoundError: distribution mode (explicitly, or via the
-                dev-mode fallback) found no ``*.pak`` files at all. A later
-                stage (5) will try autoDownload here before giving up
-                (spec 03: Determining mode).
+                dev-mode fallback) found no ``*.pak`` files at all, and the
+                autoDownload fallback had no URLs configured (spec 03:
+                Determining mode).
+            ResourceDownloadError: an auto-download attempt fails for any
+                reason (spec 03: Auto-download; fatal, exit code 1 at the
+                caller).
             ResourceLoadError: the first resource or package file that
                 cannot be loaded (spec 03: fatal, exit code 1 at the
                 caller).
@@ -184,9 +187,12 @@ class ResourceLoader:
         fatal and prevents any fallback (spec 03: Determining mode).
 
         Raises:
-            NoResourcesFoundError: no ``*.pak`` files at all. (Spec 03's
-                autoDownload fallback hooks in at exactly this point in a
-                later stage.)
+            NoResourcesFoundError: no ``*.pak`` files at all, and the
+                autoDownload fallback had no URLs configured (spec 03:
+                Determining mode).
+            ResourceDownloadError: an auto-download attempt fails for any
+                reason (spec 03: Auto-download; fatal, exit code 1 at the
+                caller).
             ResourceLoadError: the first package file that cannot be loaded
                 (spec 03: fatal, exit code 1 at the caller).
             UnsupportedResourceVersionError: a package file's manifest
@@ -203,8 +209,9 @@ class ResourceLoader:
         loaded = 0
         for pak_path in pak_files:
             # load_pak does the in-memory extraction plus all validation
-            # (manifest, SHA-256, decode) and raises ResourceLoadError on
-            # the first problem (spec 03: The pak format).
+            # (manifest, SHA-256, decode) and raises ResourceLoadError (or
+            # UnsupportedResourceVersionError) on the first problem
+            # (spec 03: The pak format).
             loaded_pak = pak.load_pak(pak_path)
             # Duplicate IDs across packages are NOT an error: the most
             # recently loaded package wins, with a log warning (spec 03:
@@ -369,7 +376,7 @@ def _scan_resource_files(root: Path) -> list[Path]:
 
 
 # ---------------------------------------------------------------------- #
-# auto-download helpers (spec 03: Auto-download, stage 5)
+# auto-download helpers (spec 03: Auto-download)
 # ---------------------------------------------------------------------- #
 
 def _download_pak(url: str, dest: Path) -> None:
