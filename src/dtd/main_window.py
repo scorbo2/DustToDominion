@@ -101,8 +101,13 @@ class MainWindow:
                 self._enter_windowed(self._display_index, persist=False)
 
     def close(self) -> None:
-        """Release the window and the pygame display module."""
-        pygame.display.quit()
+        """Release the window and shut down all pygame modules.
+
+        A full ``pygame.quit`` (not just ``display.quit``) keeps the shutdown
+        symmetric with the full ``pygame.init`` of startup (spec 03 step 2),
+        so the mixer does not linger initialized until process exit.
+        """
+        pygame.quit()
 
     # ------------------------------------------------------------------ #
     # mode switching

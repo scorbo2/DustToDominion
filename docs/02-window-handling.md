@@ -39,6 +39,11 @@ config save with the new mode/resolution/display. Config save failure is logged 
 
 The window title is always the full name of the game ("Dust to Dominion").
 
+When the game exits, closing the main window shuts down all initialized pygame
+modules (not just the display) - the shutdown mirrors the full pygame
+initialization of startup (spec 03, step 2), so no initialized module (e.g.
+the mixer) lingers until process exit.
+
 ## Configuration
 
 This specification adds a new top-level `mainWindow` property to `game.json`:
@@ -92,6 +97,8 @@ Unit tests should cover reading the configuration:
 - missing configuration should result in defaults being used.
 - invalid configuration should raise `InvalidConfigError`
   - For example: `mainWindow` is present but does not specify `mode`: `InvalidConfigError`
+- closing the window should shut down all initialized pygame modules
+  (not just the display)
 
 From windowed mode:
 - programmatically triggering an `F11` should attempt a mode switch.

@@ -5,6 +5,8 @@ Guarantees required by spec 00:
 - dummy video/audio drivers, so no real display or sound card is touched
 - persistence env vars redirected to per-test temp directories, so the real
   ``~/.DustToDominion`` is never read or written
+- pygame's process-wide state is reset before and after every test, so tests
+  cannot leak initialized display/mixer state into one another
 - seeded RNG and an injected (fake) clock available to tests
 """
 from __future__ import annotations
@@ -23,6 +25,11 @@ from dtd import persistence
 os.environ.setdefault("SDL_VIDEODRIVER", "dummy")
 os.environ.setdefault("SDL_AUDIODRIVER", "dummy")
 
+# Safe to import here: the SDL env vars above are already set, and this
+# module is imported by pytest before any test module (so before any other
+# pygame import in the process).
+import pygame
+
 
 @pytest.fixture(autouse=True)
 def hermetic_persistence(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
@@ -35,6 +42,21 @@ def hermetic_persistence(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Pat
     monkeypatch.setenv("DUST_TO_DOMINION_HOME", str(home))
     monkeypatch.setenv("DUST_TO_DOMINION_CONFIG", str(home / "game.json"))
     yield home
+
+
+@pytest.fixture(autouse=True)
+def clean_pygame_state() -> None:
+    """Reset pygame's process-wide state around every test (spec 00).
+
+    pygame keeps module-level state (display, mixer, event queue) in the
+    process for its whole lifetime. Without this, any test that initializes
+    pygame (directly, or via ``app_main.run()``) would leak that state into
+    later tests and make test ordering matter. ``pygame.quit`` is idempotent,
+    so this is a harmless no-op when nothing is initialized.
+    """
+    pygame.quit()  # clear anything an earlier test leaked
+    yield
+    pygame.quit()  # leave the process clean for the next test
 
 
 @pytest.fixture
@@ -87,8 +109,8 @@ def mixer_ready() -> None:
     Spec 03 startup step 2 requires the mixer to be up before audio resources
     can be loaded. Tests that exercise audio loading mirror that precondition.
     ``SDL_AUDIODRIVER=dummy`` is already set by this file so no real audio
-    device is touched.
+    device is touched. Cleanup of the initialized mixer is handled by the
+    autouse ``clean_pygame_state`` fixture, so this fixture never quits.
     """
-    import pygame as _pygame
-    if not _pygame.mixer.get_init():
-        _pygame.mixer.init()
+    if not pygame.mixer.get_init():
+        pygame.mixer.init()
