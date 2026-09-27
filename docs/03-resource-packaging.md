@@ -368,6 +368,13 @@ so that the hash can be checked early. A hash mismatch triggers an immediate `Re
 
 Note that `manifest.json` is not encrypted, nor does it supply a SHA-256 hash for itself.
 
+Note that `manifest.json` is a **reserved entry name** in a package. A resource
+must never carry that ID: the game refuses to load a manifest entry named
+`manifest.json` (`ResourceLoadError`), and the packager refuses to package a
+source file with that name (fatal, exit code 1). Otherwise the package's own
+manifest entry would collide with a resource entry and the package would be
+unreadable.
+
 ### New custom tool - packager
 
 A new custom Python script in the `tools` directory will be added:
@@ -400,6 +407,10 @@ Note: invalid resources cannot be packaged! The packager tool must ensure that e
 before packaging it. The first found resource that cannot be successfully parsed should log an error to stderr
 and exit with code 1.
 
+Note: a file named `manifest.json` in the source directory cannot be packaged
+(the name is reserved for the package manifest, see The pak format). The packager
+must treat this as a fatal error: log an error to stderr and exit with code 1.
+
 ### Verifying package integrity
 
 Both the game and the packager tool need to verify package integrity. Code should be shared if possible,
@@ -418,6 +429,8 @@ Package validation rules:
 - An unreadable (not a zip file) package is always considered an error.
 - An empty package (valid zip file but nothing in the manifest) is always considered an error.
 - A manifest entry that cannot be resolved to any resource in the package is always considered an error.
+- A manifest entry whose ID is `manifest.json` (the reserved manifest entry name)
+  is always considered an error.
 
 Handling errors:
 - in the game, raise a `ResourceLoadError` and halt game startup with exit code 1.
@@ -455,6 +468,8 @@ Unit tests should cover both modes thoroughly:
 - the packager tool needs comprehensive tests to exercise the packaging and inspection features.
   - creation happy path: valid resources can be packaged.
   - creation unhappy path: invalid resources can NOT be packaged (log error on stderr and exit code 1)
+  - creation unhappy path: a source containing a file named `manifest.json`
+    (the reserved manifest entry name) can NOT be packaged (log error on stderr and exit code 1)
   - inspection happy path: valid packages can be inspected and report an accurate count of resources. All SHA hashes match.
   - inspection unhappy path: invalid packages report an error on stderr and exit code 1.
 - pygame initialization: failing unrelated modules (e.g. joystick, midi) must

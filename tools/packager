@@ -44,12 +44,26 @@ from dtd.pak import create_pak, load_pak  # noqa: E402
 def _init_pygame() -> bool:
     """Initialise pygame subsystems needed to validate resources.
 
-    Returns True on success; prints an error to stderr and returns False
-    if initialisation fails (spec 03: "Output an error to stderr if this
-    initialization fails").
+    Both the display and the mixer are required: validating image resources
+    needs the display, validating audio needs the mixer. Returns True on
+    success; prints an error to stderr and returns False if initialisation
+    fails (spec 03: "Output an error to stderr if this initialization
+    fails").
     """
-    if not pygame.get_init():
-        pygame.init()
+    try:
+        if not pygame.get_init():
+            pygame.init()
+    except pygame.error as exc:
+        print(f"error: pygame initialisation failed: {exc}", file=sys.stderr)
+        return False
+
+    if not pygame.display.get_init():
+        print(
+            "error: pygame display initialisation failed; "
+            "image resources cannot be validated",
+            file=sys.stderr,
+        )
+        return False
 
     if not pygame.mixer.get_init():
         try:

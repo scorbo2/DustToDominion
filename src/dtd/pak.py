@@ -347,11 +347,17 @@ def create_pak(
     provided) and are skipped.  This differs from the game's silent-skip
     behavior (spec 03: packager tool section).
 
+    A source file named ``manifest.json`` (the reserved manifest entry name,
+    spec 03: The pak format) is fatal: packaging it would add a zip entry
+    that collides with the package's own manifest, producing a package no
+    reader - including this module's ``load_pak`` - could interpret.
+
     Returns the number of resources packaged.
 
     Raises:
         NoResourcesFoundError: ``source_dir`` contains no supported resources.
-        ResourceLoadError: the first resource that cannot be parsed.
+        ResourceLoadError: the first resource that cannot be parsed, or a
+            source file that carries the reserved ``manifest.json`` name.
         OSError: filesystem read/write failures.
     """
     if not source_dir.is_dir():
@@ -368,6 +374,19 @@ def create_pak(
 
     for path in all_files:
         resource_id = path.relative_to(source_dir).as_posix()
+
+        # The manifest owns this entry name. A resource that carries it would
+        # produce a zip with two "manifest.json" entries, and readers resolve
+        # the name to the LAST one - i.e. the encrypted resource - so the
+        # package would fail to parse as a manifest (spec 03: The pak
+        # format). Reject it up front, like any other unpackageable resource.
+        # A file in a subdirectory (ID "data/manifest.json" etc.) is fine:
+        # only the bare top-level name collides.
+        if resource_id == MANIFEST_ENTRY:
+            raise ResourceLoadError(
+                f"cannot package {resource_id!r}: the name is reserved for "
+                f"the package manifest"
+            )
 
         if path.suffix not in game_constants.SUPPORTED_RESOURCE_EXTENSIONS:
             if warn_fn is not None:
@@ -419,8 +438,9 @@ def load_pak(pak_path: Path) -> ResourceStore:
     3. ``manifest.json`` is present, is valid UTF-8, contains valid JSON,
        declares a supported ``version``, and holds a non-empty
        ``resources`` list.
-    4. All manifest IDs are unique, safe (no absolute paths / traversal), and
-       use supported extensions.
+    4. All manifest IDs are unique, safe (no absolute paths / traversal), do
+       not use the reserved ``manifest.json`` entry name, and use supported
+       extensions.
     5. Every manifest entry resolves to a zip entry.
     6. SHA-256 of the zip entry's (encrypted) bytes matches the manifest.
     7. Decrypted bytes decode into a valid resource of the expected type.
@@ -466,6 +486,16 @@ def load_pak(pak_path: Path) -> ResourceStore:
             if not is_safe_resource_id(resource_id):
                 raise ResourceLoadError(
                     f"{pak_path}: unsafe resource ID {resource_id!r}"
+                )
+
+            # The manifest owns this entry name; a resource that carries it
+            # would make the package's manifest ambiguous (the reader cannot
+            # tell the real manifest from the resource entry) - spec 03:
+            # The pak format.
+            if resource_id == MANIFEST_ENTRY:
+                raise ResourceLoadError(
+                    f"{pak_path}: resource {resource_id!r} uses the reserved "
+                    f"manifest entry name"
                 )
 
             ext = PurePosixPath(resource_id).suffix

@@ -33,7 +33,8 @@ def run() -> int:
     # a non-zero exit code).
     try:
         persistence.ensure_persistence_dir()
-    except OSError:
+    except OSError as exc:
+        logger.error("persistence directory bootstrap failed; aborting startup: {}", exc)
         return 1
 
     # Spec 01: a missing/invalid game.json is never fatal; load_game_config

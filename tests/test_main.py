@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pygame
 import pytest
+from loguru import logger
 
 from dtd import main as app_main
 from dtd import resource_loader
@@ -91,8 +92,19 @@ class TestRun:
         blocker_file.write_text("i am a file", encoding="utf-8")
         monkeypatch.setenv("DUST_TO_DOMINION_HOME", str(blocker_file / "impossible"))
 
-        assert app_main.run() == 1
-        # The window must never have been created in that case.
+        error_records: list[str] = []
+        sink_id = logger.add(
+            lambda message: error_records.append(str(message)), level="ERROR"
+        )
+        try:
+            exit_code = app_main.run()
+        finally:
+            logger.remove(sink_id)
+
+        # The failure is logged before the process aborts...
+        assert exit_code == 1
+        assert any("persistence" in record.lower() for record in error_records)
+        # ...and the window must never have been created in that case:
         assert not pygame.display.get_init()
 
 

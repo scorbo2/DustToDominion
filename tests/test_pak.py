@@ -433,6 +433,41 @@ class TestCreatePak:
             manifest = json.loads(zf.read(MANIFEST_ENTRY))
         assert manifest["version"] == game_constants.PAK_MANIFEST_VERSION
 
+    def test_with_source_file_named_manifest_json_should_raise_resource_load_error(
+        self, tmp_path: Path
+    ) -> None:
+        # GIVEN a source directory containing a file whose ID is the reserved
+        # manifest entry name (spec 03: The pak format):
+        src = tmp_path / "res"
+        src.mkdir()
+        (src / "note.txt").write_text("hello", encoding="utf-8")
+        (src / "manifest.json").write_text("not a manifest", encoding="utf-8")
+        out = tmp_path / "out.pak"
+
+        # WHEN create_pak is invoked:
+        # THEN the reserved name is rejected before anything is written:
+        with pytest.raises(ResourceLoadError, match="reserved"):
+            create_pak(src, out)
+        assert not out.exists()
+
+    def test_with_nested_manifest_json_should_be_packaged_normally(
+        self, tmp_path: Path
+    ) -> None:
+        # The reservation covers only the bare top-level name "manifest.json"
+        # (the zip entry the package's manifest lives at). A file in a
+        # subdirectory gets the ID "data/manifest.json" and is a plain JSON
+        # resource:
+        src = tmp_path / "res"
+        (src / "data").mkdir(parents=True)
+        (src / "data/manifest.json").write_text("{}", encoding="utf-8")
+        out = tmp_path / "out.pak"
+
+        count = create_pak(src, out)
+
+        assert count == 1
+        loaded = load_pak(out)
+        assert loaded.json_resources["data/manifest.json"] == {}
+
 
 # ------------------------------------------------------------------ #
 # load_pak
@@ -586,6 +621,28 @@ class TestLoadPak:
         # WHEN load_pak is invoked:
         # THEN the corrupt resource is reported by its ID:
         with pytest.raises(ResourceLoadError, match="graphics/ship.png"):
+            load_pak(pak_path)
+
+    def test_manifest_entry_named_manifest_json_raises_resource_load_error(
+        self, tmp_path: Path
+    ) -> None:
+        # GIVEN a pak whose single manifest.json entry is also listed as a
+        # resource in the manifest. Its sha is bogus, but the reserved-name
+        # check must fire before any hash comparison:
+        manifest_bytes = json.dumps({
+            "version": game_constants.PAK_MANIFEST_VERSION,
+            "resources": [
+                {"id": "manifest.json", "sha256": "0" * 64}
+            ],
+        }).encode("utf-8")
+        pak_path = tmp_path / "self_referential.pak"
+        with zipfile.ZipFile(pak_path, "w") as zf:
+            zf.writestr(MANIFEST_ENTRY, manifest_bytes)
+
+        # WHEN load_pak is invoked:
+        # THEN the reserved ID is rejected (spec 03: Verifying package
+        # integrity):
+        with pytest.raises(ResourceLoadError, match="reserved"):
             load_pak(pak_path)
 
     def test_unsafe_absolute_resource_id_raises(self, tmp_path: Path) -> None:
@@ -829,6 +886,29 @@ class TestPackagerCli:
         )
         assert result.returncode == 1
         assert "error" in result.stderr.lower()
+        assert not out.exists()
+
+    def test_create_with_reserved_manifest_name_exits_nonzero(
+        self, tmp_path: Path, packager: Path
+    ) -> None:
+        # GIVEN a source directory containing a file named manifest.json
+        # (the reserved manifest entry name, spec 03: packager tool):
+        src = tmp_path / "res"
+        src.mkdir()
+        (src / "note.txt").write_text("hello", encoding="utf-8")
+        (src / "manifest.json").write_text("not a manifest", encoding="utf-8")
+        out = tmp_path / "out.pak"
+
+        # WHEN the packager is asked to create the package:
+        result = self._run(
+            packager, "create", "--source", str(src), "--output", str(out),
+            expect_success=False,
+        )
+
+        # THEN the reserved name is reported on stderr and nothing is written:
+        assert result.returncode == 1
+        assert "error" in result.stderr.lower()
+        assert "reserved" in result.stderr.lower()
         assert not out.exists()
 
     def test_inspect_happy_path_reports_count_and_integrity(

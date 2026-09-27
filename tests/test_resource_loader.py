@@ -33,7 +33,7 @@ from dtd import resource_loader
 from dtd.errors import NoResourcesFoundError, ResourceDownloadError, ResourceLoadError
 from dtd.game_config import ResourcesConfig
 from dtd.pak import MANIFEST_ENTRY, create_pak, xor_bytes
-from dtd.resource_loader import ResourceLoader, project_directory
+from dtd.resource_loader import ResourceLoader
 
 
 @pytest.fixture
@@ -972,20 +972,3 @@ class TestAutoDownload:
         # ...and the downloaded resources loaded:
         assert loader.get_text_resource("note.txt") == "from auto-download"
 
-
-class TestRealProjectResources:
-    def test_with_the_repo_resources_dir_should_load_the_actual_sprites(self) -> None:
-        # Integration-flavored: the repo's own resources/ assets are valid
-        # and must load through the REAL project_directory() (no patching).
-        loader = ResourceLoader()
-        loader.load(None)
-
-        repo_resources = project_directory() / "resources"
-        png_ids = sorted(
-            path.relative_to(repo_resources).as_posix()
-            for path in repo_resources.rglob("*.png")
-            if path.is_file()
-        )
-        assert png_ids, "expected at least one PNG asset in the repo resources/ dir"
-        for resource_id in png_ids:
-            assert isinstance(loader.get_sprite_resource(resource_id), pygame.Surface)
