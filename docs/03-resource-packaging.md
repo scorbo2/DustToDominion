@@ -81,7 +81,9 @@ a `ResourceLoadError` and is considered fatal (exit code 1).
 ## Distribution mode
 
 On startup, the game will check for the existence of `*.pak` files in the project directory.
-No assumptions are made regarding file names or file count. For example, all game resources might
+No assumptions are made regarding file names or file count. The scan is NOT
+recursive: only the top level of the project directory (and of any configured
+`location` directory) is examined for `*.pak` files. For example, all game resources might
 be packaged into a single `game_assets.pak`, or they may be packaged separately in `audio.pak`,
 `graphics.pak`, and `data.pak` (for example). Or, resources of the same type may be split across
 multiple package files, like `asteroids.pak` (containing asteroid sprites) and `ships.pak` (containing
@@ -476,15 +478,16 @@ The spec is too large to implement all at once. The following staged dev plan is
 1. Create a stubbed-out `resource_loader` module with no-op functions for resource loading and consumer API.
    No resources are loaded at this stage. Update the game startup code as outlined in this document - first
    load game configuration, then initialize pygame, then invoke the stubbed-out resource loader, then initialize
-   and show the main window.
+   and show the main window. **Completed 2026-09-26**
 2. Implement dev mode - scanning for and loading resources in individual files in any configured `location`.
    Handle load/parse errors. **Nothing in the game actually uses the loaded resources yet**. This is fine.
    Write tests for dev mode resource loading. No package files yet, no auto-loader yet, no packager yet.
+   **Completed 2026-09-26**
 3. Implement the packager tool so that we can create valid package files. Write all tests for the packager.
    This requires implementation of the package file format, including encryption of all entries, and the
-   handling of `manifest.json`.
+   handling of `manifest.json`. **Completed 2026-09-27**
 4. Implement distribution mode, loading resources from package files. Implement the fallback from dev mode
-   to distribution mode. Still no auto-loader. Write all tests for distribution mode.
+   to distribution mode. Still no auto-loader. Write all tests for distribution mode. **Completed 2026-09-27**
 5. Implement auto-loader with configurable URLs for package files. Implement the fallback from distribution
    mode to the auto-downloader. Write all tests for the auto-downloader.
 

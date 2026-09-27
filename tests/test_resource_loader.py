@@ -1,16 +1,26 @@
-"""Unit tests for the dev-mode resource loader (spec 03, stage 2).
+"""Unit tests for the resource loader, dev mode (stage 2) and
+distribution mode (stage 4).
 
 Dev mode contract: scan the default ``resources/`` directory (always) plus
 every configured ``location`` (relative to the *project* directory, never
 the CWD), recursively, loading each supported-extension file under an ID
 relative to its containing directory. Unsupported extensions are silently
-skipped; the first unloadable resource raises ``ResourceLoadError``; no
-resources at all raises ``NoResourcesFoundError``.
+skipped; the first unloadable resource raises ``ResourceLoadError``.
+
+Distribution mode contract: scan the project directory (always) plus every
+configured ``location`` for ``*.pak`` files (top level only, no recursion),
+loading them in alphabetical order by filename. The first invalid package
+raises ``ResourceLoadError``; no packages at all raises
+``NoResourcesFoundError`` (the autoDownload fallback is stage 5).
+
+Mode selection: a dev scan that finds no valid resources at all falls back
+to distribution mode; a resource that fails to LOAD never falls back.
 """
 from __future__ import annotations
 
 import json
 import wave
+import zipfile
 from pathlib import Path
 
 import pygame
@@ -20,6 +30,7 @@ from loguru import logger
 from dtd import resource_loader
 from dtd.errors import NoResourcesFoundError, ResourceLoadError
 from dtd.game_config import ResourcesConfig
+from dtd.pak import MANIFEST_ENTRY, create_pak, xor_bytes
 from dtd.resource_loader import ResourceLoader, project_directory
 
 
@@ -71,6 +82,27 @@ def _standard_tree(root: Path) -> dict[str, Path]:
     files["data/NPC_dialog/frank.txt"].write_text("Hello, grandma.", encoding="utf-8")
     files["data/ship_stats.json"].write_text(json.dumps({"hull": 100}), encoding="utf-8")
     return files
+
+
+def _make_pak(source_dir: Path, pak_path: Path) -> None:
+    """Package ``source_dir`` into ``pak_path`` (spec 03 stage 3 format).
+
+    Tests that scan for the pak write it NEXT TO (not inside) the source
+    tree, so the pak never contaminates the packaged content.
+    """
+    pak_path.parent.mkdir(parents=True, exist_ok=True)
+    create_pak(source_dir, pak_path)
+
+
+def _make_text_file(root: Path, resource_id: str, content: str) -> Path:
+    """One UTF-8 text resource under ``root`` (cheap to package: no mixer).
+
+    Returns the file's path; the resource's ID is ``resource_id``.
+    """
+    path = root / resource_id
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(content, encoding="utf-8")
+    return path
 
 
 def _warning_records() -> tuple[list[str], int]:
@@ -227,8 +259,9 @@ class TestNoResourcesFound:
     def test_with_missing_resources_dir_should_raise_no_resources_found(
         self, project: Path
     ) -> None:
-        # Spec 03: nothing found anywhere (and no autoDownload configured) is
-        # NoResourcesFoundError. (Distribution-mode fallback comes later.)
+        # Spec 03: nothing found anywhere (and no autoDownload configured)
+        # is NoResourcesFoundError. The distribution-mode fallback now runs
+        # here too and also finds no *.pak file; autoDownload is stage 5.
         with pytest.raises(NoResourcesFoundError):
             ResourceLoader().load(None)
 
@@ -350,13 +383,283 @@ class TestDuplicateIds:
         assert records == []
 
 
-class TestDistributionModeNotYetImplemented:
-    def test_with_distribution_mode_config_should_raise_not_implemented(
+class TestDistributionMode:
+    def test_with_valid_pak_in_project_dir_should_load_every_resource_type(
+        self, project: Path, mixer_ready: None
+    ) -> None:
+        # GIVEN a project holding one package with one of each resource type
+        # (and no dev-mode resources/ dir at all):
+        tree = project / "assets"
+        files = _standard_tree(tree)
+        _make_pak(tree, project / "game_assets.pak")
+
+        # WHEN distribution mode is requested explicitly:
+        loader = ResourceLoader()
+        loader.load(ResourcesConfig(mode="distribution"))
+
+        # THEN each getter returns the decoded object under its pak ID:
+        assert isinstance(
+            loader.get_sprite_resource("graphics/ships/viper.png"), pygame.Surface
+        )
+        assert isinstance(loader.get_sfx_resource("audio/sfx/boom.wav"), pygame.mixer.Sound)
+        assert loader.get_music_resource("audio/music/theme.wav") == files[
+            "audio/music/theme.wav"
+        ].read_bytes()
+        assert loader.get_text_resource("data/NPC_dialog/frank.txt") == "Hello, grandma."
+        assert loader.get_json_resource("data/ship_stats.json") == {"hull": 100}
+
+    def test_with_multiple_paks_should_load_them_all(self, project: Path) -> None:
+        # GIVEN two packages, each with its own text resource:
+        tree_a = project / "tree_a"
+        _make_text_file(tree_a, "a.txt", "from a")
+        _make_pak(tree_a, project / "a.pak")
+        tree_b = project / "tree_b"
+        _make_text_file(tree_b, "b.txt", "from b")
+        _make_pak(tree_b, project / "b.pak")
+
+        # WHEN distribution mode runs:
+        loader = ResourceLoader()
+        loader.load(ResourcesConfig(mode="distribution"))
+
+        # THEN resources from BOTH packages are available:
+        assert loader.get_text_resource("a.txt") == "from a"
+        assert loader.get_text_resource("b.txt") == "from b"
+
+    def test_with_duplicate_id_across_paks_should_keep_later_alphabetical_and_warn(
         self, project: Path
     ) -> None:
-        # Stage boundary: distribution mode (*.pak) arrives in a later stage.
-        with pytest.raises(NotImplementedError, match="distribution mode"):
+        # GIVEN two packages, both containing shared/thing.txt, where the
+        # alphabetically LATER package (b.pak) holds the desired copy
+        # (spec 03: packages scan alphabetically; most recently loaded wins):
+        tree_a = project / "tree_a"
+        _make_text_file(tree_a, "shared/thing.txt", "from a")
+        _make_pak(tree_a, project / "a.pak")
+        tree_b = project / "tree_b"
+        _make_text_file(tree_b, "shared/thing.txt", "from b")
+        _make_pak(tree_b, project / "b.pak")
+
+        # WHEN distribution mode runs, capturing WARNING logs:
+        records, sink_id = _warning_records()
+        try:
+            loader = ResourceLoader()
+            loader.load(ResourcesConfig(mode="distribution"))
+        finally:
+            logger.remove(sink_id)
+
+        # THEN the later (alphabetical) package wins... the earlier one is
+        # discarded, ...and the collision was reported as a warning:
+        assert loader.get_text_resource("shared/thing.txt") == "from b"
+        assert any("duplicate" in record.lower() for record in records)
+
+    def test_with_pak_in_configured_location_should_load_it(self, project: Path) -> None:
+        # GIVEN a package in an extra directory listed in location (the
+        # project dir itself holds no pak):
+        tree = project / "addon_assets"
+        _make_text_file(tree, "addon.txt", "addon data")
+        _make_pak(tree, project / "addon_paks/addon.pak")
+
+        # WHEN distribution mode lists the extra dir:
+        loader = ResourceLoader()
+        loader.load(
+            ResourcesConfig(mode="distribution", location=["addon_paks"])
+        )
+
+        # THEN the package's resource is loaded (relative location resolved
+        # against the project directory):
+        assert loader.get_text_resource("addon.txt") == "addon data"
+
+    def test_with_missing_location_dirs_should_be_ignored(self, project: Path) -> None:
+        # Spec 03: the scan tolerates directories that simply do not exist.
+        tree = project / "tree"
+        _make_text_file(tree, "note.txt", "hello")
+        _make_pak(tree, project / "note.pak")
+        loader = ResourceLoader()
+        loader.load(
+            ResourcesConfig(
+                mode="distribution",
+                location=[str(project / "does_not_exist"), "also_missing/"],
+            )
+        )
+        assert loader.get_text_resource("note.txt") == "hello"
+
+    def test_with_pak_in_subdirectory_should_not_be_scanned(self, project: Path) -> None:
+        # Spec 03 says "scan ... for *.pak files" for distribution mode, and
+        # only "recursive scan" for dev mode - so only the top level of each
+        # scanned directory is looked at:
+        tree = project / "tree"
+        _make_text_file(tree, "note.txt", "hello")
+        _make_pak(tree, project / "subdir/nested.pak")
+
+        with pytest.raises(NoResourcesFoundError):
             ResourceLoader().load(ResourcesConfig(mode="distribution"))
+
+    def test_with_explicit_dot_location_should_not_scan_twice(
+        self, project: Path
+    ) -> None:
+        # "" is always scanned, so an explicit "." entry must not cause the
+        # same package to be loaded twice (which would log a spurious
+        # duplicate warning for every resource):
+        tree = project / "tree"
+        _make_text_file(tree, "note.txt", "hello")
+        _make_pak(tree, project / "note.pak")
+        loader = ResourceLoader()
+        records, sink_id = _warning_records()
+        try:
+            loader.load(ResourcesConfig(mode="distribution", location=["."]))
+        finally:
+            logger.remove(sink_id)
+        assert loader.get_text_resource("note.txt") == "hello"
+        assert records == []
+
+
+class TestDistributionModeFailures:
+    def test_with_no_pak_files_should_raise_no_resources_found(
+        self, project: Path
+    ) -> None:
+        # Spec 03: no *.pak anywhere (and autoDownload is stage 5) ->
+        # NoResourcesFoundError:
+        with pytest.raises(NoResourcesFoundError):
+            ResourceLoader().load(ResourcesConfig(mode="distribution"))
+
+    def test_with_zero_byte_pak_should_raise_resource_load_error(
+        self, project: Path
+    ) -> None:
+        # Spec 03: "a zero-byte package file is always considered an error":
+        (project / "empty.pak").write_bytes(b"")
+        with pytest.raises(ResourceLoadError, match="empty"):
+            ResourceLoader().load(ResourcesConfig(mode="distribution"))
+
+    def test_with_not_a_zip_pak_should_raise_resource_load_error(
+        self, project: Path
+    ) -> None:
+        (project / "bad.pak").write_bytes(b"this is not a zip file at all")
+        with pytest.raises(ResourceLoadError, match="valid pak"):
+            ResourceLoader().load(ResourcesConfig(mode="distribution"))
+
+    def test_with_pak_missing_manifest_should_raise_resource_load_error(
+        self, project: Path, tmp_path: Path
+    ) -> None:
+        # Build a pak with no manifest.json (spec 03: fatal in distribution
+        # mode):
+        pak_path = project / "no_manifest.pak"
+        with zipfile.ZipFile(pak_path, "w") as zf:
+            zf.writestr("note.txt", xor_bytes(b"hello"))
+        with pytest.raises(ResourceLoadError, match="manifest"):
+            ResourceLoader().load(ResourcesConfig(mode="distribution"))
+
+
+class TestDevToFallbackDistribution:
+    def test_with_no_dev_resources_should_fall_back_to_distribution(
+        self, project: Path, mixer_ready: None
+    ) -> None:
+        # GIVEN an (assumed) dev-mode config with an empty resources/ dir and
+        # a valid package in the project dir (spec 03: Determining mode -
+        # empty dev scan falls back to distribution):
+        (project / "resources").mkdir()
+        tree = project / "assets"
+        _standard_tree(tree)
+        _make_pak(tree, project / "game_assets.pak")
+
+        # WHEN the loader runs with NO config (dev mode assumed):
+        loader = ResourceLoader()
+        loader.load(None)
+
+        # THEN the package's resources are loaded:
+        assert isinstance(
+            loader.get_sprite_resource("graphics/ships/viper.png"), pygame.Surface
+        )
+        assert loader.get_text_resource("data/NPC_dialog/frank.txt") == "Hello, grandma."
+
+    def test_with_dev_resources_present_should_ignore_paks(
+        self, project: Path
+    ) -> None:
+        # GIVEN dev-mode resources present AND a package in the project dir
+        # (spec 03: the loader scans for individual asset files OR *.pak
+        # files, never both):
+        _write_png(project / "resources/graphics/base.png")
+        tree = project / "tree"
+        _make_text_file(tree, "pak_only.txt", "should not load")
+        _make_pak(tree, project / "note.pak")
+
+        # WHEN dev mode (the default) runs:
+        loader = ResourceLoader()
+        loader.load(None)
+
+        # THEN only the dev-mode resource is loaded - the pak is ignored:
+        assert loader.get_sprite_resource("graphics/base.png") is not None
+        assert loader.get_text_resource("pak_only.txt") is None
+
+    def test_with_explicit_dev_mode_should_ignore_paks(self, project: Path) -> None:
+        # Same contract, with mode stated explicitly (spec 03: "Can the
+        # game be explicitly started in either mode, if both resources and
+        # *.pak files are present?"):
+        _write_png(project / "resources/graphics/base.png")
+        tree = project / "tree"
+        _make_text_file(tree, "pak_only.txt", "should not load")
+        _make_pak(tree, project / "note.pak")
+
+        loader = ResourceLoader()
+        loader.load(ResourcesConfig(mode="dev"))
+
+        assert loader.get_sprite_resource("graphics/base.png") is not None
+        assert loader.get_text_resource("pak_only.txt") is None
+
+    def test_with_explicit_distribution_should_ignore_dev_files(
+        self, project: Path
+    ) -> None:
+        # The mirror image of the above: explicit distribution never scans
+        # individual files:
+        _write_png(project / "resources/graphics/base.png")
+        tree = project / "tree"
+        _make_text_file(tree, "pak_only.txt", "from pak")
+        _make_pak(tree, project / "note.pak")
+
+        loader = ResourceLoader()
+        loader.load(ResourcesConfig(mode="distribution"))
+
+        assert loader.get_text_resource("pak_only.txt") == "from pak"
+        assert loader.get_sprite_resource("graphics/base.png") is None
+
+    def test_with_dev_load_failure_should_not_fall_back_to_distribution(
+        self, project: Path
+    ) -> None:
+        # Spec 03: "a single unloadable resource file or invalid *.pak file
+        # stops the process and prevents any fallback" - even though a valid
+        # package sits waiting in the project dir:
+        broken = project / "resources/data/broken.json"
+        broken.parent.mkdir(parents=True)
+        broken.write_text("{not json", encoding="utf-8")
+        tree = project / "tree"
+        _make_text_file(tree, "fine.txt", "never reached")
+        _make_pak(tree, project / "note.pak")
+
+        with pytest.raises(ResourceLoadError, match="broken.json"):
+            ResourceLoader().load(None)
+
+    def test_with_fallback_and_invalid_pak_should_raise_resource_load_error(
+        self, project: Path
+    ) -> None:
+        # The fallback itself must not paper over a bad package (spec 03:
+        # the first invalid package file stops the process, preventing even
+        # the autoDownload fallback):
+        (project / "resources").mkdir()
+        (project / "bad.pak").write_bytes(b"this is not a zip file at all")
+
+        with pytest.raises(ResourceLoadError, match="valid pak"):
+            ResourceLoader().load(None)
+
+    def test_with_auto_download_urls_but_no_paks_should_raise_no_resources_found(
+        self, project: Path
+    ) -> None:
+        # Stage boundary: autoDownload arrives in stage 5, so configured URLs
+        # are ignored for now (spec 03: they only matter when autoDownload is
+        # actually triggered):
+        config = ResourcesConfig(
+            mode="distribution",
+            autoDownload=["http://example.com/game_assets/package1.pak"],
+        )
+        with pytest.raises(NoResourcesFoundError):
+            ResourceLoader().load(config)
 
 
 class TestRealProjectResources:

@@ -133,8 +133,9 @@ class TestStartupFailures:
         self, bootstrapped_persistence: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         # Spec 03: no resources anywhere, no autoDownload specified ->
-        # NoResourcesFoundError and exit code 1. (Distribution-mode
-        # fallback, which would hook in here, arrives in a later stage.)
+        # NoResourcesFoundError and exit code 1. (The distribution-mode
+        # fallback now runs here but finds no *.pak files either; the
+        # autoDownload fallback arrives in a later stage.)
         (tmp_path / "resources").mkdir()  # exists, but holds nothing
         monkeypatch.setattr(resource_loader, "project_directory", lambda: tmp_path)
         window_opened: list[object] = []

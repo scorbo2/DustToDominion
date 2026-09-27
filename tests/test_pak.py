@@ -25,13 +25,14 @@ from pathlib import Path
 
 import pygame
 import pytest
+from loguru import logger
 
 from dtd import game_constants, pak
 from dtd.errors import NoResourcesFoundError, ResourceLoadError
 from dtd.pak import (
     MANIFEST_ENTRY,
     MANIFEST_VERSION,
-    LoadedPak,
+    ResourceStore,
     compute_sha256,
     create_pak,
     is_safe_resource_id,
@@ -203,6 +204,50 @@ class TestIsSafeResourceId:
 
     def test_empty_string_is_unsafe(self) -> None:
         assert is_safe_resource_id("") is False
+
+
+# ------------------------------------------------------------------ #
+# ResourceStore (shared in-memory cache, spec 03)
+# ------------------------------------------------------------------ #
+
+class TestResourceStore:
+    """The shared cache both resource-loader modes and load_pak use."""
+
+    def test_store_places_values_in_their_per_type_caches(self) -> None:
+        store = ResourceStore()
+        store.store("text", "note.txt", "hello")
+        store.store("json", "data.json", {"hull": 100})
+
+        assert store.texts == {"note.txt": "hello"}
+        assert store.json_resources == {"data.json": {"hull": 100}}
+        assert store.resource_count == 2
+
+    def test_store_with_duplicate_id_should_warn_and_keep_latest(self) -> None:
+        # Spec 03: duplicate IDs are NOT an error - the most recently loaded
+        # resource wins, with a log warning:
+        records: list[str] = []
+        sink_id = logger.add(
+            lambda message: records.append(str(message)), level="WARNING"
+        )
+        try:
+            store = ResourceStore()
+            store.store("text", "note.txt", "first")
+            store.store("text", "note.txt", "second")
+        finally:
+            logger.remove(sink_id)
+
+        assert store.texts["note.txt"] == "second"
+        assert any("duplicate" in record.lower() for record in records)
+
+    def test_items_yields_every_resource_with_its_type_name(self) -> None:
+        store = ResourceStore()
+        store.store("text", "note.txt", "hello")
+        store.store("json", "data.json", {"hull": 100})
+
+        triples = list(store.items())
+        assert len(triples) == 2
+        assert ("text", "note.txt", "hello") in triples
+        assert ("json", "data.json", {"hull": 100}) in triples
 
 
 # ------------------------------------------------------------------ #

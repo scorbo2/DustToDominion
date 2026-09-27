@@ -6,8 +6,11 @@ XOR-encrypted with ``game_constants.PAK_ENCRYPTION_KEY``.
 computed on the *encrypted* bytes (before zip compression), so the hash can
 be checked immediately after reading, before decryption.
 
-This module is shared by the game (distribution-mode loading, stage 4) and
-the packager tool (``tools/packager``, stage 3).
+This module is shared by the game (dev-mode and distribution-mode loading,
+stages 2 and 4) and the packager tool (``tools/packager``, stage 3).
+``load_resource_from_bytes`` is the single place where raw resource bytes
+are decoded into typed values, so dev mode, distribution mode, and the
+packager can never interpret a format differently.
 
 pygame must be initialized by the caller before any function that loads
 resources (``create_pak`` validates each resource; ``load_pak`` decodes all).
@@ -20,9 +23,10 @@ import json
 import zipfile
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
-from typing import Any, Callable
+from typing import Any, Callable, Iterator
 
 import pygame
+from loguru import logger
 
 from dtd import game_constants
 from dtd.errors import NoResourcesFoundError, ResourceLoadError
@@ -75,12 +79,19 @@ def is_safe_resource_id(resource_id: str) -> bool:
 
 
 # ------------------------------------------------------------------ #
-# Loaded pak container
+# Resource store
 # ------------------------------------------------------------------ #
 
 @dataclass
-class LoadedPak:
-    """Resources extracted and decoded from a single pak file."""
+class ResourceStore:
+    """In-memory cache of decoded game resources, keyed by resource ID.
+
+    Holds the contents of one loaded package (as returned by ``load_pak``)
+    or - in the resource loader - every resource loaded at startup. Music
+    is cached as raw audio bytes (the client feeds them to
+    ``mixer.music.load`` itself); sound effects as ``pygame.mixer.Sound``
+    objects (spec 03: Distinguishing music from sound effects).
+    """
 
     sprites: dict[str, pygame.Surface] = field(default_factory=dict)
     sound_effects: dict[str, pygame.mixer.Sound] = field(default_factory=dict)
@@ -98,13 +109,64 @@ class LoadedPak:
             + len(self.json_resources)
         )
 
+    def store(self, type_name: str, resource_id: str, value: Any) -> None:
+        """Cache one decoded resource under its ID.
+
+        ``type_name`` is one of ``"sprite"``, ``"sfx"``, ``"music"``,
+        ``"text"``, ``"json"`` - the names produced by
+        ``load_resource_from_bytes``.
+
+        Duplicate IDs are NOT an error: the most recently stored resource
+        wins, with a log warning (spec 03: Resolving duplicate resource
+        IDs). Within a single pak this cannot happen, because the manifest
+        forbids duplicate IDs.
+        """
+        if type_name == "sprite":
+            cache = self.sprites
+        elif type_name == "sfx":
+            cache = self.sound_effects
+        elif type_name == "music":
+            cache = self.music
+        elif type_name == "text":
+            cache = self.texts
+        else:  # "json" - load_resource_from_bytes produces no other name
+            cache = self.json_resources
+        kind = "sound effect" if type_name == "sfx" else type_name
+        if resource_id in cache:
+            logger.warning(
+                "duplicate {} resource ID {} - the most recently loaded "
+                "resource wins",
+                kind,
+                resource_id,
+            )
+        cache[resource_id] = value
+
+    def items(self) -> Iterator[tuple[str, str, Any]]:
+        """All stored resources as ``(type_name, resource_id, value)``
+        triples, in fixed per-type order.
+
+        Used to merge one store into another (e.g. a pak's resources into
+        the resource loader's store) so every resource - not just some
+        types - passes through ``store`` and its duplicate-ID warning.
+        """
+        for type_name, cache in (
+            ("sprite", self.sprites),
+            ("sfx", self.sound_effects),
+            ("music", self.music),
+            ("text", self.texts),
+            ("json", self.json_resources),
+        ):
+            for resource_id, value in cache.items():
+                yield type_name, resource_id, value
+
 
 # ------------------------------------------------------------------ #
-# Per-resource loading from bytes (shared between create and load)
+# Per-resource loading from bytes (shared between create, load, and the
+# game's dev mode)
 # ------------------------------------------------------------------ #
 
-def _load_resource_from_bytes(resource_id: str, data: bytes) -> tuple[str, Any]:
-    """Decode one resource from raw (decrypted) bytes.
+def load_resource_from_bytes(resource_id: str, data: bytes) -> tuple[str, Any]:
+    """Decode one resource from raw bytes.
 
     Returns ``(type_name, value)`` where ``type_name`` is one of
     ``"sprite"``, ``"sfx"``, ``"music"``, ``"text"``, or ``"json"``.
@@ -112,7 +174,9 @@ def _load_resource_from_bytes(resource_id: str, data: bytes) -> tuple[str, Any]:
     The ``resource_id`` is used only to determine the extension and the
     music/sfx split; it is also used as the ``namehint`` for
     ``pygame.image.load`` so that the image decoder gets the format hint
-    even without a filesystem path.
+    even without a filesystem path. The data is assumed to be already
+    decrypted when coming from a pak; dev mode passes raw disk bytes,
+    which need no decryption.
 
     Raises ``ResourceLoadError`` if the data cannot be decoded.
     """
@@ -281,7 +345,7 @@ def create_pak(
         raw_data = path.read_bytes()
 
         # Validate before packaging - the first bad resource is fatal.
-        _load_resource_from_bytes(resource_id, raw_data)
+        load_resource_from_bytes(resource_id, raw_data)
 
         encrypted = xor_bytes(raw_data)
         sha256 = compute_sha256(encrypted)
@@ -311,7 +375,7 @@ def create_pak(
 # Loading and validating pak files
 # ------------------------------------------------------------------ #
 
-def load_pak(pak_path: Path) -> LoadedPak:
+def load_pak(pak_path: Path) -> ResourceStore:
     """Validate and load all resources from a pak file.
 
     Validation steps (in order; first failure raises ``ResourceLoadError``):
@@ -328,7 +392,8 @@ def load_pak(pak_path: Path) -> LoadedPak:
 
     Zip entries not mentioned in the manifest are silently ignored (spec 03).
 
-    Returns ``LoadedPak`` with all resources decoded and ready to use.
+    Returns a ``ResourceStore`` with all resources decoded and ready to
+    use.
 
     Raises ``ResourceLoadError`` on any validation or decode failure.
     """
@@ -355,7 +420,7 @@ def load_pak(pak_path: Path) -> LoadedPak:
         manifest_bytes = zf.read(MANIFEST_ENTRY)
         entries = _parse_manifest(manifest_bytes.decode("utf-8"), str(pak_path))
 
-        loaded = LoadedPak()
+        loaded = ResourceStore()
 
         for entry in entries:
             resource_id: str = entry["id"]
@@ -387,17 +452,9 @@ def load_pak(pak_path: Path) -> LoadedPak:
                 )
 
             raw_bytes = xor_bytes(encrypted_bytes)
-            type_name, value = _load_resource_from_bytes(resource_id, raw_bytes)
-
-            if type_name == "sprite":
-                loaded.sprites[resource_id] = value
-            elif type_name == "sfx":
-                loaded.sound_effects[resource_id] = value
-            elif type_name == "music":
-                loaded.music[resource_id] = value
-            elif type_name == "text":
-                loaded.texts[resource_id] = value
-            elif type_name == "json":
-                loaded.json_resources[resource_id] = value
+            type_name, value = load_resource_from_bytes(resource_id, raw_bytes)
+            # A single pak's manifest forbids duplicate IDs, so store() can
+            # never warn here; it routes the value to the right cache.
+            loaded.store(type_name, resource_id, value)
 
     return loaded

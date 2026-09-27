@@ -1,21 +1,42 @@
 """Game resource loading and the consumer API (spec 03: Resource packaging).
 
-STAGE 2: dev mode is implemented. On startup the loader scans the default
-``resources/`` directory (always, even if omitted from config) plus every
-configured ``location`` directory, recursively, for files whose extension is
-in ``game_constants.SUPPORTED_RESOURCE_EXTENSIONS`` (case-sensitive), and
+STAGES 2 and 4: dev mode and distribution mode are implemented.
+
+Dev mode: the loader scans the default ``resources/`` directory (always,
+even if omitted from config) plus every configured ``location`` directory,
+recursively, for files whose extension is in
+``game_constants.SUPPORTED_RESOURCE_EXTENSIONS`` (case-sensitive), and
 loads each one into memory under an ID relative to its containing directory
 (e.g. ``audio/sfx/boom.wav``). Unsupported extensions are silently skipped
 (spec 03: no log warning). The first resource that cannot be loaded raises
 ``ResourceLoadError`` (fatal, exit code 1 at the caller).
 
-NOT implemented yet (later stages): distribution mode (``*.pak`` files) and
-``autoDownload``. Requesting distribution mode aborts startup with
-``NotImplementedError``, and a dev-mode scan that finds nothing raises
-``NoResourcesFoundError`` right where spec 03 will later insert the
-distribution-mode fallback.
+Distribution mode: the loader scans the project directory (always, even if
+``location`` is omitted) plus every configured ``location`` directory for
+``*.pak`` package files, and loads each one in-memory via ``dtd.pak``
+(including manifest, SHA-256, and decode validation). The scan is NOT
+recursive: pak files sit at the top level of each scanned directory (spec 03
+says "scan ... for *.pak files" without the recursive language dev mode
+gets). Package files load in alphabetical order by filename so duplicate-ID
+collisions resolve deterministically (spec 03: Resolving duplicate resource
+IDs). The first invalid package file raises ``ResourceLoadError`` (fatal,
+exit code 1 at the caller).
 
-pygame-ce gotcha for the distribution stage (verified against 2.5.8):
+Mode selection (spec 03: Determining mode): a dev-mode scan that finds no
+valid resources at all falls back to distribution mode. A resource or
+package that fails to LOAD is fatal and prevents any fallback. A
+distribution-mode scan that finds no ``*.pak`` files at all raises
+``NoResourcesFoundError`` right where spec 03 will later insert the
+autoDownload fallback.
+
+Both modes decode resources through the shared ``pak.load_resource_from_bytes``
+and cache them in one shared ``pak.ResourceStore``, so dev mode and
+distribution mode cannot interpret a resource format differently.
+
+NOT implemented yet (stage 5): ``autoDownload``. Configured URLs are ignored
+until that stage.
+
+pygame-ce gotcha for in-memory audio (verified against 2.5.8):
 ``pygame.mixer.Sound(buffer=...)`` treats the object as RAW PCM in the
 mixer's format (it must support the buffer interface - a ``BytesIO`` is
 rejected outright). To decode an in-memory audio payload instead, pass a
@@ -25,14 +46,13 @@ decoded like a file.
 """
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from typing import Any
 
 import pygame
 from loguru import logger
 
-from dtd import game_constants
+from dtd import game_constants, pak
 from dtd.errors import NoResourcesFoundError, ResourceLoadError
 from dtd.game_config import ResourcesConfig
 
@@ -65,11 +85,9 @@ class ResourceLoader:
     """
 
     def __init__(self) -> None:
-        self._sprites: dict[str, pygame.Surface] = {}
-        self._sound_effects: dict[str, pygame.mixer.Sound] = {}
-        self._music: dict[str, bytes] = {}
-        self._texts: dict[str, str] = {}
-        self._json_resources: dict[str, Any] = {}
+        # All five per-type caches live in one shared store object (spec 03:
+        # Distinguishing music from sound effects / Consumer API).
+        self._store: pak.ResourceStore = pak.ResourceStore()
 
     # ------------------------------------------------------------------ #
     # startup entry point (spec 03)
@@ -80,24 +98,32 @@ class ResourceLoader:
         A ``None`` config means dev mode with only the default ``resources/``
         directory (spec 03: Configuration).
 
+        Dev mode falls back to distribution mode only when it finds no
+        valid resources at all; a resource that fails to LOAD is fatal and
+        prevents any fallback (spec 03: Determining mode).
+
         Raises:
-            NotImplementedError: distribution mode was requested (a later
-                stage; not implemented yet).
-            NoResourcesFoundError: dev mode found no resources at all. A
-                later stage will try distribution mode / autoDownload here
-                before giving up (spec 03: Determining mode).
-            ResourceLoadError: the first resource that cannot be loaded
-                (spec 03: fatal, exit code 1 at the caller).
+            NoResourcesFoundError: distribution mode (explicitly, or via the
+                dev-mode fallback) found no ``*.pak`` files at all. A later
+                stage (5) will try autoDownload here before giving up
+                (spec 03: Determining mode).
+            ResourceLoadError: the first resource or package file that
+                cannot be loaded (spec 03: fatal, exit code 1 at the
+                caller).
         """
         effective_config = config or ResourcesConfig()
         if effective_config.mode == "distribution":
-            # Later stage: scan for *.pak files, extract in-memory, verify
-            # manifests and SHA-256 hashes, fall back to autoDownload.
-            logger.error("distribution mode is not implemented yet (spec 03)")
-            raise NotImplementedError(
-                "distribution mode loading is not implemented yet (spec 03)"
-            )
-        self._load_dev_mode(effective_config)
+            self._load_distribution_mode(effective_config)
+            return
+        try:
+            self._load_dev_mode(effective_config)
+        except NoResourcesFoundError:
+            # The dev scan only raises this when zero candidate files
+            # existed, so nothing was cached and the fallback starts from a
+            # clean slate. (A load failure would have raised
+            # ResourceLoadError instead, which per spec 03 prevents any
+            # fallback.)
+            self._load_distribution_mode(effective_config)
 
     # ------------------------------------------------------------------ #
     # consumer API (spec 03)
@@ -105,12 +131,12 @@ class ResourceLoader:
     def get_sprite_resource(self, resource_id: str) -> pygame.Surface | None:
         """The ``pygame.Surface`` for a sprite image ID, or ``None`` if the
         ID is absent or not a sprite resource."""
-        return self._sprites.get(resource_id)
+        return self._store.sprites.get(resource_id)
 
     def get_sfx_resource(self, resource_id: str) -> pygame.mixer.Sound | None:
         """The ``pygame.mixer.Sound`` for a sound effect ID, or ``None`` if
         the ID is absent or not a sound effect resource."""
-        return self._sound_effects.get(resource_id)
+        return self._store.sound_effects.get(resource_id)
 
     def get_music_resource(self, resource_id: str) -> bytes | None:
         """The raw audio bytes for a music track ID, or ``None`` if the ID is
@@ -119,17 +145,64 @@ class ResourceLoader:
         Decoding into ``mixer.music.load(io.BytesIO(...))`` is a client
         concern (spec 03: Consumer API) - this loader only caches bytes.
         """
-        return self._music.get(resource_id)
+        return self._store.music.get(resource_id)
 
     def get_text_resource(self, resource_id: str) -> str | None:
         """The decoded text of a UTF-8 text resource ID, or ``None`` if the
         ID is absent or not a text resource."""
-        return self._texts.get(resource_id)
+        return self._store.texts.get(resource_id)
 
     def get_json_resource(self, resource_id: str) -> Any | None:
         """The decoded object of a JSON resource ID, or ``None`` if the ID is
         absent or not a JSON resource."""
-        return self._json_resources.get(resource_id)
+        return self._store.json_resources.get(resource_id)
+
+    # ------------------------------------------------------------------ #
+    # distribution mode loading (spec 03)
+    # ------------------------------------------------------------------ #
+    def _load_distribution_mode(self, config: ResourcesConfig) -> None:
+        """Scan distribution-mode locations for ``*.pak`` files and load all.
+
+        The project directory (".") is always scanned first, even if omitted
+        from ``location`` (spec 03). The scan is NOT recursive: pak files
+        are expected at the top level of each scanned directory. Package
+        files load in alphabetical order by filename within each location,
+        so duplicate-ID collisions resolve deterministically (spec 03:
+        Resolving duplicate resource IDs). The first invalid package file is
+        fatal and prevents any fallback (spec 03: Determining mode).
+
+        Raises:
+            NoResourcesFoundError: no ``*.pak`` files at all. (Spec 03's
+                autoDownload fallback hooks in at exactly this point in a
+                later stage.)
+            ResourceLoadError: the first package file that cannot be loaded
+                (spec 03: fatal, exit code 1 at the caller).
+        """
+        locations = _distribution_mode_locations(config)
+        pak_files = _scan_pak_files(locations)
+        if not pak_files:
+            scanned = ", ".join(str(location) for location in locations)
+            raise NoResourcesFoundError(
+                f"no *.pak package files found in distribution mode "
+                f"(scanned: {scanned})"
+            )
+        loaded = 0
+        for pak_path in pak_files:
+            # load_pak does the in-memory extraction plus all validation
+            # (manifest, SHA-256, decode) and raises ResourceLoadError on
+            # the first problem (spec 03: The pak format).
+            loaded_pak = pak.load_pak(pak_path)
+            # Duplicate IDs across packages are NOT an error: the most
+            # recently loaded package wins, with a log warning (spec 03:
+            # Resolving duplicate resource IDs) - handled by store().
+            for type_name, resource_id, value in loaded_pak.items():
+                self._store.store(type_name, resource_id, value)
+            loaded += loaded_pak.resource_count
+        logger.info(
+            "loaded {} resource(s) from {} package file(s) in distribution mode",
+            loaded,
+            len(pak_files),
+        )
 
     # ------------------------------------------------------------------ #
     # dev mode loading (spec 03)
@@ -143,9 +216,9 @@ class ResourceLoader:
         ID collisions (spec 03: Resolving duplicate resource IDs).
 
         Raises:
-            NoResourcesFoundError: no candidate files at all. (Spec 03's
-                distribution-mode fallback hooks in at exactly this point in
-                a later stage.)
+            NoResourcesFoundError: no candidate files at all. The caller
+                (load) turns this into the distribution-mode fallback
+                (spec 03: Determining mode).
             ResourceLoadError: the first resource that cannot be loaded
                 (spec 03: fatal, exit code 1 at the caller).
         """
@@ -172,134 +245,44 @@ class ResourceLoader:
     def _load_resource_file(self, path: Path, resource_id: str) -> None:
         """Load one dev-mode resource from disk and cache it under its ID.
 
+        The decode itself is delegated to ``pak.load_resource_from_bytes`` -
+        the same decoder distribution mode and the packager use - so both
+        modes cannot interpret a resource format differently. The music
+        vs. sound-effect split (spec 03: audio under ``audio/music/`` is
+        music) is applied there, by ID.
+
         Raises:
             ResourceLoadError: the file cannot be read or parsed (spec 03:
                 the first such failure stops startup).
         """
-        extension = path.suffix
         try:
-            if extension in game_constants.SPRITE_RESOURCE_EXTENSIONS:
-                self._store_sprite(resource_id, path)
-            elif extension in game_constants.AUDIO_RESOURCE_EXTENSIONS:
-                # Convention (spec 03): audio under audio/music/ is music
-                # (raw bytes); every other audio resource is a sound effect.
-                if resource_id.startswith(game_constants.MUSIC_RESOURCE_ID_PREFIX):
-                    self._store_music(resource_id, path)
-                else:
-                    self._store_sound_effect(resource_id, path)
-            elif extension in game_constants.TEXT_RESOURCE_EXTENSIONS:
-                self._store_text(resource_id, path)
-            elif extension in game_constants.JSON_RESOURCE_EXTENSIONS:
-                self._store_json_resource(resource_id, path)
-            else:
-                # Unreachable: _scan_resource_files only yields supported
-                # extensions. Kept loud on purpose.
-                raise ResourceLoadError(
-                    f"resource {resource_id!r} has unsupported extension {extension!r}"
-                )
+            data = path.read_bytes()
         except OSError as exc:
             # A file can vanish or become unreadable between scan and load;
             # that is a load failure, not a crash (spec 03).
             raise ResourceLoadError(
                 f"could not load resource {resource_id!r}: {exc}"
             ) from exc
-
-    # ------------------------------------------------------------------ #
-    # per-type loading (spec 03: Resource types and formats)
-    # ------------------------------------------------------------------ #
-    def _store_sprite(self, resource_id: str, path: Path) -> None:
-        # pygame.image.load decodes by content; a corrupted image raises
-        # pygame.error, which spec 03 maps to ResourceLoadError.
-        try:
-            surface = pygame.image.load(str(path))
-        except pygame.error as exc:
-            raise ResourceLoadError(
-                f"could not load sprite resource {resource_id!r}: {exc}"
-            ) from exc
-        self._store(self._sprites, "sprite", resource_id, surface)
-
-    def _store_sound_effect(self, resource_id: str, path: Path) -> None:
-        # A zero-byte or corrupted audio file raises pygame.error (e.g.
-        # "Couldn't read first 12 bytes of audio data"); spec 03 maps that
-        # to ResourceLoadError.
-        try:
-            sound = pygame.mixer.Sound(str(path))
-        except (pygame.error, OSError) as exc:
-            raise ResourceLoadError(
-                f"could not load sound effect resource {resource_id!r}: {exc}"
-            ) from exc
-        self._store(self._sound_effects, "sound effect", resource_id, sound)
-
-    def _store_music(self, resource_id: str, path: Path) -> None:
-        # Music is cached as raw bytes on purpose: the client feeds them to
-        # mixer.music.load(io.BytesIO(...)) itself (spec 03: Consumer API).
-        # (OSError from a vanished file is wrapped by _load_resource_file.)
-        data = path.read_bytes()
-        self._store(self._music, "music", resource_id, data)
-
-    def _store_text(self, resource_id: str, path: Path) -> None:
-        try:
-            text = path.read_text(encoding="utf-8")
-        except UnicodeDecodeError as exc:
-            # Spec 03: text resources are plain text in UTF-8; anything else
-            # is a load failure.
-            raise ResourceLoadError(
-                f"resource {resource_id!r} is not valid UTF-8 text: {exc}"
-            ) from exc
-        self._store(self._texts, "text", resource_id, text)
-
-    def _store_json_resource(self, resource_id: str, path: Path) -> None:
-        try:
-            text = path.read_text(encoding="utf-8")
-        except UnicodeDecodeError as exc:
-            raise ResourceLoadError(
-                f"resource {resource_id!r} is not valid UTF-8 text: {exc}"
-            ) from exc
-        try:
-            decoded = json.loads(text)
-        except json.JSONDecodeError as exc:
-            raise ResourceLoadError(
-                f"resource {resource_id!r} is not valid JSON: {exc}"
-            ) from exc
-        self._store(self._json_resources, "json", resource_id, decoded)
-
-    def _store(
-        self,
-        cache: dict[str, Any],
-        kind: str,
-        resource_id: str,
-        value: Any,
-    ) -> None:
-        """Cache a loaded resource, warning (not failing) on ID collisions.
-
-        Spec 03: duplicate IDs across locations are NOT an error - the most
-        recently loaded resource wins, with a log warning.
-        """
-        if resource_id in cache:
-            logger.warning(
-                "duplicate {} resource ID {} - the most recently loaded "
-                "resource wins",
-                kind,
-                resource_id,
-            )
-        cache[resource_id] = value
+        type_name, value = pak.load_resource_from_bytes(resource_id, data)
+        self._store.store(type_name, resource_id, value)
 
 
 # ---------------------------------------------------------------------- #
-# dev-mode scanning helpers (spec 03: Dev mode)
+# location scanning helpers (spec 03: Dev mode / Distribution mode)
 # ---------------------------------------------------------------------- #
-def _dev_mode_locations(config: ResourcesConfig) -> list[Path]:
-    """The directories to scan in dev mode, in load order (spec 03).
+def _scan_locations(config: ResourcesConfig, default_root: Path) -> list[Path]:
+    """The directories to scan, in load order, for either mode (spec 03).
 
-    The default ``resources/`` directory is always scanned first, even if
-    omitted from ``location``. Configured locations follow in config order.
-    Relative entries resolve against the project directory, never the CWD
-    (spec 03: a note about relative paths). A location already present is
-    scanned exactly once (deduplicated by resolved path).
+    ``default_root`` is always scanned first, even if omitted from
+    ``location`` (``resources/`` in dev mode, the project directory in
+    distribution mode). Configured locations follow in config order. Relative
+    entries resolve against the project directory, never the CWD (spec 03:
+    a note about relative paths). A location already present is scanned
+    exactly once (deduplicated by resolved path).
     """
     project_dir = project_directory()
-    locations: list[Path] = [project_dir / game_constants.DEFAULT_RESOURCE_DIRNAME]
-    seen = {locations[0].resolve()}
+    locations: list[Path] = [default_root]
+    seen = {default_root.resolve()}
     for entry in config.location or []:
         location = Path(entry).expanduser()
         if not location.is_absolute():
@@ -310,6 +293,45 @@ def _dev_mode_locations(config: ResourcesConfig) -> list[Path]:
         seen.add(resolved)
         locations.append(resolved)
     return locations
+
+
+def _dev_mode_locations(config: ResourcesConfig) -> list[Path]:
+    """Dev-mode scan roots: the default ``resources/`` dir, then locations."""
+    return _scan_locations(
+        config, project_directory() / game_constants.DEFAULT_RESOURCE_DIRNAME
+    )
+
+
+def _distribution_mode_locations(config: ResourcesConfig) -> list[Path]:
+    """Distribution-mode scan roots: the project dir ("."), then locations."""
+    return _scan_locations(config, project_directory())
+
+
+def _scan_pak_files(locations: list[Path]) -> list[Path]:
+    """All ``*.pak`` files across ``locations``, in load order.
+
+    NOT recursive: only the top level of each directory is scanned (spec 03
+    describes a recursive scan for dev mode, but only "scan ... for *.pak
+    files" for distribution mode - pak files are expected to sit at the top
+    level of each scanned directory). Within a location, files sort
+    alphabetically by name; locations are scanned in the order given, so a
+    file reachable through several location entries (e.g. an explicit ".")
+    is loaded exactly once.
+    """
+    seen: set[Path] = set()
+    pak_files: list[Path] = []
+    for root in locations:
+        if not root.is_dir():
+            continue
+        for path in sorted(root.glob("*.pak"), key=lambda candidate: candidate.name):
+            if not path.is_file():
+                continue
+            resolved = path.resolve()
+            if resolved in seen:
+                continue
+            seen.add(resolved)
+            pak_files.append(path)
+    return pak_files
 
 
 def _scan_resource_files(root: Path) -> list[Path]:
