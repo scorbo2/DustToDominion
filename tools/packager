@@ -29,7 +29,11 @@ os.environ.setdefault("SDL_AUDIODRIVER", "dummy")
 
 import pygame  # noqa: E402  (must come after env vars are set)
 
-from dtd.errors import NoResourcesFoundError, ResourceLoadError  # noqa: E402
+from dtd.errors import (  # noqa: E402
+    NoResourcesFoundError,
+    ResourceLoadError,
+    UnsupportedResourceVersionError,
+)
 from dtd.pak import create_pak, load_pak  # noqa: E402
 
 
@@ -96,7 +100,7 @@ def cmd_inspect(args: argparse.Namespace) -> int:
 
     try:
         loaded = load_pak(source)
-    except (ResourceLoadError, OSError) as exc:
+    except (ResourceLoadError, UnsupportedResourceVersionError, OSError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
 

@@ -29,14 +29,17 @@ import pygame
 from loguru import logger
 
 from dtd import game_constants
-from dtd.errors import NoResourcesFoundError, ResourceLoadError
+from dtd.errors import (
+    NoResourcesFoundError,
+    ResourceLoadError,
+    UnsupportedResourceVersionError,
+)
 
 # ------------------------------------------------------------------ #
 # Constants
 # ------------------------------------------------------------------ #
 
 MANIFEST_ENTRY = "manifest.json"
-MANIFEST_VERSION = "1.0"
 
 
 # ------------------------------------------------------------------ #
@@ -245,7 +248,14 @@ def _parse_manifest(raw_json: str, source_label: str) -> list[dict[str, str]]:
     ``source_label`` is used only for error messages (typically the pak
     path).
 
-    Raises ``ResourceLoadError`` on any structural problem or duplicate IDs.
+    The ``version`` field is validated against
+    ``game_constants.PAK_MANIFEST_VERSION``: the manifest must declare exactly
+    the version this build understands, otherwise we would silently
+    misinterpret a future format revision (spec 03: Manifest).
+
+    Raises ``UnsupportedResourceVersionError`` if the ``version`` field is
+    missing or holds any other value, and ``ResourceLoadError`` on any other
+    structural problem or duplicate IDs.
     """
     try:
         manifest = json.loads(raw_json)
@@ -257,6 +267,20 @@ def _parse_manifest(raw_json: str, source_label: str) -> list[dict[str, str]]:
     if not isinstance(manifest, dict):
         raise ResourceLoadError(
             f"{source_label}: manifest.json must be a JSON object"
+        )
+
+    # Checked before the resource entries: a manifest we cannot trust should
+    # never be parsed entry by entry. Any value other than the supported
+    # string version (numbers, null, etc.) is unsupported.
+    if "version" not in manifest:
+        raise UnsupportedResourceVersionError(
+            f"{source_label}: manifest.json is missing the 'version' field"
+        )
+    version = manifest["version"]
+    if version != game_constants.PAK_MANIFEST_VERSION:
+        raise UnsupportedResourceVersionError(
+            f"{source_label}: manifest.json has unsupported version {version!r} "
+            f"(supported version: {game_constants.PAK_MANIFEST_VERSION!r})"
         )
 
     resources = manifest.get("resources")
@@ -359,7 +383,7 @@ def create_pak(
         )
 
     manifest_json = json.dumps(
-        {"version": MANIFEST_VERSION, "resources": manifest_entries},
+        {"version": game_constants.PAK_MANIFEST_VERSION, "resources": manifest_entries},
         indent=2,
     ).encode("utf-8")
 
@@ -378,12 +402,12 @@ def create_pak(
 def load_pak(pak_path: Path) -> ResourceStore:
     """Validate and load all resources from a pak file.
 
-    Validation steps (in order; first failure raises ``ResourceLoadError``):
+    Validation steps (in order; first failure raises):
 
     1. File is non-empty.
     2. File is a valid zip archive.
-    3. ``manifest.json`` is present and contains valid JSON with a non-empty
-       ``resources`` list.
+    3. ``manifest.json`` is present, contains valid JSON, declares a
+       supported ``version``, and holds a non-empty ``resources`` list.
     4. All manifest IDs are unique, safe (no absolute paths / traversal), and
        use supported extensions.
     5. Every manifest entry resolves to a zip entry.
@@ -395,7 +419,9 @@ def load_pak(pak_path: Path) -> ResourceStore:
     Returns a ``ResourceStore`` with all resources decoded and ready to
     use.
 
-    Raises ``ResourceLoadError`` on any validation or decode failure.
+    Raises ``UnsupportedResourceVersionError`` if the manifest's ``version``
+    is missing or not a version this build supports, and ``ResourceLoadError``
+    on any other validation or decode failure.
     """
     if not pak_path.exists() or pak_path.stat().st_size == 0:
         raise ResourceLoadError(

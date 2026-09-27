@@ -28,10 +28,13 @@ import pytest
 from loguru import logger
 
 from dtd import game_constants, pak
-from dtd.errors import NoResourcesFoundError, ResourceLoadError
+from dtd.errors import (
+    NoResourcesFoundError,
+    ResourceLoadError,
+    UnsupportedResourceVersionError,
+)
 from dtd.pak import (
     MANIFEST_ENTRY,
-    MANIFEST_VERSION,
     ResourceStore,
     compute_sha256,
     create_pak,
@@ -109,7 +112,7 @@ def _build_raw_pak(
     with zipfile.ZipFile(pak_path, "w") as zf:
         if not omit_manifest:
             manifest = json.dumps(
-                {"version": MANIFEST_VERSION, "resources": manifest_entries}
+                {"version": game_constants.PAK_MANIFEST_VERSION, "resources": manifest_entries}
             )
             zf.writestr(MANIFEST_ENTRY, manifest)
         for res_id, enc in encrypted_map.items():
@@ -409,7 +412,7 @@ class TestCreatePak:
 
         with zipfile.ZipFile(out) as zf:
             manifest = json.loads(zf.read(MANIFEST_ENTRY))
-        assert manifest["version"] == MANIFEST_VERSION
+        assert manifest["version"] == game_constants.PAK_MANIFEST_VERSION
 
 
 # ------------------------------------------------------------------ #
@@ -476,6 +479,66 @@ class TestLoadPak:
         with pytest.raises(ResourceLoadError, match="empty"):
             load_pak(pak_path)
 
+    def test_manifest_missing_version_raises_unsupported_resource_version_error(
+        self, tmp_path: Path
+    ) -> None:
+        # GIVEN a pak whose manifest.json has no 'version' field at all:
+        enc = xor_bytes(b"hello")
+        pak_path = tmp_path / "no_version.pak"
+        with zipfile.ZipFile(pak_path, "w") as zf:
+            manifest = json.dumps({
+                "resources": [{"id": "note.txt", "sha256": compute_sha256(enc)}],
+            })
+            zf.writestr(MANIFEST_ENTRY, manifest)
+            zf.writestr("note.txt", enc)
+
+        # WHEN load_pak is invoked:
+        # THEN the missing version is rejected before any resource is loaded:
+        with pytest.raises(
+            UnsupportedResourceVersionError, match="missing the 'version'"
+        ):
+            load_pak(pak_path)
+
+    def test_manifest_unsupported_version_raises_unsupported_resource_version_error(
+        self, tmp_path: Path
+    ) -> None:
+        # GIVEN a pak whose manifest declares a version this build cannot load:
+        enc = xor_bytes(b"hello")
+        pak_path = tmp_path / "bad_version.pak"
+        with zipfile.ZipFile(pak_path, "w") as zf:
+            manifest = json.dumps({
+                "version": "99.0",
+                "resources": [{"id": "note.txt", "sha256": compute_sha256(enc)}],
+            })
+            zf.writestr(MANIFEST_ENTRY, manifest)
+            zf.writestr("note.txt", enc)
+
+        # WHEN load_pak is invoked:
+        # THEN the unsupported version is reported, not silently accepted:
+        with pytest.raises(UnsupportedResourceVersionError, match="99.0"):
+            load_pak(pak_path)
+
+    def test_manifest_non_string_version_raises_unsupported_resource_version_error(
+        self, tmp_path: Path
+    ) -> None:
+        # GIVEN a manifest whose 'version' is a JSON number, not a string:
+        enc = xor_bytes(b"hello")
+        pak_path = tmp_path / "numeric_version.pak"
+        with zipfile.ZipFile(pak_path, "w") as zf:
+            manifest = json.dumps({
+                "version": 1.0,
+                "resources": [{"id": "note.txt", "sha256": compute_sha256(enc)}],
+            })
+            zf.writestr(MANIFEST_ENTRY, manifest)
+            zf.writestr("note.txt", enc)
+
+        # WHEN load_pak is invoked:
+        # THEN a number is not a supported string version and is rejected:
+        with pytest.raises(
+            UnsupportedResourceVersionError, match="unsupported version"
+        ):
+            load_pak(pak_path)
+
     def test_sha256_mismatch_raises_resource_load_error(
         self, tmp_path: Path
     ) -> None:
@@ -497,7 +560,7 @@ class TestLoadPak:
         pak_path = tmp_path / "corrupt.pak"
         with zipfile.ZipFile(pak_path, "w") as zf:
             manifest = json.dumps({
-                "version": MANIFEST_VERSION,
+                "version": game_constants.PAK_MANIFEST_VERSION,
                 "resources": [{"id": "graphics/ship.png", "sha256": compute_sha256(enc)}],
             })
             zf.writestr(MANIFEST_ENTRY, manifest)
@@ -510,7 +573,7 @@ class TestLoadPak:
         enc = xor_bytes(b"data")
         with zipfile.ZipFile(pak_path, "w") as zf:
             manifest = json.dumps({
-                "version": MANIFEST_VERSION,
+                "version": game_constants.PAK_MANIFEST_VERSION,
                 "resources": [
                     {"id": "/etc/passwd", "sha256": compute_sha256(enc)}
                 ],
@@ -525,7 +588,7 @@ class TestLoadPak:
         enc = xor_bytes(b"data")
         with zipfile.ZipFile(pak_path, "w") as zf:
             manifest = json.dumps({
-                "version": MANIFEST_VERSION,
+                "version": game_constants.PAK_MANIFEST_VERSION,
                 "resources": [
                     {"id": "../evil.txt", "sha256": compute_sha256(enc)}
                 ],
@@ -542,7 +605,7 @@ class TestLoadPak:
         pak_path = tmp_path / "bad_ext.pak"
         with zipfile.ZipFile(pak_path, "w") as zf:
             manifest = json.dumps({
-                "version": MANIFEST_VERSION,
+                "version": game_constants.PAK_MANIFEST_VERSION,
                 "resources": [
                     {"id": "audio/sfx/hello.rar", "sha256": compute_sha256(enc)}
                 ],
@@ -559,7 +622,7 @@ class TestLoadPak:
         enc = xor_bytes(b"hello")
         with zipfile.ZipFile(pak_path, "w") as zf:
             manifest = json.dumps({
-                "version": MANIFEST_VERSION,
+                "version": game_constants.PAK_MANIFEST_VERSION,
                 "resources": [
                     {"id": "note.txt", "sha256": compute_sha256(enc)}
                 ],
@@ -574,7 +637,7 @@ class TestLoadPak:
         pak_path = tmp_path / "dup.pak"
         with zipfile.ZipFile(pak_path, "w") as zf:
             manifest = json.dumps({
-                "version": MANIFEST_VERSION,
+                "version": game_constants.PAK_MANIFEST_VERSION,
                 "resources": [
                     {"id": "note.txt", "sha256": compute_sha256(enc)},
                     {"id": "note.txt", "sha256": compute_sha256(enc)},
@@ -802,3 +865,35 @@ class TestPackagerCli:
             expect_success=False,
         )
         assert result.returncode == 1
+
+    def test_inspect_unsupported_manifest_version_exits_nonzero(
+        self, tmp_path: Path, packager: Path
+    ) -> None:
+        # GIVEN a valid pak whose manifest version was tampered with:
+        src = tmp_path / "res"
+        src.mkdir()
+        (src / "note.txt").write_text("hello", encoding="utf-8")
+        out = tmp_path / "out.pak"
+        self._run(packager, "create", "--source", str(src), "--output", str(out))
+
+        tampered = tmp_path / "tampered.pak"
+        with zipfile.ZipFile(out) as zin:
+            entries = {name: zin.read(name) for name in zin.namelist()}
+        entries[MANIFEST_ENTRY] = json.dumps({
+            "version": "99.0",
+            "resources": json.loads(entries[MANIFEST_ENTRY])["resources"],
+        }).encode("utf-8")
+        with zipfile.ZipFile(tampered, "w") as zout:
+            for name, data in entries.items():
+                zout.writestr(name, data)
+
+        # WHEN the packager inspects the tampered pak:
+        result = self._run(
+            packager, "inspect", "--source", str(tampered),
+            expect_success=False,
+        )
+
+        # THEN it reports the error on stderr and exits non-zero:
+        assert result.returncode == 1
+        assert "error" in result.stderr.lower()
+        assert "version" in result.stderr.lower()

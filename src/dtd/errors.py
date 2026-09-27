@@ -46,3 +46,12 @@ class ResourceLoadError(ResourceError):
 
 class ResourceDownloadError(ResourceError):
     """An auto-download failed for any reason (spec 03)."""
+
+
+class UnsupportedResourceVersionError(ResourceError):
+    """The package manifest's ``version`` is missing or not a version this
+    build of the game understands (spec 03: Manifest errors).
+
+    Fatal like every ``ResourceError`` (exit code 1): we refuse to interpret
+    a package format we do not support, rather than silently misreading it.
+    """

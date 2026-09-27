@@ -22,6 +22,10 @@ DEFAULT_FULLSCREEN_RESOLUTION = "1920x1080"
 # --- Resource packaging (spec 03) ----------------------------------------
 #: The directory name the game always scans first in dev mode (spec 03).
 DEFAULT_RESOURCE_DIRNAME = "resources"
+#: The only ``manifest.json`` version this build of the game can load
+#: (spec 03: Manifest errors). A pak declaring any other version is rejected
+#: with ``UnsupportedResourceVersionError`` rather than misinterpreted.
+PAK_MANIFEST_VERSION = "1.0"
 #: Sprite image extensions (spec 03). Matching is case-sensitive: a file
 #: named ``.JPG`` is NOT a valid resource.
 SPRITE_RESOURCE_EXTENSIONS = (".png", ".jpg", ".jpeg")

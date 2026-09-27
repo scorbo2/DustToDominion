@@ -119,6 +119,9 @@ class ResourceLoader:
             ResourceLoadError: the first resource or package file that
                 cannot be loaded (spec 03: fatal, exit code 1 at the
                 caller).
+            UnsupportedResourceVersionError: a package file's manifest
+                declares a version this build cannot load (spec 03:
+                Manifest errors; fatal, exit code 1 at the caller).
         """
         effective_config = config or ResourcesConfig()
         if effective_config.mode == "distribution":
@@ -186,6 +189,9 @@ class ResourceLoader:
                 later stage.)
             ResourceLoadError: the first package file that cannot be loaded
                 (spec 03: fatal, exit code 1 at the caller).
+            UnsupportedResourceVersionError: a package file's manifest
+                declares a version this build cannot load (spec 03:
+                Manifest errors; fatal, exit code 1 at the caller).
         """
         locations = _distribution_mode_locations(config)
         pak_files = _scan_pak_files(locations)

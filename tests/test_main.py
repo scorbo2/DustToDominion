@@ -13,6 +13,7 @@ from dtd.errors import (
     ResourceDownloadError,
     ResourceError,
     ResourceLoadError,
+    UnsupportedResourceVersionError,
 )
 from dtd.game_config import GameConfig
 
@@ -158,6 +159,7 @@ class TestStartupFailures:
             NoResourcesFoundError,
             ResourceLoadError,
             ResourceDownloadError,
+            UnsupportedResourceVersionError,
         ],
     )
     def test_when_resource_loader_raises_resource_error_should_exit_1_without_opening_window(

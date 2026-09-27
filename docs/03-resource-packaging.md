@@ -51,6 +51,9 @@ We will use these extensions to determine validity (case-sensitive):
 - `NoResourcesFoundError` - on startup, if no resources could be found.
 - `ResourceLoadError` - generic exception to cover loading/parsing problems.
 - `ResourceDownloadError` - generic exception to cover auto-download problems.
+- `UnsupportedResourceVersionError` - the package's manifest is missing its
+  `version` field, or declares a version this build of the game does not
+  understand (see Manifest errors below).
 
 Note that malformed `resources` config in the game config file is NOT covered by the above.
 That falls under configuration loading as covered in the `01` spec doc.
@@ -174,6 +177,11 @@ Example:
 ```
 
 ### Manifest errors
+
+If the manifest is missing its `version` field, or the version is anything
+other than `1.0`, raise `UnsupportedResourceVersionError`. The resource loader
+refuses to interpret a package format it does not understand; this is a fatal
+load error (exit code 1), like all `ResourceError` subtypes.
 
 If a manifest entry has an unrecognized extension, raise `ResourceLoadError`.
 For example: `"id": "audio/sfx/hello.rar"` is invalid. In dev mode, invalid extensions

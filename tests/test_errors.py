@@ -7,6 +7,7 @@ from dtd.errors import (
     ResourceDownloadError,
     ResourceError,
     ResourceLoadError,
+    UnsupportedResourceVersionError,
 )
 
 
@@ -19,6 +20,7 @@ class TestResourceErrorHierarchy:
         assert issubclass(NoResourcesFoundError, ResourceError)
         assert issubclass(ResourceLoadError, ResourceError)
         assert issubclass(ResourceDownloadError, ResourceError)
+        assert issubclass(UnsupportedResourceVersionError, ResourceError)
 
     def test_resource_error_should_not_be_a_config_error(self) -> None:
         # Spec 03: a malformed ``resources`` *config section* is a spec 01
