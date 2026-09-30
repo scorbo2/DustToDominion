@@ -50,7 +50,7 @@ SUPPORTED_RESOURCE_EXTENSIONS = (
 MUSIC_RESOURCE_ID_PREFIX = "audio/music/"
 
 #: The file extension of package files (spec 03: Distribution mode).
-#: Matching is case-sensitive everywhere, including autoDownload URLs.
+#: Matching is case-sensitive.
 PAK_FILE_EXTENSION = ".pak"
 
 #: XOR encryption key for *.pak file entries (spec 03: The pak format).
