@@ -15,8 +15,8 @@ The game will have two basic modes for loading these resources:
 - "distribution mode": resources are loaded from custom package files (archive files, `*.pak`) in the project directory.
 
 In both modes, the game should not make assumptions about the number of resources to be loaded.
-The intention is that additional resource packages can be made and distributed after the game ships,
-as add-on packs.
+The intention is that additional resource packages can be made after the game ships, as
+add-on packs, and distributed to users as `*.pak` package files.
 
 This document proposes a new `resource_loader` module that is responsible for finding and loading
 game resources at game startup. This resource loader is invoked during startup, after the game configuration
@@ -53,7 +53,6 @@ We will use these extensions to determine validity (case-sensitive):
 - `ResourceError` - base class.
 - `NoResourcesFoundError` - on startup, if no resources could be found.
 - `ResourceLoadError` - generic exception to cover loading/parsing problems.
-- `ResourceDownloadError` - generic exception to cover auto-download problems.
 - `UnsupportedResourceVersionError` - the package's manifest is missing its
   `version` field, or declares a version this build of the game does not
   understand (see Manifest errors below).
@@ -117,17 +116,10 @@ become irrelevant). The game must be restarted for on-disk changes to be reflect
   - scan the project directory + any listed `location` for `*.pak` files.
   - the first invalid package file that is detected ends the process with `ResourceLoadError` and exit code 1.
   - if at least one `*.pak` file is found and at least one valid resource is loaded: Resource loader has succeeded.
-  - if no `*.pak` files are found in the project directory or any listed location, fall back to `autoDownload`.
-- if `autoDownload` is triggered but there are no URLs supplied: `NoResourcesFoundError` and exit code 1.
-- if `autoDownload` is triggered and yields at least one valid `*.pak` file, load it. Resource loader has succeeded.
-- if `autoDownload` is triggered but any download fails for any reason: `ResourceDownloadError` and exit code 1.
-- if `autoDownload` is triggered but yields an invalid package: `ResourceLoadError` and exit code 1.
-
-Note that if `autoDownload` URLs are supplied in configuration, but `autoDownload` itself is not triggered,
-those URLs are ignored. This is not considered an error.
+  - if no `*.pak` files are found in the project directory or any listed location: `NoResourcesFoundError` and exit code 1.
 
 Note that a single unloadable resource file or invalid `*.pak` file stops the process and prevents
-any fallback (even the `autoDownload` fallback).
+any fallback.
 
 ## Consumer API
 
@@ -294,49 +286,13 @@ Note that `"."` is always scanned, even if not explicitly listed in `location`. 
 an error to omit `"."`. Note also that `.` is relative to the project directory, NOT the
 user's current working directory.
 
-To enable auto-download, an `autoDownload` key with a valid URL must be specified.
-There is no default for this property (effectively disabling auto-download by default).
-
-```json
-{
-  "resources": {
-    "mode": "distribution",
-    "location": [ ".", "/home/user/custom_assets/" ],
-    "autoDownload": [
-      "http://example.com/game_assets/package1.pak",
-      "http://example.com/game_assets/package2.pak"
-    ]
-  }
-}
-```
-
-The `autoDownload` key can be specified in either mode, but ONLY serves as a fallback
-mechanism if no local resources are found in any given `location`.
-
 ### A note about relative paths
 
 Any relative path specified in any `location` entry is **relative to the project directory**,
 not to the user's current working directory. The project directory is the directory where
 the game script resides. So, if the game was installed in `/home/user/DustToDominion`, and
 a `location` key specifies `.` or `resources/`, then it is relative to `/home/user/DustToDominion`,
-regardless of where the user launched the game from. This means that `autoDownload` will never
-download to any disk location other than the resolved project directory.
-
-## Auto-download
-
-If `autoDownload` is specified in configuration, it may contain a list of URLs
-to be downloaded. These resources are to be downloaded to the project directory,
-ONLY if the named resource is not already present (skip with log warning if present).
-Note that if the already-present resource is corrupt, we are guaranteed to trigger
-a ResourceLoadError when it is parsed. This is acceptable.
-
-Each autoDownload URL must point directly at a package file: the URL's path
-must have a filename component ending in `.pak` (case-sensitive). A URL that
-does not (for example a bare directory URL like `http://example.com/`) is a
-download problem and raises `ResourceDownloadError` (exit code 1).
-
-Download failures (connection error, 404, network trouble) should raise `ResourceDownloadError`
-and exit the game with exit code 1.
+regardless of where the user launched the game from.
 
 ## The pak format
 
@@ -346,7 +302,7 @@ The `*.pak` format is just a renamed `zip` file with some extremely basic securi
 - Each resource file will be key-xor encrypted with a hard-coded key. This is not meant to stop a determined attacker, but rather to prevent casual browsing of game resources which may be licensed from a third party and therefore not ours to give away.
 - Package files must be extracted in-memory by the resource loader! Do not extract to a temporary directory.
 - The goal is to deter casual browsing of game assets.
-- For this reason, game assets will NOT be committed to GitHub. The intention is to distribute package files with the game installer and/or rely on `autoDownload` to allow users to retrieve resources from a trusted webserver.
+- For this reason, game assets will NOT be committed to GitHub. The intention is to distribute package files with the game installer.
 - Package files might contain entries that are not explicitly listed in the manifest. This is not an error - just ignore them.
 - Entry names must contain no path separators outside the expected tree! For example, an entry named `/etc/badfile.conf`
   should raise a `ResourceLoadError`. The "expected tree" is based on the containing resources directory. For example,
@@ -454,17 +410,11 @@ This allows deterministic collision resolution. This is not an error. Log a warn
 Unit tests should cover both modes thoroughly:
 - in dev mode, the happy path is that one or more game resources are found and loaded.
 - in dev mode, unhappy paths include: malformed resources (`ResourceLoadError`, exit code 1),
-  no resources present with no `*.pak` files present and no `autoDownload` URL provided
-  (`NoResourcesFoundError` and exit code 1).
+  no resources present with no `*.pak` files present (`NoResourcesFoundError` and exit code 1).
 - in distribution mode, the happy path is at least one `*.pak` file present with at least one resource.
-- in distribution mode, the unhappy paths include: no `*.pak` files present and no `autoDownload`
-  URL provided (`NoResourcesFoundError` and exit code 1), a package file exists but is empty or otherwise
+- in distribution mode, the unhappy paths include: no `*.pak` files present
+  (`NoResourcesFoundError` and exit code 1), a package file exists but is empty or otherwise
   invalid (`ResourceLoadError` and exit code 1).
-- auto-download should be invoked if no local resources are found. The happy path
-  is that at least one valid URL is present, the package file(s) download, and extract correctly.
-- auto-download unhappy paths include: `autoDownload` is triggered but the download
-  fails for any reason (`ResourceDownloadError` and exit code 1), `autoDownload` is triggered
-  but yields an invalid package file (`ResourceLoadError` and exit code 1).
 - the packager tool needs comprehensive tests to exercise the packaging and inspection features.
   - creation happy path: valid resources can be packaged.
   - creation unhappy path: invalid resources can NOT be packaged (log error on stderr and exit code 1)
@@ -475,19 +425,12 @@ Unit tests should cover both modes thoroughly:
 - pygame initialization: failing unrelated modules (e.g. joystick, midi) must
   not abort startup; a failing display or mixer must abort with exit code 1.
 
-### Hermetic test suite reminder
-
-Actual network access should never be attempted by any test. A fake download function should be injected.
-These "downloads" should never write to the actual project directory! Always use a temporary directory
-for filesystem tests, and configure the code to download to that directory.
-
 ## Acceptance criteria
 
 - Can the game be explicitly started in either mode, if both `resources` and `*.pak` files are present?
 - Does the consumer API return the expected resources after a successful startup?
 - Does the game correctly default to dev mode if both `resources` and `*.pak` are present?
-- Does the game correctly exit with status 1 if neither `resources` nor `*.pak` are present and `autoDownload` was not specified?
-- Is auto-download invoked if neither `resources` nor `*.pak` are present, and an `autoDownload` was specified?
+- Does the game correctly exit with status 1 if neither `resources` nor `*.pak` are present?
 - If given a `*.pak` file with invalid contents (no resources present, SHA-256 mismatch, resource that can't be loaded),
   do we get a meaningful error log message and exit code 1, as expected?
 - Do the fallback paths work as expected? Given "dev" mode is requested but `resources/` is empty, does it
@@ -513,14 +456,12 @@ The spec is too large to implement all at once. The following staged dev plan is
    load game configuration, then initialize pygame, then invoke the stubbed-out resource loader, then initialize
    and show the main window. **Completed 2026-09-26**
 2. Implement dev mode - scanning for and loading resources in individual files in any configured `location`.
-   Handle load/parse errors. **Nothing in the game actually uses the loaded resources yet**. This is fine.
-   Write tests for dev mode resource loading. No package files yet, no auto-loader yet, no packager yet.
-   **Completed 2026-09-26**
+    Handle load/parse errors. **Nothing in the game actually uses the loaded resources yet**. This is fine.
+    Write tests for dev mode resource loading. No package files yet, no packager yet.
+    **Completed 2026-09-26**
 3. Implement the packager tool so that we can create valid package files. Write all tests for the packager.
    This requires implementation of the package file format, including encryption of all entries, and the
    handling of `manifest.json`. **Completed 2026-09-27**
 4. Implement distribution mode, loading resources from package files. Implement the fallback from dev mode
-   to distribution mode. Still no auto-loader. Write all tests for distribution mode. **Completed 2026-09-27**
-5. Implement auto-loader with configurable URLs for package files. Implement the fallback from distribution
-   mode to the auto-downloader. Write all tests for the auto-downloader. **Completed 2026-09-27**
+    to distribution mode. Write all tests for distribution mode. **Completed 2026-09-27**
 

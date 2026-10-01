@@ -4,7 +4,6 @@ from __future__ import annotations
 from dtd.errors import (
     ConfigError,
     NoResourcesFoundError,
-    ResourceDownloadError,
     ResourceError,
     ResourceLoadError,
     UnsupportedResourceVersionError,
@@ -19,7 +18,6 @@ class TestResourceErrorHierarchy:
     def test_resource_error_subclasses_should_extend_resource_error(self) -> None:
         assert issubclass(NoResourcesFoundError, ResourceError)
         assert issubclass(ResourceLoadError, ResourceError)
-        assert issubclass(ResourceDownloadError, ResourceError)
         assert issubclass(UnsupportedResourceVersionError, ResourceError)
 
     def test_resource_error_should_not_be_a_config_error(self) -> None:

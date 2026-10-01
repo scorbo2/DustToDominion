@@ -39,7 +39,6 @@ class ResourcesConfig(BaseModel):
 
     mode: Literal["dev", "distribution"] = "dev"
     location: list[str] | None = None
-    autoDownload: list[str] | None = None
 
 
 class GameConfig(BaseModel):

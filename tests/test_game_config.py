@@ -86,7 +86,7 @@ class TestResourcesConfig:
             mode="dev", location=["resources/", "/home/user/custom_assets/"]
         )
 
-    def test_with_distribution_mode_and_auto_download_should_parse_section(
+    def test_with_distribution_mode_and_location_should_parse_section(
         self, hermetic_persistence: Path
     ) -> None:
         _write_game_json(
@@ -95,15 +95,30 @@ class TestResourcesConfig:
                 "resources": {
                     "mode": "distribution",
                     "location": ["."],
-                    "autoDownload": ["http://example.com/game_assets/package1.pak"],
                 }
             },
         )
         assert game_config.load_game_config().resources == ResourcesConfig(
             mode="distribution",
             location=["."],
-            autoDownload=["http://example.com/game_assets/package1.pak"],
         )
+
+    def test_with_auto_download_key_should_return_defaults(
+        self, hermetic_persistence: Path
+    ) -> None:
+        # The auto-download feature was dropped from spec 03; the key is now
+        # an unexpected nested key, so the section fails validation and the
+        # game proceeds with defaults (spec 01).
+        _write_game_json(
+            hermetic_persistence,
+            {
+                "resources": {
+                    "mode": "distribution",
+                    "autoDownload": ["http://example.com/game_assets/package1.pak"],
+                }
+            },
+        )
+        assert game_config.load_game_config().resources is None
 
     def test_with_unexpected_mode_value_should_return_defaults(
         self, hermetic_persistence: Path

@@ -27,7 +27,7 @@ class InvalidConfigError(ConfigError):
 
 
 class ResourceError(Exception):
-    """Base class for all resource loading/download errors (spec 03).
+    """Base class for all resource loading errors (spec 03).
 
     Distinct from the config error family on purpose: a malformed
     ``resources`` *config section* is a spec 01 ``ConfigError``; these
@@ -42,10 +42,6 @@ class NoResourcesFoundError(ResourceError):
 
 class ResourceLoadError(ResourceError):
     """A resource or package file could not be loaded/parsed (spec 03)."""
-
-
-class ResourceDownloadError(ResourceError):
-    """An auto-download failed for any reason (spec 03)."""
 
 
 class UnsupportedResourceVersionError(ResourceError):

@@ -11,7 +11,6 @@ from dtd import main as app_main
 from dtd import resource_loader
 from dtd.errors import (
     NoResourcesFoundError,
-    ResourceDownloadError,
     ResourceError,
     ResourceLoadError,
     UnsupportedResourceVersionError,
@@ -232,10 +231,9 @@ class TestStartupFailures:
     def test_when_no_resources_found_should_exit_1_without_opening_window(
         self, bootstrapped_persistence: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        # Spec 03: no resources anywhere, no autoDownload specified ->
-        # NoResourcesFoundError and exit code 1. (The distribution-mode
-        # fallback now runs here but finds no *.pak files either, and the
-        # autoDownload fallback has no URLs configured.)
+        # Spec 03: no resources anywhere -> NoResourcesFoundError and exit
+        # code 1. (The distribution-mode fallback runs here too but finds no
+        # *.pak files either.)
         (tmp_path / "resources").mkdir()  # exists, but holds nothing
         monkeypatch.setattr(resource_loader, "project_directory", lambda: tmp_path)
         window_opened: list[object] = []
@@ -257,7 +255,6 @@ class TestStartupFailures:
         [
             NoResourcesFoundError,
             ResourceLoadError,
-            ResourceDownloadError,
             UnsupportedResourceVersionError,
         ],
     )

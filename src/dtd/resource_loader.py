@@ -1,7 +1,6 @@
 """Game resource loading and the consumer API (spec 03: Resource packaging).
 
-All spec 03 loading modes are implemented: dev mode, distribution mode,
-and auto-download.
+All spec 03 loading modes are implemented: dev mode and distribution mode.
 
 Dev mode: the loader scans the default ``resources/`` directory (always,
 even if omitted from config) plus every configured ``location`` directory,
@@ -26,21 +25,8 @@ exit code 1 at the caller).
 Mode selection (spec 03: Determining mode): a dev-mode scan that finds no
 valid resources at all falls back to distribution mode. A resource or
 package that fails to LOAD is fatal and prevents any fallback. A
-distribution-mode scan that finds no ``*.pak`` files triggers the
-autoDownload fallback (spec 03: Auto-download).
-
-Auto-download (spec 03: Auto-download): when distribution mode finds no
-``*.pak`` files, ``_auto_download_paks`` is called. If ``config.autoDownload``
-is empty or absent, ``NoResourcesFoundError`` is raised (fatal, exit code 1
-at the caller). Otherwise, every URL is validated first - its path must have
-a filename component ending in ``.pak``, or a ``ResourceDownloadError`` is
-raised before any download is attempted - and then each URL is downloaded to
-the project directory via ``_download_pak`` (a module-level function tests
-can monkeypatch so no real network access is needed). A pre-existing file
-with the same name is skipped with a log warning. A failed download raises
-``ResourceDownloadError`` (fatal, exit code 1 at the caller). A successfully
-downloaded but invalid pak raises ``ResourceLoadError`` (fatal, exit code 1
-at the caller).
+distribution-mode scan that finds no ``*.pak`` files at all raises
+``NoResourcesFoundError`` (fatal, exit code 1 at the caller).
 
 Both modes decode resources through the shared ``pak.load_resource_from_bytes``
 and cache them in one shared ``pak.ResourceStore``, so dev mode and
@@ -56,16 +42,14 @@ decoded like a file.
 """
 from __future__ import annotations
 
-import urllib.request
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlparse
 
 import pygame
 from loguru import logger
 
 from dtd import game_constants, pak
-from dtd.errors import NoResourcesFoundError, ResourceDownloadError, ResourceLoadError
+from dtd.errors import NoResourcesFoundError, ResourceLoadError
 from dtd.game_config import ResourcesConfig
 
 
@@ -116,12 +100,8 @@ class ResourceLoader:
 
         Raises:
             NoResourcesFoundError: distribution mode (explicitly, or via the
-                dev-mode fallback) found no ``*.pak`` files at all, and the
-                autoDownload fallback had no URLs configured (spec 03:
-                Determining mode).
-            ResourceDownloadError: an auto-download attempt fails for any
-                reason (spec 03: Auto-download; fatal, exit code 1 at the
-                caller).
+                dev-mode fallback) found no ``*.pak`` files at all (spec 03:
+                Determining mode; fatal, exit code 1 at the caller).
             ResourceLoadError: the first resource or package file that
                 cannot be loaded (spec 03: fatal, exit code 1 at the
                 caller).
@@ -190,12 +170,8 @@ class ResourceLoader:
         fatal and prevents any fallback (spec 03: Determining mode).
 
         Raises:
-            NoResourcesFoundError: no ``*.pak`` files at all, and the
-                autoDownload fallback had no URLs configured (spec 03:
-                Determining mode).
-            ResourceDownloadError: an auto-download attempt fails for any
-                reason (spec 03: Auto-download; fatal, exit code 1 at the
-                caller).
+            NoResourcesFoundError: no ``*.pak`` files at all (spec 03:
+                Determining mode; fatal, exit code 1 at the caller).
             ResourceLoadError: the first package file that cannot be loaded
                 (spec 03: fatal, exit code 1 at the caller).
             UnsupportedResourceVersionError: a package file's manifest
@@ -205,10 +181,12 @@ class ResourceLoader:
         locations = _distribution_mode_locations(config)
         pak_files = _scan_pak_files(locations)
         if not pak_files:
-            # autoDownload fallback (spec 03: Auto-download / Determining mode).
-            # Raises NoResourcesFoundError (no URLs) or ResourceDownloadError
-            # (download failure); either is fatal at the caller.
-            pak_files = _auto_download_paks(config)
+            # Spec 03: a distribution-mode scan with no *.pak files anywhere
+            # has nothing to load - fatal at the caller.
+            scanned = ", ".join(str(location) for location in locations)
+            raise NoResourcesFoundError(
+                f"no *.pak package files found in distribution mode (scanned: {scanned})"
+            )
         loaded = 0
         for pak_path in pak_files:
             # load_pak does the in-memory extraction plus all validation
@@ -379,87 +357,3 @@ def _scan_resource_files(root: Path) -> list[Path]:
         and path.suffix in game_constants.SUPPORTED_RESOURCE_EXTENSIONS
     ]
     return sorted(candidates, key=lambda path: path.relative_to(root).as_posix())
-
-
-# ---------------------------------------------------------------------- #
-# auto-download helpers (spec 03: Auto-download)
-# ---------------------------------------------------------------------- #
-
-def _download_pak(url: str, dest: Path) -> None:
-    """Download a single ``*.pak`` file from ``url`` to ``dest``.
-
-    This is a module-level function so tests can monkeypatch it to avoid
-    real network calls (spec 03: Hermetic test suite reminder). The real
-    implementation uses ``urllib.request.urlretrieve``.
-
-    Raises:
-        ResourceDownloadError: the download fails for any reason (network
-            error, HTTP 404, etc.).
-    """
-    try:
-        urllib.request.urlretrieve(url, str(dest))
-    except Exception as exc:
-        raise ResourceDownloadError(
-            f"auto-download of {url!r} failed: {exc}"
-        ) from exc
-
-
-def _auto_download_paks(config: ResourcesConfig) -> list[Path]:
-    """Download configured ``autoDownload`` URLs to the project directory.
-
-    Called only when no local ``*.pak`` files were found in the distribution-
-    mode scan. Returns the list of pak file paths (newly downloaded or
-    already present) for the caller to load directly via ``pak.load_pak``.
-
-    A URL whose filename already exists in the project directory is skipped
-    with a log warning - the existing file will still be loaded (spec 03:
-    Auto-download). If the already-present file is corrupt, ``load_pak``
-    raises ``ResourceLoadError``, which is the intended behaviour (spec 03).
-
-    Every URL is validated before any download is attempted: its path must
-    have a filename component ending in the pak extension (spec 03:
-    Auto-download), because that component names the file the package is
-    saved as. A bare directory URL like ``http://example.com/`` would
-    otherwise "download" to the project directory itself and only fail much
-    later with a confusing invalid-pak error.
-
-    Raises:
-        NoResourcesFoundError: ``config.autoDownload`` is ``None`` or empty
-            (spec 03: Determining mode).
-        ResourceDownloadError: a URL has no valid pak filename, or a download
-            attempt fails for any reason (spec 03: Auto-download).
-    """
-    urls = config.autoDownload or []
-    if not urls:
-        raise NoResourcesFoundError(
-            "no *.pak package files found and no autoDownload URLs configured"
-        )
-
-    project_dir = project_directory()
-    pak_paths: list[Path] = []
-    for url in urls:
-        filename = Path(urlparse(url).path).name
-        if not filename:
-            raise ResourceDownloadError(
-                f"autoDownload URL {url!r} has no filename component; "
-                f"it must point directly at a {game_constants.PAK_FILE_EXTENSION} file"
-            )
-        if not filename.endswith(game_constants.PAK_FILE_EXTENSION):
-            raise ResourceDownloadError(
-                f"autoDownload URL {url!r} does not end with "
-                f"{game_constants.PAK_FILE_EXTENSION!r}; "
-                f"it must point directly at a {game_constants.PAK_FILE_EXTENSION} file"
-            )
-        dest = project_dir / filename
-        if dest.exists():
-            logger.warning(
-                "auto-download target {!r} already present in {}; "
-                "skipping download",
-                filename,
-                project_dir,
-            )
-        else:
-            logger.info("auto-downloading {} -> {}", url, dest.name)
-            _download_pak(url, dest)
-        pak_paths.append(dest)
-    return pak_paths
