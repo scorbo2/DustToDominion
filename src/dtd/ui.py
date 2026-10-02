@@ -168,9 +168,8 @@ class Theme:
                 )
                 continue
             setattr(self, key, pygame.Color(*parsed))
-        if "cornerRadius" not in data:
-            pass  # missing key is not an error (spec 04)
-        else:
+        # Missing cornerRadius key is not an error (spec 04).
+        if "cornerRadius" in data:
             raw = data["cornerRadius"]  # explicit null is an invalid type
             if isinstance(raw, bool) or not isinstance(raw, int) or raw < 0:
                 logger.warning(
