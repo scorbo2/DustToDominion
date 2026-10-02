@@ -53,6 +53,14 @@ def _write_wav(path: Path) -> None:
         handle.writeframes(b"\x00\x00" * 220)  # 10 ms of silence
 
 
+def _write_ttf(path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    # pygame ships a genuine TrueType font with the package. Copying it is
+    # the cheapest hermetic way to obtain a valid .ttf fixture.
+    bundled_font = Path(pygame.__file__).parent / "freesansbold.ttf"
+    path.write_bytes(bundled_font.read_bytes())
+
+
 def _standard_tree(root: Path) -> dict[str, Path]:
     """A small valid resource tree with one of every resource type.
 
@@ -64,6 +72,7 @@ def _standard_tree(root: Path) -> dict[str, Path]:
         "audio/music/theme.wav": root / "audio/music/theme.wav",
         "data/NPC_dialog/frank.txt": root / "data/NPC_dialog/frank.txt",
         "data/ship_stats.json": root / "data/ship_stats.json",
+        "fonts/ui_font.ttf": root / "fonts/ui_font.ttf",
     }
     for path in files.values():
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -72,6 +81,7 @@ def _standard_tree(root: Path) -> dict[str, Path]:
     _write_wav(files["audio/music/theme.wav"])
     files["data/NPC_dialog/frank.txt"].write_text("Hello, grandma.", encoding="utf-8")
     files["data/ship_stats.json"].write_text(json.dumps({"hull": 100}), encoding="utf-8")
+    _write_ttf(files["fonts/ui_font.ttf"])
     return files
 
 
@@ -105,7 +115,7 @@ def _warning_records() -> tuple[list[str], int]:
 
 class TestLoadDevMode:
     def test_with_valid_mixed_tree_should_load_every_resource_type(
-        self, project: Path, mixer_ready: None
+        self, project: Path, mixer_ready: None, font_ready: None
     ) -> None:
         # GIVEN a project whose default resources/ dir holds one of each type:
         files = _standard_tree(project / "resources")
@@ -124,6 +134,9 @@ class TestLoadDevMode:
         ].read_bytes()
         assert loader.get_text_resource("data/NPC_dialog/frank.txt") == "Hello, grandma."
         assert loader.get_json_resource("data/ship_stats.json") == {"hull": 100}
+        assert isinstance(
+            loader.get_font_resource("fonts/ui_font.ttf", 24), pygame.font.Font
+        )
 
     def test_with_extra_locations_should_load_them_in_config_order(
         self, project: Path, mixer_ready: None
@@ -219,6 +232,85 @@ class TestMusicVsSoundEffect:
         assert loader.get_music_resource("audio/musicbox/loop.wav") is None
 
 
+class TestFontResource:
+    """The font consumer API (spec 03: Consumer API, stage 5)."""
+
+    def test_with_valid_font_id_in_dev_mode_should_return_font_at_requested_size(
+        self, project: Path, font_ready: None
+    ) -> None:
+        # Spec 03: "In both modes, a valid .ttf font file can be loaded as a
+        # resource" - dev mode leg:
+        _write_ttf(project / "resources/fonts/ui.ttf")
+
+        loader = ResourceLoader()
+        loader.load(None)
+
+        assert isinstance(loader.get_font_resource("fonts/ui.ttf", 24), pygame.font.Font)
+
+    def test_with_valid_font_id_in_distribution_mode_should_return_font_at_requested_size(
+        self, project: Path, font_ready: None
+    ) -> None:
+        # The distribution-mode leg of the same spec sentence:
+        tree = project / "assets"
+        _write_ttf(tree / "fonts/ui.ttf")
+        _make_pak(tree, project / "game_assets.pak")
+
+        loader = ResourceLoader()
+        loader.load(ResourcesConfig(mode="distribution"))
+
+        assert isinstance(loader.get_font_resource("fonts/ui.ttf", 24), pygame.font.Font)
+
+    def test_with_missing_id_should_return_none(
+        self, project: Path, font_ready: None
+    ) -> None:
+        # Spec 03: "Return None if the given ID is not present":
+        _write_ttf(project / "resources/fonts/ui.ttf")
+        loader = ResourceLoader()
+        loader.load(None)
+
+        assert loader.get_font_resource("fonts/nope.ttf", 24) is None
+
+    def test_with_wrong_type_id_should_return_none(
+        self, project: Path, font_ready: None
+    ) -> None:
+        # Spec 03: "Return None if the given ID identifies a resource of the
+        # wrong type" - a sprite ID must not yield a font:
+        _write_ttf(project / "resources/fonts/ui.ttf")
+        _write_png(project / "resources/graphics/ship.png")
+        loader = ResourceLoader()
+        loader.load(None)
+
+        assert loader.get_font_resource("graphics/ship.png", 24) is None
+
+    def test_with_same_id_and_size_should_return_cached_font(
+        self, project: Path, font_ready: None
+    ) -> None:
+        # Spec 03: repeated requests for the same font at the same size are
+        # served the cached copy:
+        _write_ttf(project / "resources/fonts/ui.ttf")
+        loader = ResourceLoader()
+        loader.load(None)
+
+        first = loader.get_font_resource("fonts/ui.ttf", 24)
+        second = loader.get_font_resource("fonts/ui.ttf", 24)
+
+        assert first is second
+
+    def test_with_different_sizes_should_return_distinct_fonts(
+        self, project: Path, font_ready: None
+    ) -> None:
+        # The cache is keyed by (id, size): different sizes are different
+        # Font objects:
+        _write_ttf(project / "resources/fonts/ui.ttf")
+        loader = ResourceLoader()
+        loader.load(None)
+
+        small = loader.get_font_resource("fonts/ui.ttf", 12)
+        large = loader.get_font_resource("fonts/ui.ttf", 24)
+
+        assert small is not large
+
+
 class TestExtensionFiltering:
     def test_with_unsupported_extensions_should_skip_them_silently(
         self, project: Path
@@ -310,6 +402,30 @@ class TestLoadFailures:
         with pytest.raises(ResourceLoadError, match="data/broken.json"):
             ResourceLoader().load(None)
 
+    def test_with_zero_byte_ttf_should_raise_resource_load_error(
+        self, project: Path
+    ) -> None:
+        # Spec 03: "A zero-byte .ttf file is automatically invalid":
+        path = project / "resources/fonts/empty.ttf"
+        path.parent.mkdir(parents=True)
+        path.write_bytes(b"")
+
+        with pytest.raises(ResourceLoadError, match="fonts/empty.ttf"):
+            ResourceLoader().load(None)
+
+    def test_with_bad_header_ttf_should_raise_resource_load_error(
+        self, project: Path
+    ) -> None:
+        # Spec 03: Notes for font validation - the magic-number header check
+        # rejects this payload even though pygame's Font constructor would
+        # silently accept it via the default-font fallback:
+        path = project / "resources/fonts/bad.ttf"
+        path.parent.mkdir(parents=True)
+        path.write_bytes(b"this is not a ttf at all")
+
+        with pytest.raises(ResourceLoadError, match="fonts/bad.ttf"):
+            ResourceLoader().load(None)
+
     def test_with_first_bad_resource_should_stop_before_later_ones(
         self, project: Path, mixer_ready: None
     ) -> None:
@@ -376,7 +492,7 @@ class TestDuplicateIds:
 
 class TestDistributionMode:
     def test_with_valid_pak_in_project_dir_should_load_every_resource_type(
-        self, project: Path, mixer_ready: None
+        self, project: Path, mixer_ready: None, font_ready: None
     ) -> None:
         # GIVEN a project holding one package with one of each resource type
         # (and no dev-mode resources/ dir at all):
@@ -398,6 +514,9 @@ class TestDistributionMode:
         ].read_bytes()
         assert loader.get_text_resource("data/NPC_dialog/frank.txt") == "Hello, grandma."
         assert loader.get_json_resource("data/ship_stats.json") == {"hull": 100}
+        assert isinstance(
+            loader.get_font_resource("fonts/ui_font.ttf", 24), pygame.font.Font
+        )
 
     def test_with_multiple_paks_should_load_them_all(self, project: Path) -> None:
         # GIVEN two packages, each with its own text resource:

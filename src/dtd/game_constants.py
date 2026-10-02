@@ -36,18 +36,28 @@ AUDIO_RESOURCE_EXTENSIONS = (".wav", ".ogg", ".mp3")
 TEXT_RESOURCE_EXTENSIONS = (".txt",)
 #: Json resource extensions (spec 03).
 JSON_RESOURCE_EXTENSIONS = (".json",)
+#: Font resource extensions (spec 03). TTF is the ONLY supported font
+#: format - pygame can read more, but the spec deliberately restricts us.
+FONT_RESOURCE_EXTENSIONS = (".ttf",)
 #: Every extension the resource loader recognizes, in any type (spec 03).
 SUPPORTED_RESOURCE_EXTENSIONS = (
     SPRITE_RESOURCE_EXTENSIONS
     + AUDIO_RESOURCE_EXTENSIONS
     + TEXT_RESOURCE_EXTENSIONS
     + JSON_RESOURCE_EXTENSIONS
+    + FONT_RESOURCE_EXTENSIONS
 )
 #: By convention (spec 03), an audio resource whose ID starts with this
 #: prefix is MUSIC (cached as raw bytes); every other audio resource is a
 #: sound effect (cached as a pygame.mixer.Sound). The trailing slash matters:
 #: ``audio/musicbox/...`` is a sound effect.
 MUSIC_RESOURCE_ID_PREFIX = "audio/music/"
+#: TrueType magic number: the first 4 bytes of every ``.ttf`` file (spec 03:
+#: Notes for font validation). A font that does not begin with these bytes
+#: is rejected. This header check is the ENTIRE font validation - pygame's
+#: Font constructor silently falls back to the default font on garbage
+#: input, so a full parse is deliberately out of scope.
+TTF_MAGIC_NUMBER = b"\x00\x01\x00\x00"
 
 #: The file extension of package files (spec 03: Distribution mode).
 #: Matching is case-sensitive.

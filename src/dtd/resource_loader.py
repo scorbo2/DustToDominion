@@ -42,6 +42,7 @@ decoded like a file.
 """
 from __future__ import annotations
 
+import io
 from pathlib import Path
 from typing import Any
 
@@ -73,17 +74,23 @@ class ResourceLoader:
     (spec 03: Identifying resources). Music is cached as raw audio bytes
     (the client feeds them to ``mixer.music.load`` itself), while sound
     effects are cached as ``pygame.mixer.Sound`` objects (spec 03:
-    Distinguishing music from sound effects).
+    Distinguishing music from sound effects). Fonts are cached as raw
+    ``.ttf`` bytes; ``pygame.font.Font`` objects are built on demand per
+    ``(resource_id, size)`` pair and cached (spec 03: Consumer API).
 
     ``load`` is called exactly once per process, at startup (spec 03), and
-    must run after pygame (including the mixer) is initialized - the
-    application entry point enforces that order.
+    must run after pygame (including the mixer and the font module) is
+    initialized - the application entry point enforces that order.
     """
 
     def __init__(self) -> None:
-        # All five per-type caches live in one shared store object (spec 03:
+        # All six per-type caches live in one shared store object (spec 03:
         # Distinguishing music from sound effects / Consumer API).
         self._store: pak.ResourceStore = pak.ResourceStore()
+        # Lazy Font cache, keyed by (resource_id, size) (spec 03: Consumer
+        # API). Unbounded by design: one entry per (font, size) pair the
+        # client actually requests.
+        self._font_cache: dict[tuple[str, int], pygame.font.Font] = {}
 
     # ------------------------------------------------------------------ #
     # startup entry point (spec 03)
@@ -154,6 +161,32 @@ class ResourceLoader:
         """The decoded object of a JSON resource ID, or ``None`` if the ID is
         absent or not a JSON resource."""
         return self._store.json_resources.get(resource_id)
+
+    def get_font_resource(
+        self, resource_id: str, size: int
+    ) -> pygame.font.Font | None:
+        """The ``pygame.font.Font`` for a font resource ID at ``size``
+        points, or ``None`` if the ID is absent or not a font resource.
+
+        Font resources are cached as raw bytes at load time (like music);
+        the ``Font`` object is created when this function is invoked and
+        cached per ``(resource_id, size)`` pair, so repeated requests for
+        the same font at the same size are served from the cache (spec 03:
+        Consumer API). ``size`` is clamped to at least 1 by pygame.
+
+        Requires pygame's font module to be initialized - spec 03 startup
+        step 2 makes the font module a required module, so any client that
+        reaches this method through the normal startup path is safe.
+        """
+        raw_bytes = self._store.fonts.get(resource_id)
+        if raw_bytes is None:
+            return None
+        cache_key = (resource_id, size)
+        font = self._font_cache.get(cache_key)
+        if font is None:
+            font = pygame.font.Font(io.BytesIO(raw_bytes), size)
+            self._font_cache[cache_key] = font
+        return font
 
     # ------------------------------------------------------------------ #
     # distribution mode loading (spec 03)

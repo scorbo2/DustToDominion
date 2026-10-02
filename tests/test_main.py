@@ -51,8 +51,9 @@ class TestRun:
     ) -> None:
         # GIVEN a machine whose unrelated pygame modules fail (e.g. a
         # headless server without MIDI or joystick drivers) - simulated by
-        # inflating the failure count pygame.init reports - while display
-        # and mixer come up fine (spec 03: only those two are required):
+        # inflating the failure count pygame.init reports - while display,
+        # mixer, and font come up fine (spec 03: only those three are
+        # required):
         pygame.init()
         real_init = pygame.init
 
@@ -173,8 +174,8 @@ class TestInitPygame:
         monkeypatch.setattr(pygame, "init", init_with_unrelated_failures)
 
         # WHEN _init_pygame is invoked:
-        # THEN no error is raised (spec 03: only display and mixer must
-        # succeed):
+        # THEN no error is raised (spec 03: only display, mixer, and font
+        # must succeed):
         app_main._init_pygame()
 
     def test_when_display_fails_to_initialize_should_raise_pygame_error(
@@ -203,13 +204,28 @@ class TestInitPygame:
         with pytest.raises(pygame.error, match="mixer"):
             app_main._init_pygame()
 
+    def test_when_font_fails_to_initialize_should_raise_pygame_error(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # GIVEN pygame whose font module fails to initialize (spec 03: the
+        # font module is a required module - font resources - so this is
+        # fatal):
+        pygame.init()
+        monkeypatch.setattr(pygame.font, "get_init", lambda: False)
+
+        # WHEN _init_pygame is invoked:
+        # THEN a pygame.error naming the font module is raised:
+        with pytest.raises(pygame.error, match="font"):
+            app_main._init_pygame()
+
 
 class TestStartupFailures:
     def test_when_pygame_init_fails_should_exit_1_without_opening_window(
         self, bootstrapped_persistence: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         # GIVEN a persistence dir and a failing pygame initialization (spec
-        # 03: a failing required module - display or mixer - is fatal):
+        # 03: a failing required module - display, mixer, or font - is
+        # fatal):
         def failing_init_pygame():
             raise pygame.error("no video device available")
 
