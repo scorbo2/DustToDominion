@@ -1,6 +1,6 @@
 ---
 description: Describes the game's custom UI widget handling and defines one basic widget (Button).
-status: proposed
+status: active
 ---
 
 # UI Widgets
@@ -228,7 +228,7 @@ in the proposed framework. The Button widget should offer the following options:
 - `rect`: (inherited from `Widget`): a `pygame.Rect` describing the left, top, width, and height of the button
   (in design resolution). The rect is filled with backgroundNormal/backgroundHover before drawing button border and contents.
   Respect the theme's corner radius when filling the rect!
-- `borderWidth`: a pixel width (in design resolution) for the border. Border is drawn using foregroundNormal/foregroundHover.
+- `border_width`: a pixel width (in design resolution) for the border. Border is drawn using foregroundNormal/foregroundHover.
   Set to 0 for no border. Respect the theme's corner radius when drawing the border!
 - `on_click: Callable[[], None] | None` - invoked when a button click occurs.
 
@@ -249,7 +249,7 @@ Note that buttons cannot be selected/highlighted, so they never use the `*Select
 Button clicks are detected when a MOUSEBUTTONUP event fires inside the button's rect, but only if the mouse press
 also occurred inside the button's rect. Mouse tracking from press to release must therefore be handled.
 When this document refers to a "button click" it means the complete process of pressing and releasing the mouse
-button inside the Button's rect.
+button inside the Button's rect. The left mouse button is the click button.
 
 ## Testing
 
@@ -304,10 +304,12 @@ button inside the Button's rect.
 The spec can be implemented in stages:
 
 1. Create stubs for `UIManager`, `Widget`, and `Theme`, and change the game loop and game startup.
-2. Implement configuration for theme and font; write tests for configuration.
-3. Wire up `UIManager` and `Theme` to use actual configured values.
-4. Implement the `Button` widget. Write all remaining tests.
+   **Completed 2026-10-01**
+2. Implement configuration for theme and font; write tests for configuration. **Completed 2026-10-01**
+3. Wire up `UIManager` and `Theme` to use actual configured values. **Completed 2026-10-01**
+4. Implement the `Button` widget. Write all remaining tests. **Completed 2026-10-01**
 
-Upon completion, if all tests pass, mark this document as "active".
+Upon completion, if all tests pass, mark this document as "active". (Done 2026-10-01;
+full suite green at 280 tests.)
 
 

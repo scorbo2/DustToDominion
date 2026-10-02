@@ -45,14 +45,24 @@ class GameConfig(BaseModel):
     """Top-level model for game.json.
 
     Each spec that adds a config section adds a field here (spec 02 added
-    ``mainWindow``, spec 03 added ``resources``). extra='forbid' keeps typos
-    loud (spec 01: unexpected properties are always an error).
+    ``mainWindow``, spec 03 added ``resources``, spec 04 added ``theme``
+    and ``font``). extra='forbid' keeps typos loud (spec 01: unexpected
+    properties are always an error).
     """
 
     model_config = ConfigDict(extra="forbid")
 
     mainWindow: MainWindowConfig | None = None
     resources: ResourcesConfig | None = None
+    # Spec 04: UI theme and font. Both are optional resource identifiers or
+    # the fixed string "default". A missing key, an empty/blank value, a
+    # value of "default", or a value that does not resolve to a loaded
+    # resource all fall back to the built-in defaults - resolved by
+    # dtd.ui.Theme at startup, never fatal (spec 04: Configuration).
+    # Non-string values fail validation and become InvalidConfigError,
+    # which load_game_config turns into a warning plus defaults (spec 01).
+    theme: str = ""
+    font: str = ""
 
 
 def game_config_path() -> Path:

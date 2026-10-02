@@ -144,6 +144,51 @@ class TestResourcesConfig:
         assert game_config.load_game_config().resources is None
 
 
+class TestUiConfig:
+    """The ``theme``/``font`` keys of game.json (spec 04: Configuration)."""
+
+    def test_with_missing_ui_keys_should_default_to_empty(self) -> None:
+        # Spec 04: a missing key means "default" is assumed; the model
+        # stores the raw string and dtd.ui.Theme resolves it at startup.
+        assert GameConfig().theme == ""
+        assert GameConfig().font == ""
+
+    def test_with_valid_ui_values_should_parse(self, hermetic_persistence: Path) -> None:
+        # Spec 04: both keys accept a resource identifier (or "default").
+        _write_game_json(
+            hermetic_persistence,
+            {"theme": "themes/blue.json", "font": "fonts/Iceland-Regular.ttf"},
+        )
+        result = game_config.load_game_config()
+        assert result.theme == "themes/blue.json"
+        assert result.font == "fonts/Iceland-Regular.ttf"
+
+    def test_with_empty_or_blank_ui_values_should_parse_as_blank(
+        self, hermetic_persistence: Path
+    ) -> None:
+        # Spec 04: empty/blank values mean "default" is assumed; the blank
+        # check belongs to the Theme consumer, so the model keeps the raw
+        # value.
+        _write_game_json(hermetic_persistence, {"theme": "", "font": "   "})
+        result = game_config.load_game_config()
+        assert result.theme == ""
+        assert result.font == "   "
+
+    def test_with_default_string_should_parse(self, hermetic_persistence: Path) -> None:
+        _write_game_json(hermetic_persistence, {"theme": "default", "font": "default"})
+        result = game_config.load_game_config()
+        assert result.theme == "default"
+        assert result.font == "default"
+
+    def test_with_non_string_ui_value_should_return_defaults(
+        self, hermetic_persistence: Path
+    ) -> None:
+        # Spec 04: the keys accept strings; a non-string fails validation
+        # and becomes a warning plus whole-config defaults (spec 01).
+        _write_game_json(hermetic_persistence, {"theme": 12})
+        assert game_config.load_game_config() == GameConfig()
+
+
 class TestSaveGameConfigSection:
     def test_should_write_section_into_game_json(
         self, bootstrapped_persistence: Path
