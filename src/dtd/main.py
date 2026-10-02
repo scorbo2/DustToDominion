@@ -31,6 +31,7 @@ from dtd.main_window import MainWindow
 from dtd.resource_loader import ResourceLoader
 from dtd.ui import Theme, UIManager
 
+
 def run() -> int:
     """Start the application. Returns the process exit code."""
     # Spec 00: the persistence directory must exist and be readable/writable
