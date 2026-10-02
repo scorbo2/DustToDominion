@@ -31,7 +31,8 @@ be executed before the resource loader is invoked. So, the game's startup order 
    Failures of unrelated modules (e.g. joystick or midi on a headless box)
    are not fatal: log a warning and continue.
 3. ResourceLoader is invoked.
-4. Main window initialization and display (assuming previous steps did not stop on error).
+4. UI/Theme initialization is invoked (see `04-ui-widgets.md`)
+5. Main window initialization and display (assuming previous steps did not stop on error).
 
 ### Resource types and formats
 
