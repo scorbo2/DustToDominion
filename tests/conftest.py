@@ -114,3 +114,17 @@ def mixer_ready() -> None:
     """
     if not pygame.mixer.get_init():
         pygame.mixer.init()
+
+
+@pytest.fixture
+def font_ready() -> None:
+    """Ensure the pygame font subsystem is initialised (spec 03).
+
+    Spec 03 startup step 2 requires the font module to be up before
+    ``get_font_resource`` can build ``pygame.font.Font`` objects. Tests that
+    exercise the font consumer API mirror that precondition. Cleanup of the
+    initialized font module is handled by the autouse ``clean_pygame_state``
+    fixture, so this fixture never quits.
+    """
+    if not pygame.font.get_init():
+        pygame.font.init()

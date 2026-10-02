@@ -4,8 +4,8 @@ Startup order per spec 03 (stage 1 wiring):
 
 1. Boot the persistence directory (spec 00; fatal on failure).
 2. Load the game configuration (spec 01; never fatal).
-3. Initialize pygame, including the mixer (spec 03 step 2; fatal if the
-   required display or mixer module fails).
+3. Initialize pygame, including the mixer and the font module (spec 03
+   step 2; fatal if the required display, mixer, or font module fails).
 4. Invoke the resource loader (spec 03 step 3; any ``ResourceError`` is fatal).
 5. Initialize and display the main window (spec 03 step 4 / spec 02).
 
@@ -41,9 +41,10 @@ def run() -> int:
     # already logs a warning and falls back to defaults.
     config = game_config.load_game_config()
 
-    # Spec 03 step 2: pygame (including the mixer) must be initialized before
-    # any resource loading, so audio resources can be loaded. Failure is
-    # fatal: log and stop (exit code 1).
+    # Spec 03 step 2: pygame (including the mixer and the font module) must
+    # be initialized before any resource loading, so audio resources can be
+    # loaded and fonts can be served. Failure is fatal: log and stop
+    # (exit code 1).
     try:
         _init_pygame()
     except pygame.error as exc:
@@ -71,9 +72,10 @@ def run() -> int:
 
 
 def _init_pygame() -> None:
-    """Initialize pygame, including the mixer (spec 03 step 2).
+    """Initialize pygame, including the mixer and the font module (spec 03
+    step 2).
 
-    The game requires only the display and mixer modules; failures of
+    The game requires only the display, mixer, and font modules; failures of
     unrelated built-in modules (joystick, midi, ...) are logged and
     tolerated (spec 03: startup order). ``pygame.init`` never raises for
     per-module failures - it only reports how many failed - so the required
@@ -83,15 +85,17 @@ def _init_pygame() -> None:
     if failures:
         logger.warning(
             "{} pygame module(s) failed to initialize; continuing because "
-            "only display and mixer are required",
+            "only display, mixer, and font are required",
             failures,
         )
-    # Verify the two modules the game actually depends on rather than
+    # Verify the three modules the game actually depends on rather than
     # trusting the aggregate success count.
     if not pygame.display.get_init():
         raise pygame.error("pygame display failed to initialize")
     if not pygame.mixer.get_init():
         raise pygame.error("pygame mixer failed to initialize")
+    if not pygame.font.get_init():
+        raise pygame.error("pygame font failed to initialize")
 
 
 def _run_event_loop(window: MainWindow) -> None:

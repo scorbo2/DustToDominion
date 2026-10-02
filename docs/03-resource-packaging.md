@@ -26,8 +26,8 @@ be executed before the resource loader is invoked. So, the game's startup order 
 
 1. General configuration loading
 2. Pygame initialization (including `mixer.init()` so we can load audio resources).
-   The game requires only the display and mixer modules; initialization of
-   those two must succeed. Raise `pygame.error` if either fails and stop.
+   The game requires only the display, mixer, and font modules; initialization of
+   those three must succeed. Raise `pygame.error` if any fails and stop.
    Failures of unrelated modules (e.g. joystick or midi on a headless box)
    are not fatal: log a warning and continue.
 3. ResourceLoader is invoked.
@@ -41,11 +41,12 @@ The following specific types of resources are loaded and tracked:
 - Music tracks (WAV, OGG, or MP3 format)
 - Text resources (plain text format in UTF-8)
 - Json resources
+- Fonts (TTF format)
 
 A resource in any format other than those listed above is not considered valid.
 
 We will use these extensions to determine validity (case-sensitive):
-- `.png, .jpg, .jpeg, .wav, .ogg, .mp3, .txt, .json`
+- `.png, .jpg, .jpeg, .wav, .ogg, .mp3, .txt, .json, .ttf`
 - any other extension (including case variants like `.JPG`) is not valid.
 
 ### New error types
@@ -125,11 +126,12 @@ any fallback.
 
 The resource loader exposes functions to retrieve specific resource types:
 
-- `get_sprite_resource()` - returns a `pygame.Surface` object containing image data.
-- `get_sfx_resource()` - returns a `pygame.mixer.Sound` object containing audio data.
-- `get_music_resource()` - returns raw audio bytes that can be used with `mixer.music.load(io.BytesIO(...))`. This is a client concern, and not something that the resource loader will do. The resource loader simply loads and caches the raw audio bytes.
-- `get_text_resource()` - returns a string.
-- `get_json_resource()` - returns a decoded object containing data from the Json resource.
+- `get_sprite_resource(id)` - returns a `pygame.Surface` object containing image data.
+- `get_sfx_resource(id)` - returns a `pygame.mixer.Sound` object containing audio data.
+- `get_music_resource(id)` - returns raw audio bytes that can be used with `mixer.music.load(io.BytesIO(...))`. This is a client concern, and not something that the resource loader will do. The resource loader simply loads and caches the raw audio bytes.
+- `get_text_resource(id)` - returns a string.
+- `get_json_resource(id)` - returns a decoded object containing data from the Json resource.
+- `get_font_resource(id, size)` - returns a `pygame.font.Font` object containing the named font at the specified point size (clamped to `max(size,1)`). Note that the loader should cache the raw font bytes, and create a Font object as this function is invoked (similar to music handling). The resource loader should cache generated Font objects so that client code that repeatedly requests the same Font at the same size multiple times is served a cached copy for every request after the first. The cache can be unbounded.
 
 Each of these functions requires a unique ID to be specified. Return `None` if the given
 ID is not present, or if the given ID identifies a resource of the wrong type (example:
@@ -354,6 +356,7 @@ what the game itself uses:
 - `resources/audio/music` - base directory for music
 - `resources/graphics` - base directory for sprites or background images
 - `resources/data` - base directory for miscellaneous data files.
+- `resources/fonts` - base directory for font files.
 
 The packager should then be invoked on the top-level `resources` directory, such that IDs like `audio/sfx/soundfile.wav` are
 computed. This is not a hard requirement - merely a recommendation so that resource IDs remain consistent. Neither the game
@@ -380,7 +383,7 @@ Package validation rules:
 - Each zip file entry named in the manifest MUST have a SHA-256 hash that matches the hash in the manifest.
   (entries in the zip file that are not named in the manifest are silently ignored. The manifest itself does
   not have a hash).
-- Each resource entry MUST be parseable, based on its format. Images must be readable into a Surface, audio files must be loadable into a `pygame.mixer.Sound` object, text must be readable as UTF-8, Json resources must be valid Json. If the resource's ID begins with `audio/music/`, this is a throwaway decode just to verify that the file loads - the raw bytes are then cached, not the `Sound` object. All other audio resources are considered to be sound effects and the Sound object is kept in memory.
+- Each resource entry MUST be parseable, based on its format. Images must be readable into a Surface, audio files must be loadable into a `pygame.mixer.Sound` object, text must be readable as UTF-8, Json resources must be valid Json. If the resource's ID begins with `audio/music/`, this is a throwaway decode just to verify that the file loads - the raw bytes are then cached, not the `Sound` object. Fonts must pass the file size check and magic-number header check. All other audio resources are considered to be sound effects and the Sound object is kept in memory.
 - A zero-byte package file is always considered an error.
 - An unreadable (not a zip file) package is always considered an error.
 - An empty package (valid zip file but nothing in the manifest) is always considered an error.
@@ -391,6 +394,12 @@ Package validation rules:
 Handling errors:
 - in the game, raise a `ResourceLoadError` and halt game startup with exit code 1.
 - in the packager tool, output an error to stderr and exit with code 1.
+
+Notes for font validation:
+- A zero-byte `.ttf` file is automatically invalid.
+- `pygame.font.Font(io.BytesIO(b"garbage"),24)` silently falls back to the default system font with no exception.
+  Attempting to access `.style_name` on that poisoned Font object can segfault the entire process.
+  So, a magic-number header check will have to suffice: TTF files begin with `\x00\x01\x00\x00`.
 
 ### Resolving duplicate resource IDs
 
@@ -424,6 +433,9 @@ Unit tests should cover both modes thoroughly:
   - inspection unhappy path: invalid packages report an error on stderr and exit code 1.
 - pygame initialization: failing unrelated modules (e.g. joystick, midi) must
   not abort startup; a failing display or mixer must abort with exit code 1.
+- In both modes, a valid `.ttf` font file can be loaded as a resource.
+- In both modes, a zero-byte `.ttf` font file is rejected as invalid.
+- In both modes, an invalid `.ttf` file (wrong header) is rejected as invalid.
 
 ## Acceptance criteria
 
@@ -439,6 +451,7 @@ Unit tests should cover both modes thoroughly:
 - Do resource load errors output a descriptive error message, and prevent the game from starting, as expected?
 - Does the consumer API return None as expected for invalid IDs?
 - Does an unexpected "mode" value in the game config file log a warning and proceed with dev mode?
+- Does `get_font_resource(id,size)` return a Font object, given a valid resource id?
 
 ## Open questions (all resolved)
 
@@ -464,4 +477,6 @@ The spec is too large to implement all at once. The following staged dev plan is
    handling of `manifest.json`. **Completed 2026-09-27**
 4. Implement distribution mode, loading resources from package files. Implement the fallback from dev mode
     to distribution mode. Write all tests for distribution mode. **Completed 2026-09-27**
+5. Implement support for fonts, added to this spec on 2026-10-01 - resource loader changes, tests,
+   and packager tool updates. **Completed 2026-10-01**
 

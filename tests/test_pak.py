@@ -4,13 +4,15 @@ Tests cover:
 - XOR encryption helpers (symmetric, correct key)
 - SHA-256 computation (always of *encrypted* bytes)
 - Resource-ID safety checks
-- ``create_pak``: happy path, unsupported-extension warnings, invalid resources,
-  empty source directory, manifest correctness
+- ``create_pak``: happy path, unsupported-extension warnings, invalid resources
+  (including zero-byte and bad-header fonts), empty source directory,
+  manifest correctness
 - ``load_pak``: happy path (all resource types), empty file, bad zip, missing
   manifest, malformed manifest JSON, non-UTF-8 manifest, missing/unsupported
-  manifest version, empty manifest, SHA-256 mismatch, corrupt resource,
-  unsafe IDs, bad extensions, missing zip entries, duplicate IDs, extra
-  ignored entries, music vs sfx split
+  manifest version, empty manifest, SHA-256 mismatch, corrupt resource
+  (including zero-byte and bad-header fonts), unsafe IDs, bad extensions,
+  missing zip entries, duplicate IDs, extra ignored entries, music vs sfx
+  split
 - Round-trip: create then load produces the original content
 - Packager CLI (``tools/packager``): create and inspect commands via subprocess
 """
@@ -64,6 +66,15 @@ def _write_wav(path: Path) -> None:
         handle.writeframes(b"\x00\x00" * 220)  # 10 ms of silence
 
 
+def _write_ttf(path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    # pygame ships a genuine TrueType font with the package. Copying it is
+    # the cheapest hermetic way to obtain a valid .ttf fixture - no
+    # network, no display, no hand-rolled font bytes.
+    bundled_font = Path(pygame.__file__).parent / "freesansbold.ttf"
+    path.write_bytes(bundled_font.read_bytes())
+
+
 def _standard_resource_tree(root: Path) -> dict[str, Path]:
     """One of every supported resource type under ``root``."""
     files = {
@@ -72,6 +83,7 @@ def _standard_resource_tree(root: Path) -> dict[str, Path]:
         "audio/music/theme.wav": root / "audio/music/theme.wav",
         "data/dialog/frank.txt": root / "data/dialog/frank.txt",
         "data/ship_stats.json": root / "data/ship_stats.json",
+        "fonts/ui_font.ttf": root / "fonts/ui_font.ttf",
     }
     for path in files.values():
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -80,6 +92,7 @@ def _standard_resource_tree(root: Path) -> dict[str, Path]:
     _write_wav(files["audio/music/theme.wav"])
     files["data/dialog/frank.txt"].write_text("Hello, grandma.", encoding="utf-8")
     files["data/ship_stats.json"].write_text(json.dumps({"hull": 100}), encoding="utf-8")
+    _write_ttf(files["fonts/ui_font.ttf"])
     return files
 
 
@@ -239,10 +252,23 @@ class TestResourceStore:
         store = ResourceStore()
         store.store("text", "note.txt", "hello")
         store.store("json", "data.json", {"hull": 100})
+        store.store("font", "fonts/ui.ttf", b"\x00\x01\x00\x00font bytes")
 
         assert store.texts == {"note.txt": "hello"}
         assert store.json_resources == {"data.json": {"hull": 100}}
-        assert store.resource_count == 2
+        assert store.fonts == {"fonts/ui.ttf": b"\x00\x01\x00\x00font bytes"}
+        assert store.resource_count == 3
+
+    def test_store_with_unknown_type_name_should_raise_value_error(self) -> None:
+        # A typo'd type name must NOT be silently routed into the wrong
+        # cache (the old behavior dumped anything unrecognized into
+        # json_resources) - it is a programming error and must surface
+        # immediately:
+        store = ResourceStore()
+
+        with pytest.raises(ValueError, match="unknown resource type"):
+            store.store("warp_core", "ship/warp_core.bin", 42)
+        assert store.resource_count == 0
 
     def test_store_with_duplicate_id_should_warn_and_keep_latest(self) -> None:
         # Spec 03: duplicate IDs are NOT an error - the most recently loaded
@@ -265,11 +291,13 @@ class TestResourceStore:
         store = ResourceStore()
         store.store("text", "note.txt", "hello")
         store.store("json", "data.json", {"hull": 100})
+        store.store("font", "fonts/ui.ttf", b"\x00\x01\x00\x00font bytes")
 
         triples = list(store.items())
-        assert len(triples) == 2
+        assert len(triples) == 3
         assert ("text", "note.txt", "hello") in triples
         assert ("json", "data.json", {"hull": 100}) in triples
+        assert ("font", "fonts/ui.ttf", b"\x00\x01\x00\x00font bytes") in triples
 
 
 # ------------------------------------------------------------------ #
@@ -395,6 +423,45 @@ class TestCreatePak:
 
         assert not out.exists()
 
+    def test_with_zero_byte_ttf_should_raise_resource_load_error(
+        self, tmp_path: Path
+    ) -> None:
+        # Spec 03: "A zero-byte .ttf file is automatically invalid":
+        src = tmp_path / "res"
+        (src / "fonts").mkdir(parents=True)
+        (src / "fonts/empty.ttf").write_bytes(b"")
+        out = tmp_path / "out.pak"
+
+        with pytest.raises(ResourceLoadError, match="fonts/empty.ttf"):
+            create_pak(src, out)
+        assert not out.exists()
+
+    def test_with_bad_header_ttf_should_raise_resource_load_error(
+        self, tmp_path: Path
+    ) -> None:
+        # Spec 03: Notes for font validation - a file whose first four bytes
+        # are not the TTF magic number is rejected, even though pygame's
+        # Font constructor would silently accept it (default-font fallback):
+        src = tmp_path / "res"
+        (src / "fonts").mkdir(parents=True)
+        (src / "fonts/bad.ttf").write_bytes(b"this is not a ttf at all")
+        out = tmp_path / "out.pak"
+
+        with pytest.raises(ResourceLoadError, match="fonts/bad.ttf"):
+            create_pak(src, out)
+        assert not out.exists()
+
+    def test_with_valid_ttf_should_be_packaged(self, tmp_path: Path) -> None:
+        src = tmp_path / "res"
+        _write_ttf(src / "fonts/ui.ttf")
+        out = tmp_path / "out.pak"
+
+        count = create_pak(src, out)
+
+        assert count == 1
+        loaded = load_pak(out)
+        assert loaded.fonts["fonts/ui.ttf"] == (src / "fonts/ui.ttf").read_bytes()
+
     def test_empty_source_raises_no_resources_found(
         self, tmp_path: Path
     ) -> None:
@@ -491,7 +558,9 @@ class TestLoadPak:
         assert isinstance(loaded.music["audio/music/theme.wav"], bytes)
         assert loaded.texts["data/dialog/frank.txt"] == "Hello, grandma."
         assert loaded.json_resources["data/ship_stats.json"] == {"hull": 100}
-        assert loaded.resource_count == 5
+        # Fonts are cached as raw bytes; the Font object is a consumer concern:
+        assert isinstance(loaded.fonts["fonts/ui_font.ttf"], bytes)
+        assert loaded.resource_count == 6
 
     def test_empty_file_raises_resource_load_error(self, tmp_path: Path) -> None:
         empty = tmp_path / "empty.pak"
@@ -621,6 +690,28 @@ class TestLoadPak:
         # WHEN load_pak is invoked:
         # THEN the corrupt resource is reported by its ID:
         with pytest.raises(ResourceLoadError, match="graphics/ship.png"):
+            load_pak(pak_path)
+
+    def test_with_zero_byte_ttf_in_pak_raises_resource_load_error(
+        self, tmp_path: Path
+    ) -> None:
+        # Spec 03: "A zero-byte .ttf file is automatically invalid":
+        pak_path = _build_raw_pak(tmp_path, {"fonts/ui.ttf": b""})
+
+        with pytest.raises(ResourceLoadError, match="fonts/ui.ttf"):
+            load_pak(pak_path)
+
+    def test_with_bad_header_ttf_in_pak_raises_resource_load_error(
+        self, tmp_path: Path
+    ) -> None:
+        # Spec 03: Notes for font validation - the magic-number header check
+        # is the entire font validation (pygame's Font constructor would
+        # silently accept this payload via the default-font fallback):
+        pak_path = _build_raw_pak(
+            tmp_path, {"fonts/ui.ttf": b"this is not a ttf at all"}
+        )
+
+        with pytest.raises(ResourceLoadError, match="fonts/ui.ttf"):
             load_pak(pak_path)
 
     def test_manifest_entry_named_manifest_json_raises_resource_load_error(
@@ -814,6 +905,17 @@ class TestRoundTrip:
         assert "audio/music/theme.wav" in loaded.music
         assert "data/dialog/frank.txt" in loaded.texts
         assert "data/ship_stats.json" in loaded.json_resources
+        assert "fonts/ui_font.ttf" in loaded.fonts
+
+    def test_create_then_load_preserves_font_bytes(self, tmp_path: Path) -> None:
+        src = tmp_path / "res"
+        ttf_path = src / "fonts/ui.ttf"
+        _write_ttf(ttf_path)
+        out = tmp_path / "out.pak"
+        create_pak(src, out)
+
+        loaded = load_pak(out)
+        assert loaded.fonts["fonts/ui.ttf"] == ttf_path.read_bytes()
 
 
 # ------------------------------------------------------------------ #
@@ -887,6 +989,55 @@ class TestPackagerCli:
         assert result.returncode == 1
         assert "error" in result.stderr.lower()
         assert not out.exists()
+
+    def test_create_with_bad_header_ttf_exits_nonzero(
+        self, tmp_path: Path, packager: Path
+    ) -> None:
+        # Spec 03: "invalid resources cannot be packaged" applies to fonts
+        # too (the magic-number header check runs during create):
+        src = tmp_path / "res"
+        (src / "fonts").mkdir(parents=True)
+        (src / "fonts/bad.ttf").write_bytes(b"this is not a ttf at all")
+        out = tmp_path / "out.pak"
+
+        result = self._run(
+            packager, "create", "--source", str(src), "--output", str(out),
+            expect_success=False,
+        )
+        assert result.returncode == 1
+        assert "error" in result.stderr.lower()
+        assert "fonts/bad.ttf" in result.stderr
+        assert not out.exists()
+
+    def test_create_with_valid_ttf_reports_it_in_count(
+        self, tmp_path: Path, packager: Path
+    ) -> None:
+        src = tmp_path / "res"
+        _write_ttf(src / "fonts/ui.ttf")
+        (src / "note.txt").write_text("hello", encoding="utf-8")
+        out = tmp_path / "out.pak"
+
+        result = self._run(
+            packager, "create", "--source", str(src), "--output", str(out)
+        )
+
+        assert out.exists()
+        assert "2 resource" in result.stdout
+
+    def test_inspect_with_ttf_in_pak_reports_count_and_integrity(
+        self, tmp_path: Path, packager: Path
+    ) -> None:
+        # Spec 03: a valid .ttf can be loaded as a resource - the packager's
+        # inspect path exercises the same shared validation:
+        src = tmp_path / "res"
+        _write_ttf(src / "fonts/ui.ttf")
+        out = tmp_path / "out.pak"
+        self._run(packager, "create", "--source", str(src), "--output", str(out))
+
+        result = self._run(packager, "inspect", "--source", str(out))
+
+        assert "1 resource" in result.stdout
+        assert "hashes match" in result.stdout
 
     def test_create_with_reserved_manifest_name_exits_nonzero(
         self, tmp_path: Path, packager: Path

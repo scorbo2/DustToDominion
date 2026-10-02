@@ -23,7 +23,7 @@ import json
 import zipfile
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
-from typing import Any, Callable, Iterator
+from typing import Any, Callable, ClassVar, Iterator
 
 import pygame
 from loguru import logger
@@ -93,7 +93,9 @@ class ResourceStore:
     or - in the resource loader - every resource loaded at startup. Music
     is cached as raw audio bytes (the client feeds them to
     ``mixer.music.load`` itself); sound effects as ``pygame.mixer.Sound``
-    objects (spec 03: Distinguishing music from sound effects).
+    objects (spec 03: Distinguishing music from sound effects); fonts as
+    raw ``.ttf`` bytes (the consumer builds ``pygame.font.Font`` objects on
+    demand - spec 03: Consumer API).
     """
 
     sprites: dict[str, pygame.Surface] = field(default_factory=dict)
@@ -101,39 +103,52 @@ class ResourceStore:
     music: dict[str, bytes] = field(default_factory=dict)
     texts: dict[str, str] = field(default_factory=dict)
     json_resources: dict[str, Any] = field(default_factory=dict)
+    fonts: dict[str, bytes] = field(default_factory=dict)
+
+    #: Ordered (type_name, cache attribute) pairs - the single source of
+    #: truth for the per-type caches. ``store``, ``items``, and
+    #: ``resource_count`` all derive from this, so adding a resource type is
+    #: one field declaration plus one entry here (plus the decoder branch in
+    #: ``load_resource_from_bytes``).
+    CACHE_FIELDS: ClassVar[tuple[tuple[str, str], ...]] = (
+        ("sprite", "sprites"),
+        ("sfx", "sound_effects"),
+        ("music", "music"),
+        ("text", "texts"),
+        ("json", "json_resources"),
+        ("font", "fonts"),
+    )
+
+    #: ``type_name`` -> cache attribute, derived from ``CACHE_FIELDS`` so
+    #: the lookup and the ordering can never drift apart.
+    _CACHE_BY_TYPE: ClassVar[dict[str, str]] = dict(CACHE_FIELDS)
 
     @property
     def resource_count(self) -> int:
-        return (
-            len(self.sprites)
-            + len(self.sound_effects)
-            + len(self.music)
-            + len(self.texts)
-            + len(self.json_resources)
-        )
+        return sum(len(getattr(self, attribute)) for _, attribute in self.CACHE_FIELDS)
 
     def store(self, type_name: str, resource_id: str, value: Any) -> None:
         """Cache one decoded resource under its ID.
 
-        ``type_name`` is one of ``"sprite"``, ``"sfx"``, ``"music"``,
-        ``"text"``, ``"json"`` - the names produced by
-        ``load_resource_from_bytes``.
+        ``type_name`` must be one of the type names in ``CACHE_FIELDS``
+        (currently ``"sprite"``, ``"sfx"``, ``"music"``, ``"text"``,
+        ``"json"``, ``"font"`` - the names produced by
+        ``load_resource_from_bytes``). An unknown type name raises
+        ``ValueError``: silently mis-routing it into the wrong cache would
+        be far worse than a programming error surfacing immediately.
 
         Duplicate IDs are NOT an error: the most recently stored resource
         wins, with a log warning (spec 03: Resolving duplicate resource
         IDs). Within a single pak this cannot happen, because the manifest
         forbids duplicate IDs.
         """
-        if type_name == "sprite":
-            cache = self.sprites
-        elif type_name == "sfx":
-            cache = self.sound_effects
-        elif type_name == "music":
-            cache = self.music
-        elif type_name == "text":
-            cache = self.texts
-        else:  # "json" - load_resource_from_bytes produces no other name
-            cache = self.json_resources
+        attribute = self._CACHE_BY_TYPE.get(type_name)
+        if attribute is None:
+            raise ValueError(
+                f"unknown resource type {type_name!r}; expected one of "
+                f"{sorted(self._CACHE_BY_TYPE)}"
+            )
+        cache = getattr(self, attribute)
         kind = "sound effect" if type_name == "sfx" else type_name
         if resource_id in cache:
             logger.warning(
@@ -146,20 +161,14 @@ class ResourceStore:
 
     def items(self) -> Iterator[tuple[str, str, Any]]:
         """All stored resources as ``(type_name, resource_id, value)``
-        triples, in fixed per-type order.
+        triples, in fixed per-type order (the order of ``CACHE_FIELDS``).
 
         Used to merge one store into another (e.g. a pak's resources into
         the resource loader's store) so every resource - not just some
         types - passes through ``store`` and its duplicate-ID warning.
         """
-        for type_name, cache in (
-            ("sprite", self.sprites),
-            ("sfx", self.sound_effects),
-            ("music", self.music),
-            ("text", self.texts),
-            ("json", self.json_resources),
-        ):
-            for resource_id, value in cache.items():
+        for type_name, attribute in self.CACHE_FIELDS:
+            for resource_id, value in getattr(self, attribute).items():
                 yield type_name, resource_id, value
 
 
@@ -172,7 +181,8 @@ def load_resource_from_bytes(resource_id: str, data: bytes) -> tuple[str, Any]:
     """Decode one resource from raw bytes.
 
     Returns ``(type_name, value)`` where ``type_name`` is one of
-    ``"sprite"``, ``"sfx"``, ``"music"``, ``"text"``, or ``"json"``.
+    ``"sprite"``, ``"sfx"``, ``"music"``, ``"text"``, ``"json"``, or
+    ``"font"``.
 
     The ``resource_id`` is used only to determine the extension and the
     music/sfx split; it is also used as the ``namehint`` for
@@ -228,6 +238,25 @@ def load_resource_from_bytes(resource_id: str, data: bytes) -> tuple[str, Any]:
                 f"resource {resource_id!r} is not valid JSON: {exc}"
             ) from exc
         return "json", decoded
+
+    if ext in game_constants.FONT_RESOURCE_EXTENSIONS:
+        # Spec 03: Notes for font validation. pygame's Font constructor
+        # silently falls back to the default font on garbage input (and
+        # touching the poisoned object can even segfault the process), so
+        # it is NOT a usable parseability check. The spec's file-size and
+        # magic-number header checks are the entire validation. Raw bytes
+        # are cached; the consumer builds the Font object on demand (spec
+        # 03: Consumer API).
+        if len(data) == 0:
+            raise ResourceLoadError(
+                f"font resource {resource_id!r} is zero bytes"
+            )
+        if not data.startswith(game_constants.TTF_MAGIC_NUMBER):
+            raise ResourceLoadError(
+                f"font resource {resource_id!r} does not begin with the "
+                f"TTF magic number {game_constants.TTF_MAGIC_NUMBER!r}"
+            )
+        return "font", data
 
     raise ResourceLoadError(
         f"resource {resource_id!r} has unsupported extension {ext!r}"
