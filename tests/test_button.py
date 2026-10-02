@@ -345,7 +345,7 @@ class TestButtonClick:
         button, ui, clicks = _button_ui(pygame.Rect(0, 0, 960, 540), _theme())
 
         # WHEN only the right mouse button is used:
-        ui.update([_down((320, 180), button=2), _up((320, 180), button=2)])
+        ui.update([_down((320, 180), button=3), _up((320, 180), button=3)])
 
         # THEN no click fires (only the left button counts, spec 04):
         assert len(clicks) == 0
