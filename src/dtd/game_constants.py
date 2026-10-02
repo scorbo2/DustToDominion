@@ -19,6 +19,14 @@ SUPPORTED_RESOLUTIONS = ("1280x720", "1920x1080", "2560x1440")
 #: (spec 02).
 DEFAULT_FULLSCREEN_RESOLUTION = "1920x1080"
 
+# --- UI widgets (spec 04) -------------------------------------------------
+#: The fixed design resolution for all widget rects (spec 04: Widget
+#: coordinates). Widget rects are specified in these units and converted
+#: to actual window pixels at draw time. Every supported window resolution
+#: (spec 02) is 16:9, so one uniform scale factor covers both axes.
+DESIGN_W = 1920
+DESIGN_H = 1080
+
 # --- Resource packaging (spec 03) ----------------------------------------
 #: The directory name the game always scans first in dev mode (spec 03).
 DEFAULT_RESOURCE_DIRNAME = "resources"

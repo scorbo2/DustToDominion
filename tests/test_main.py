@@ -109,13 +109,14 @@ class TestRun:
 
 
 class TestStartupOrder:
-    def test_should_run_config_then_pygame_then_resources_then_window(
+    def test_should_run_config_then_pygame_then_resources_then_ui_then_window(
         self, bootstrapped_persistence: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        # Spec 03 startup order: (1) config, (2) pygame init, (3) resource
-        # loading, (4) main window. Record the call order without replacing
-        # the real work (pygame must really init for the event loop to run
-        # under the dummy driver).
+        # Spec 03 startup order as amended by spec 04: (1) config,
+        # (2) pygame init, (3) resource loading, (4) UI initialization
+        # (Theme + UIManager), (5) main window. Record the call order
+        # without replacing the real work (pygame must really init for the
+        # event loop to run under the dummy driver).
         order: list[str] = []
 
         def spy_load_config():
@@ -137,12 +138,20 @@ class TestStartupOrder:
 
         monkeypatch.setattr(app_main.ResourceLoader, "load", spy_load_resources)
 
+        real_theme = app_main.Theme
+
+        def spy_theme(theme_value: str, font_value: str, loader) -> app_main.Theme:
+            order.append("ui")
+            return real_theme(theme_value, font_value, loader)
+
+        monkeypatch.setattr(app_main, "Theme", spy_theme)
+
         def spy_open_window(self, config=None):
             order.append("window")
 
         monkeypatch.setattr(app_main.MainWindow, "open", spy_open_window)
 
-        # Terminate the (otherwise infinite) skeletal loop hermetically.
+        # Terminate the (otherwise infinite) loop hermetically.
         real_event_get = pygame.event.get
 
         def event_get(*args, **kwargs):
@@ -152,7 +161,7 @@ class TestStartupOrder:
         monkeypatch.setattr(pygame.event, "get", event_get)
 
         assert app_main.run() == 0
-        assert order == ["config", "pygame", "resources", "window"]
+        assert order == ["config", "pygame", "resources", "ui", "window"]
 
 
 class TestInitPygame:
