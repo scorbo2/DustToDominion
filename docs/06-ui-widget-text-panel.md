@@ -77,7 +77,7 @@ class TextPanel(Widget):
     def fade_out(self, frames: int = 30) -> None:
         # See Animation options (requires disappear())
 
-    def set_typing_options(speed: int, show_cursor: bool = False) -> None:
+    def set_typing_options(self, speed: int, show_cursor: bool = False) -> None:
         # See Typing animation section (requires appear())
 ```
 
@@ -95,6 +95,11 @@ effectively hides it until the widget is re-enabled. The precedence order descri
 is for cosmetic purposes (determining which theme colors to use when rendering the widget).
 A disabled widget's "selected" status can still hold whatever meaning the game assigns to that
 state, even if the selection state is not visible to the user.
+
+Spec `05-audio-manager.md` should be amended to add `stop_sfx(id)` to request that the
+given sound effect id should be stopped if it is currently playing. This is needed
+because our TextPanel animation can be interrupted, causing associated audio to be stopped
+if in progress.
 
 ## Appearance options
 
@@ -166,7 +171,7 @@ Invoking `disappear()` when the appearance animation is in progress will termina
 and begin the disappearance animation. Likewise, invoking `appear()` when the disappearance animation is
 in progress will stop the disappearance animation and begin the appearance animation. Invoking `appear()`
 when the disappearance animation has already completed and the panel is no longer visible will trigger
-a new appearance animation (or instant appearance if no appearance animation options are set). In both
+a new appearance animation (or instant appearance if no appearance animation options are set). In these
 cases, the new animation continues from the current interpolated state.
 
 UIManager only invokes `update()` for non-disabled widgets! Disabling a widget effectively
@@ -271,6 +276,12 @@ This document introduces no new configuration keys.
   the margin between text and icon on the text's left edge.
 - Animation options (appearance, disappearance, and typing) are ignored if `appear()/disappear()` is never
   invoked - the panel simply appears at its given rect.
+- Specifying `speed` or `frames` less than or equal to 0 before invoking `appear()` disables the animation.
+- Invoking `appear()` with typing animation options then invoking `disappear()` before the typing
+  animation completes cancels the typing animation. Invoking `appear()` afterwards shows the text fully rendered.
+- Invoking `appear()` with appearance audio specified then invoking `disappear()` before the
+  appearance audio has completed stops playing the appearance audio. Invoking `appear()` afterwards
+  plays the appearance audio again.
 - Disabling a TextPanel changes its appearance according to the current theme.
 - Selecting a TextPanel changes its appearance according to the current theme.
   (Note: disabling has a higher precedence than selecting - if both selected and disabled, the panel is disabled).
