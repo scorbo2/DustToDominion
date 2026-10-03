@@ -1,6 +1,6 @@
 """Application entry point.
 
-Startup order per spec 03 as amended by spec 04:
+Startup order per spec 03 as amended by specs 04 and 05:
 
 1. Boot the persistence directory (spec 00; fatal on failure).
 2. Load the game configuration (spec 01; never fatal).
@@ -11,7 +11,9 @@ Startup order per spec 03 as amended by spec 04:
 5. Initialize the UI: ``Theme`` and ``UIManager`` (spec 04; a
    theme/font value that cannot be resolved falls back to defaults with
    a log warning - never fatal).
-6. Initialize and display the main window (spec 03 step 5 / spec 02).
+6. Initialize the AudioManager (spec 05, amending spec 03 step 5): sets
+   the mixer channel budget and applies the persisted audio settings.
+7. Initialize and display the main window (spec 03 step 6 / spec 02).
 
 The game loop follows spec 04 (Changes to game loop): pump events ->
 ``ui.update`` -> clear the screen -> game rendering (arrives with a future
@@ -25,7 +27,7 @@ import sys
 import pygame
 from loguru import logger
 
-from dtd import game_config, persistence
+from dtd import audio, game_config, persistence
 from dtd.errors import ResourceError
 from dtd.main_window import MainWindow
 from dtd.resource_loader import ResourceLoader
@@ -73,7 +75,13 @@ def run() -> int:
     theme = Theme(config.theme, config.font, resource_loader)
     ui = UIManager(theme)
 
-    # Spec 03 step 5: main window initialization and display.
+    # Spec 05 (amending spec 03 step 5): AudioManager initialization between
+    # UI init and window creation. Sets the mixer channel budget and applies
+    # the persisted audio settings; a missing/null audio section means
+    # defaults (spec 05).
+    audio.init_audio_manager(resource_loader, config.audio)
+
+    # Spec 03 step 6: main window initialization and display.
     window = MainWindow()
     window.open(config.mainWindow)
     try:

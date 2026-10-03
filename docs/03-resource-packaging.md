@@ -32,7 +32,8 @@ be executed before the resource loader is invoked. So, the game's startup order 
    are not fatal: log a warning and continue.
 3. ResourceLoader is invoked.
 4. UI/Theme initialization is invoked (see `04-ui-widgets.md`)
-5. Main window initialization and display (assuming previous steps did not stop on error).
+5. AudioManager is initialized (see `05-audio-manager.md`)
+6. Main window initialization and display (assuming previous steps did not stop on error).
 
 ### Resource types and formats
 
