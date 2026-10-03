@@ -16,6 +16,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from dtd import config, persistence
 from dtd.errors import ConfigError
+from dtd.game_constants import VOLUME_MAX_PERCENT, VOLUME_MIN_PERCENT
 from dtd.main_window import MainWindowConfig
 
 #: Env var overriding the location of game.json (spec 01).
@@ -54,9 +55,13 @@ class AudioConfig(BaseModel):
     """
 
     sfx_enabled: bool = True
-    sfx_volume: int = Field(default=100, ge=0, le=100)
+    sfx_volume: int = Field(
+        default=100, ge=VOLUME_MIN_PERCENT, le=VOLUME_MAX_PERCENT
+    )
     music_enabled: bool = True
-    music_volume: int = Field(default=80, ge=0, le=100)
+    music_volume: int = Field(
+        default=80, ge=VOLUME_MIN_PERCENT, le=VOLUME_MAX_PERCENT
+    )
 
 
 class GameConfig(BaseModel):

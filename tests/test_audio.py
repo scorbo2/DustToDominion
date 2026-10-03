@@ -198,6 +198,11 @@ def _vol(expected: float):
     return pytest.approx(expected, abs=0.01)
 
 
+def _config_payload(home: Path) -> dict:
+    """The parsed game.json in this test's hermetic persistence dir."""
+    return json.loads((home / "game.json").read_text(encoding="utf-8"))
+
+
 class TestConstructor:
     def test_should_set_channel_budget_to_specified_constant(self, audio_manager: None) -> None:
         # Spec 05: Channel budget - the mixer gets a 16-channel pool at
@@ -530,6 +535,150 @@ class TestConfigurationSetters:
         audio_manager.music_enabled = False
         assert audio_manager.music_enabled is False
         assert not pygame.mixer.music.get_busy()
+
+
+class TestSetterValidation:
+    """Runtime setter validation (spec 05: Runtime setter validation).
+
+    A bad runtime value must neither crash the game nor write an invalid
+    value to game.json - the latter would fail validation at the next
+    startup (InvalidConfigError) and silently lose the user's settings.
+    """
+
+    def test_when_sfx_volume_below_range_should_clamp_to_zero_and_warn(
+        self, audio_manager: None, hermetic_persistence: Path
+    ) -> None:
+        # GIVEN the default sfx volume (100) and a writable game.json:
+        warnings, sink_id = _warning_records()
+        try:
+            # WHEN the client sets a volume below the 0-100 range:
+            audio_manager.sfx_volume = -5
+        finally:
+            logger.remove(sink_id)
+        # THEN the in-memory setting is clamped to mute and a warning
+        # was logged:
+        assert audio_manager.sfx_volume == 0
+        assert any("clamped" in record for record in warnings)
+        # AND game.json holds the valid value - never the raw -5:
+        assert _config_payload(hermetic_persistence)["audio"]["sfx_volume"] == 0
+
+    def test_when_sfx_volume_above_range_should_clamp_to_full_volume_and_warn(
+        self, audio_manager: None, hermetic_persistence: Path
+    ) -> None:
+        warnings, sink_id = _warning_records()
+        try:
+            # WHEN the client sets a volume above the 0-100 range:
+            audio_manager.sfx_volume = 999
+        finally:
+            logger.remove(sink_id)
+        # THEN the setting is clamped to full volume with a warning, and
+        # game.json holds 100 - never the raw 999:
+        assert audio_manager.sfx_volume == 100
+        assert any("clamped" in record for record in warnings)
+        assert _config_payload(hermetic_persistence)["audio"]["sfx_volume"] == 100
+
+    def test_when_music_volume_below_range_should_clamp_to_zero_and_warn(
+        self, audio_manager: None, hermetic_persistence: Path
+    ) -> None:
+        warnings, sink_id = _warning_records()
+        try:
+            # WHEN the client sets the music volume below the 0-100 range:
+            audio_manager.music_volume = -5
+        finally:
+            logger.remove(sink_id)
+        # THEN it is clamped to mute with a warning, and the file agrees:
+        assert audio_manager.music_volume == 0
+        assert any("clamped" in record for record in warnings)
+        assert _config_payload(hermetic_persistence)["audio"]["music_volume"] == 0
+
+    def test_when_music_volume_above_range_should_clamp_to_full_volume(
+        self, audio_manager: None, hermetic_persistence: Path
+    ) -> None:
+        warnings, sink_id = _warning_records()
+        try:
+            audio_manager.music_volume = 999
+        finally:
+            logger.remove(sink_id)
+        assert audio_manager.music_volume == 100
+        assert any("clamped" in record for record in warnings)
+        assert _config_payload(hermetic_persistence)["audio"]["music_volume"] == 100
+
+    def test_when_sfx_volume_non_numeric_should_keep_current_value_and_warn(
+        self, audio_manager: None
+    ) -> None:
+        # GIVEN the default sfx volume (100):
+        warnings, sink_id = _warning_records()
+        try:
+            # WHEN the client sets a value that is not numeric at all:
+            audio_manager.sfx_volume = "banana"
+        finally:
+            logger.remove(sink_id)
+        # THEN the setting is unchanged and a warning was logged:
+        assert audio_manager.sfx_volume == 100
+        assert any("sfx_volume" in record for record in warnings)
+
+    def test_when_sfx_volume_is_numeric_string_should_coerce_as_config_loading_does(
+        self, audio_manager: None, hermetic_persistence: Path
+    ) -> None:
+        # Spec 05: pydantic coerces "50" to 50 at config-load time; the
+        # setter applies the same rule.
+        audio_manager.sfx_volume = "45"
+        assert audio_manager.sfx_volume == 45
+        assert _config_payload(hermetic_persistence)["audio"]["sfx_volume"] == 45
+
+    def test_when_music_volume_is_fractional_should_keep_current_value(
+        self, audio_manager: None
+    ) -> None:
+        # GIVEN the default music volume (80). 50.5 is not a valid integer
+        # percent (pydantic rejects it at load time), so the setter must
+        # reject it too:
+        audio_manager.music_volume = 50.5
+        # THEN the setting is unchanged:
+        assert audio_manager.music_volume == 80
+
+    def test_after_clamped_volumes_config_file_should_still_load_at_startup(
+        self, audio_manager: None
+    ) -> None:
+        # The reported failure mode: unclamped -5/999 values in game.json
+        # would fail validation at startup (InvalidConfigError) and the
+        # game would silently lose the user's settings.
+        # GIVEN out-of-range volumes were clamped by the setters:
+        audio_manager.sfx_volume = -5
+        audio_manager.music_volume = 999
+        # WHEN the config is loaded the way startup loads it:
+        config = game_config.load_game_config()
+        # THEN the file is valid and the clamped values survived:
+        assert config.audio is not None
+        assert config.audio.sfx_volume == 0
+        assert config.audio.music_volume == 100
+
+    def test_when_sfx_enabled_non_boolean_should_keep_current_value_and_warn(
+        self, audio_manager: None
+    ) -> None:
+        # GIVEN sfx is enabled:
+        warnings, sink_id = _warning_records()
+        try:
+            # WHEN the client sets the flag to a non-boolean value:
+            audio_manager.sfx_enabled = "banana"
+        finally:
+            logger.remove(sink_id)
+        # THEN the flag is unchanged and a warning was logged:
+        assert audio_manager.sfx_enabled is True
+        assert any("sfx_enabled" in record for record in warnings)
+
+    def test_when_music_enabled_non_boolean_should_keep_current_value(
+        self, audio_manager: None
+    ) -> None:
+        audio_manager.music_enabled = "nope"
+        assert audio_manager.music_enabled is True
+
+    def test_when_enabled_flag_is_zero_should_coerce_to_false(
+        self, audio_manager: None
+    ) -> None:
+        # Spec 05: pydantic accepts 0/1 as booleans at config-load time; the
+        # setter applies the same rule.
+        audio_manager.sfx_enabled = 0
+        assert audio_manager.sfx_enabled is False
 
 
 class TestPersistence:

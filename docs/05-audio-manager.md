@@ -114,6 +114,32 @@ class AudioManager:
     # Setting music_enabled to false should stop any currently playing music track.
 ```
 
+### Runtime setter validation
+
+The configuration property setters above accept values from client code
+(e.g. a settings menu) and persist them. Because persisted values are
+validated at startup (see Validation above), a setter that accepted an
+invalid value would corrupt `game.json`, causing `InvalidConfigError` on
+the next startup and silently losing the user's settings (the game falls
+back to defaults per spec 01).
+
+To prevent this, every setter validates its incoming value against the
+same pydantic rules used at config-load time (i.e. the `AudioConfig`
+fields), with one deliberate difference in the failure mode:
+
+- an out-of-range **numeric** volume is **clamped** to the nearest 0-100
+  bound and a warning is logged (e.g. `-5` becomes `0`, `999` becomes
+  `100`);
+- a value that is **not numeric at all** for a volume field (e.g.
+  `"banana"`, `50.5`) is **rejected**: the current setting is kept, a
+  warning is logged, and the (still valid) current value is what gets
+  persisted;
+- a value that is **not boolean at all** for an enabled field is rejected
+  the same way.
+
+The game never raises from a setter: a bad runtime value must neither
+crash the game loop nor write an invalid value to `game.json`.
+
 ### Channel budget
 
 At startup, AudioManager should set a channel budget of 16 via `pygame.mixer.set_num_channels(...)`
@@ -164,6 +190,19 @@ Simple, short, single-tone sounds are sufficient.
   - If no errors occur, confirm that the `game.json` file contains the new values.
     Ensure *other* pre-existing config is unaffected.
     Ensure unrecognized `audio` keys that were ignored on startup get dropped on save.
+- Runtime setter validation:
+  - Setting a volume below 0 (e.g. `-5`) clamps it to 0 and logs a warning;
+    `game.json` contains `0`, never `-5`.
+  - Setting a volume above 100 (e.g. `999`) clamps it to 100 and logs a
+    warning; `game.json` contains `100`, never `999`.
+  - Setting a non-numeric volume (e.g. `"banana"`) keeps the current value
+    and logs a warning.
+  - After out-of-range volumes are clamped, the config file still loads at
+    startup without `InvalidConfigError`, retaining the user's settings.
+  - Setting an enabled flag to a non-boolean value (e.g. `"banana"`) keeps
+    the current value and logs a warning.
+  - Enabled flags accept `0`/`1` as booleans, as at config-load time
+    (pydantic coercion).
 
 ## Acceptance criteria
 
