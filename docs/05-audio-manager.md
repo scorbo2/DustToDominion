@@ -17,6 +17,9 @@ This amends spec 03's startup order: AudioManager initialization is inserted as 
 between UI initialization and main window creation. A module-level singleton in `dtd/audio.py`,
 accessible via an accessor, allows the rest of the game code to access AudioManager.
 
+Game code should NOT interact directly with the pygame mixer or audio channels!
+The whole point is that this new AudioManager class is solely responsible for all audio playing.
+
 ## Additional dependencies
 
 None! AudioManager will use pygame's audio mixer for handling audio play requests.
@@ -152,7 +155,7 @@ Simple, short, single-tone sounds are sufficient.
   - `play_music` with a different valid id while a track is already playing stops the previous track and plays the new one.
   - `play_music` with a non-existent id when a music track is already playing stops the music.
   - `play_music` with the same id that is already playing is a no-op (track continues to play; does NOT restart).
-  - `play_music` with a sfx-typed resource id does nothing.
+  - `play_music` with a sfx-typed resource id stops any currently playing track and returns - the sound effect is not played.
   - setting `music_enabled` to False while any track is playing stops it.
   - `stop_music` when no track is playing is a no-op.
 - Music and sfx volume can be adjusted independently. Currently playing sfx, loops, and music respect the new setting.
