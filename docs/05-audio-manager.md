@@ -1,6 +1,6 @@
 ---
 description: Describes the game's approach to audio handling (sfx and music).
-status: proposed
+status: active
 ---
 
 # Audio Manager
@@ -14,7 +14,8 @@ resource loader as a constructor parameter. All game code can request AudioManag
 to play sound effects and music, and AudioManager will transparently manage those requests.
 
 This amends spec 03's startup order: AudioManager initialization is inserted as a new step
-between UI initialization and main window creation.
+between UI initialization and main window creation. A module-level singleton in `dtd/audio.py`,
+accessible via an accessor, allows the rest of the game code to access AudioManager.
 
 ## Additional dependencies
 
@@ -37,7 +38,7 @@ One new top-level configuration key will be added to the game's main config:
 
 All keys are optional, as is the top-level `audio` key itself. If not present, the
 values in the example above are used as defaults. Unrecognized keys in the `audio`
-object are silently ignored.
+object are silently ignored (they are dropped on save).
 
 The pydantic model will be `AudioConfig` in `dtd/game_config.py`.
 
@@ -91,7 +92,7 @@ class AudioManager:
         # already-running loop.
         # It is not an error if this is invoked when sfx_enabled is False: do nothing.
         # If the given id is already playing via `play_sfx`, restart it as a loop.
-        # A loop that cannot start due to budget exhaustion is simply not marked active; retry on subsequent frames.
+        # A loop that cannot start due to budget exhaustion is simply not marked active; it is retried on subsequent frames.
 
     def stop_loops(self) -> None:
         # Stop all currently-looping sound effects:
@@ -116,6 +117,7 @@ At startup, AudioManager should set a channel budget of 16 via `pygame.mixer.set
 using a constant added to `game_constants.py`. The `set_active_loops` function must track which
 channel a loop is playing on, so that `channel.stop()` can be invoked when the loop is to be stopped.
 It is not an error if the loop budget is exhausted - any additional loop attempts are silently ignored.
+Note that the 16-channel pool is shared between one-shot sfx and loops (this is inherent pygame behavior).
 
 (Verified against pygame-ce 2.5.8: `set_num_channels` must be called *after* `mixer.init()`,
  otherwise you get `pygame.error: mixer not initialized`.)
@@ -137,8 +139,10 @@ Simple, short, single-tone sounds are sufficient.
   - `set_active_loops` with a valid sfx id starts looping that sound effect.
   - `set_active_loops` with a valid sfx id that is already playing via `play_sfx` restarts that sfx as a loop.
   - `set_active_loops` with an empty set stops all current loops.
+  - `set_active_loops` when the channel budget is full with 16 other loops is a no-op. Removing another loop allows the retry to succeed.
+  - `set_active_loops` with the same set that is already playing does not stop or restart any existing loop - it's a no-op.
   - `play_sfx` with a valid id plays the sound at the currently configured volume.
-  - the play functions respect the current volume.
+  - `play_sfx` with a valid id that is already an active loop plays the sound as a one-off, in addition to the loop.
   - `sfx_volume` can be adjusted while audio is playing - changes take effect immediately.
   - setting `sfx_enabled` to False while any sfx is playing stops it.
   - `play_sfx` with a music-typed resource id does nothing.
@@ -150,9 +154,13 @@ Simple, short, single-tone sounds are sufficient.
   - `play_music` with the same id that is already playing is a no-op (track continues to play; does NOT restart).
   - `play_music` with a sfx-typed resource id does nothing.
   - setting `music_enabled` to False while any track is playing stops it.
+  - `stop_music` when no track is playing is a no-op.
+- Music and sfx volume can be adjusted independently. Currently playing sfx, loops, and music respect the new setting.
 - Config changes take effect immediately and are persisted via the configuration module.
   - Persistence errors (can't persist new settings) don't stop the new settings from being used.
-  - If no errors occur, confirm that the `game.json` file contains the new values. Ensure *other* pre-existing config is unaffected.
+  - If no errors occur, confirm that the `game.json` file contains the new values.
+    Ensure *other* pre-existing config is unaffected.
+    Ensure unrecognized `audio` keys that were ignored on startup get dropped on save.
 
 ## Acceptance criteria
 

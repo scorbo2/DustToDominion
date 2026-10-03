@@ -1,4 +1,4 @@
-"""Unit tests for the application entry point (spec 00 / 01 / 02 / 03 integration)."""
+"""Unit tests for the application entry point (spec 00 / 01 / 02 / 03 / 04 / 05 integration)."""
 from __future__ import annotations
 
 from pathlib import Path
@@ -109,14 +109,15 @@ class TestRun:
 
 
 class TestStartupOrder:
-    def test_should_run_config_then_pygame_then_resources_then_ui_then_window(
+    def test_should_run_config_then_pygame_then_resources_then_ui_then_audio_then_window(
         self, bootstrapped_persistence: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        # Spec 03 startup order as amended by spec 04: (1) config,
+        # Spec 03 startup order as amended by specs 04 and 05: (1) config,
         # (2) pygame init, (3) resource loading, (4) UI initialization
-        # (Theme + UIManager), (5) main window. Record the call order
-        # without replacing the real work (pygame must really init for the
-        # event loop to run under the dummy driver).
+        # (Theme + UIManager), (5) AudioManager initialization, (6) main
+        # window. Record the call order without replacing the real work
+        # (pygame must really init for the event loop to run under the
+        # dummy driver).
         order: list[str] = []
 
         def spy_load_config():
@@ -146,6 +147,12 @@ class TestStartupOrder:
 
         monkeypatch.setattr(app_main, "Theme", spy_theme)
 
+        def spy_init_audio(loader, config):
+            order.append("audio")
+            return None
+
+        monkeypatch.setattr(app_main.audio, "init_audio_manager", spy_init_audio)
+
         def spy_open_window(self, config=None):
             order.append("window")
 
@@ -161,7 +168,7 @@ class TestStartupOrder:
         monkeypatch.setattr(pygame.event, "get", event_get)
 
         assert app_main.run() == 0
-        assert order == ["config", "pygame", "resources", "ui", "window"]
+        assert order == ["config", "pygame", "resources", "ui", "audio", "window"]
 
 
 class TestInitPygame:

@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any, Literal, Mapping
 
 from loguru import logger
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from dtd import config, persistence
 from dtd.errors import ConfigError
@@ -41,19 +41,40 @@ class ResourcesConfig(BaseModel):
     location: list[str] | None = None
 
 
+class AudioConfig(BaseModel):
+    """The ``audio`` section of game.json (spec 05: Configuration).
+
+    Volumes are integer percentages 0 (mute) - 100 (full), later applied as
+    ``set_volume(value / 100)`` (spec 05: Validation). Deliberately NOT
+    ``extra='forbid'``: per spec 05, unrecognized keys in the ``audio``
+    object are silently ignored (and dropped when the section is next
+    saved, per spec 01's section-rewrite semantics). A ``None`` section
+    means "use defaults" - dtd.audio normalizes it to a fresh
+    ``AudioConfig()`` (spec 05: a top-level ``audio`` of ``null`` is fine).
+    """
+
+    sfx_enabled: bool = True
+    sfx_volume: int = Field(default=100, ge=0, le=100)
+    music_enabled: bool = True
+    music_volume: int = Field(default=80, ge=0, le=100)
+
+
 class GameConfig(BaseModel):
     """Top-level model for game.json.
 
     Each spec that adds a config section adds a field here (spec 02 added
     ``mainWindow``, spec 03 added ``resources``, spec 04 added ``theme``
-    and ``font``). extra='forbid' keeps typos loud (spec 01: unexpected
-    properties are always an error).
+    and ``font``, spec 05 added ``audio``). extra='forbid' keeps typos loud
+    (spec 01: unexpected properties are always an error).
     """
 
     model_config = ConfigDict(extra="forbid")
 
     mainWindow: MainWindowConfig | None = None
     resources: ResourcesConfig | None = None
+    # Spec 05: audio sfx/music settings. A missing key (or an explicit
+    # null) means "defaults"; dtd.audio resolves None -> AudioConfig().
+    audio: AudioConfig | None = None
     # Spec 04: UI theme and font. Both are optional resource identifiers or
     # the fixed string "default". A missing key, an empty/blank value, a
     # value of "default", or a value that does not resolve to a loaded

@@ -19,6 +19,12 @@ SUPPORTED_RESOLUTIONS = ("1280x720", "1920x1080", "2560x1440")
 #: (spec 02).
 DEFAULT_FULLSCREEN_RESOLUTION = "1920x1080"
 
+# --- Audio manager (spec 05) -----------------------------------------------
+#: The mixer channel budget for all sfx playback (spec 05: Channel budget).
+#: One-shot plays and sfx loops share this single pool; when it is exhausted,
+#: further play requests are silently ignored by pygame.
+AUDIO_CHANNEL_BUDGET = 16
+
 # --- UI widgets (spec 04) -------------------------------------------------
 #: The fixed design resolution for all widget rects (spec 04: Widget
 #: coordinates). Widget rects are specified in these units and converted

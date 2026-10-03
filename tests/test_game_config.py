@@ -6,9 +6,9 @@ from pathlib import Path
 
 import pytest
 
-from dtd import game_config
-from dtd.errors import ConfigError
-from dtd.game_config import GameConfig, ResourcesConfig
+from dtd import config, game_config
+from dtd.errors import ConfigError, InvalidConfigError
+from dtd.game_config import AudioConfig, GameConfig, ResourcesConfig
 from dtd.main_window import MainWindowConfig
 
 
@@ -38,7 +38,9 @@ class TestLoadGameConfig:
     def test_with_unexpected_top_level_key_should_return_defaults(
         self, hermetic_persistence: Path
     ) -> None:
-        _write_game_json(hermetic_persistence, {"audio": {"volume": 0.5}})
+        # "bogusKey" is not a section any spec defines, so it is an
+        # unexpected top-level property (spec 01) -> defaults.
+        _write_game_json(hermetic_persistence, {"bogusKey": 1})
         assert game_config.load_game_config() == GameConfig()
 
     def test_with_valid_file_should_return_parsed_config(self, hermetic_persistence: Path) -> None:
@@ -187,6 +189,91 @@ class TestUiConfig:
         # and becomes a warning plus whole-config defaults (spec 01).
         _write_game_json(hermetic_persistence, {"theme": 12})
         assert game_config.load_game_config() == GameConfig()
+
+
+class TestAudioConfig:
+    """The ``audio`` section of game.json (spec 05: Configuration)."""
+
+    def test_with_missing_audio_key_should_default_to_none(self) -> None:
+        # Spec 05: a missing key means "defaults" - the model stores None and
+        # dtd.audio normalizes it to a fresh AudioConfig().
+        assert GameConfig().audio is None
+
+    def test_with_null_audio_key_should_default_to_none(
+        self, hermetic_persistence: Path
+    ) -> None:
+        # Spec 05: a top-level audio of null is fine - defaults apply, as
+        # though the key were absent.
+        _write_game_json(hermetic_persistence, {"audio": None})
+        assert game_config.load_game_config().audio is None
+
+    def test_with_empty_audio_section_should_parse_as_defaults(
+        self, hermetic_persistence: Path
+    ) -> None:
+        # Spec 05: all keys are optional; an empty section yields defaults.
+        _write_game_json(hermetic_persistence, {"audio": {}})
+        assert game_config.load_game_config().audio == AudioConfig()
+
+    def test_with_partial_audio_section_should_fill_missing_keys_with_defaults(
+        self, hermetic_persistence: Path
+    ) -> None:
+        # Spec 05: missing keys silently revert to defaults.
+        _write_game_json(hermetic_persistence, {"audio": {"sfx_volume": 30}})
+        result = game_config.load_game_config()
+        assert result.audio == AudioConfig(sfx_volume=30)
+
+    def test_with_unexpected_nested_key_should_ignore_it(
+        self, hermetic_persistence: Path
+    ) -> None:
+        # Spec 05: unrecognized keys in the audio object are silently ignored
+        # (unlike resources, whose model forbids extras).
+        _write_game_json(
+            hermetic_persistence, {"audio": {"sfx_volume": 30, "bogusKey": 1}}
+        )
+        result = game_config.load_game_config()
+        assert result.audio == AudioConfig(sfx_volume=30)
+
+    def test_with_wrong_type_for_audio_key_should_return_defaults(
+        self, hermetic_persistence: Path
+    ) -> None:
+        # Spec 01: the game-level loader never raises - an invalid value
+        # falls back to whole-config defaults with a warning.
+        _write_game_json(hermetic_persistence, {"audio": "loud"})
+        assert game_config.load_game_config() == GameConfig()
+
+    @pytest.mark.parametrize("bad_value", ["loud", 42, ["loud"]])
+    def test_with_wrong_type_for_audio_key_should_raise_invalid_config_error(
+        self, hermetic_persistence: Path, bad_value: object
+    ) -> None:
+        # Spec 05: Validation - a wrong-typed audio value raises
+        # InvalidConfigError at the validation layer (which
+        # load_game_config turns into a warning plus defaults).
+        path = _write_game_json(hermetic_persistence, {"audio": bad_value})
+        with pytest.raises(InvalidConfigError):
+            config.load_config(path, game_config.GAME_CONFIG_ENV_VAR, GameConfig)
+
+    def test_with_out_of_range_volume_should_return_defaults(
+        self, hermetic_persistence: Path
+    ) -> None:
+        # Spec 05: volumes outside 0-100 are rejected -> defaults.
+        _write_game_json(hermetic_persistence, {"audio": {"sfx_volume": 101}})
+        assert game_config.load_game_config() == GameConfig()
+
+    def test_with_invalid_enabled_value_should_return_defaults(
+        self, hermetic_persistence: Path
+    ) -> None:
+        # Spec 05: an obviously non-boolean enabled value is rejected -> defaults.
+        _write_game_json(hermetic_persistence, {"audio": {"sfx_enabled": "banana"}})
+        assert game_config.load_game_config() == GameConfig()
+
+    def test_with_coerced_values_should_parse(self, hermetic_persistence: Path) -> None:
+        # Spec 05: pydantic coercion is acceptable (1 -> True, "50" -> 50).
+        _write_game_json(
+            hermetic_persistence,
+            {"audio": {"sfx_enabled": 1, "music_volume": "50"}},
+        )
+        result = game_config.load_game_config()
+        assert result.audio == AudioConfig(sfx_enabled=True, music_volume=50)
 
 
 class TestSaveGameConfigSection:
