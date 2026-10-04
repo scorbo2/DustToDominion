@@ -24,8 +24,8 @@ class TextPanel(Widget):
     def __init__(
         self,
         rect: pygame.Rect,
-        text: str | None = None,
-        font_size: int = 14,
+        text: str | None = None, # immutable after construction
+        font_size: int = 14, # immutable after construction
         icon: pygame.Surface | None = None,
         border_width: int = 0,
         audio_on_appear: str | None = None,
@@ -60,9 +60,18 @@ class TextPanel(Widget):
 
     def is_visible(self) -> bool:
         # Reports whether this TextPanel is on screen and not fully transparent.
-        # "On screen" = this panel's current rendered rect intersects ([0, DESIGN_W] x [0, DESIGN_H]).
+        # "On screen" = this panel's current rendered rect in design space intersects 
+        # ([0, DESIGN_W] x [0, DESIGN_H]).
         # This function can be polled during a disappearance animation to detect when the
         # TextPanel can be removed from UIManager.
+
+    def current_rect(self) -> pygame.Rect:
+        # During slide animations, the "current" rect may not match the rect that
+        # was supplied to the constructor, because the panel is moving. This function
+        # returns the current position of the panel, and self.rect always returns
+        # the rect that was given to the constructor (the desired position).
+        # When the slide-in completes, the two rects will be the same, at least
+        # until a slide-out begins.
 
     def slide_in(self, start_rect: pygame.Rect, frames: int = 30) -> None:
         # See Animation options (requires appear())
@@ -84,7 +93,11 @@ class TextPanel(Widget):
 
 As part of this implementation, spec `04-ui-widgets.md` should be amended to add
 a `selected` property to the Widget base class, alongside `enabled`.
-The new property defaults to False.
+The new property defaults to False. Spec 04 currently says "Disabled widgets
+cannot be selected/highlighted," which reads as "the state cannot be set."
+This should be relaxed to say that "Disabled widgets that are also selected
+should display as disabled (that is, the `*Selected` theme colors are not used).
+A widget can be both selected and disabled, but visually, "disabled" takes precedence.
 
 Additionally, a note should be added to spec 04 indicating that a Widget that is
 both selected and disabled is considered disabled (disabled has higher precedence than selected).
@@ -96,8 +109,8 @@ A disabled widget's "selected" status can still hold whatever meaning the game a
 state, even if the selection state is not visible to the user.
 
 Spec `05-audio-manager.md` should be amended to add `stop_sfx(id)` to request that the
-given sound effect id should be stopped if it is currently playing. This is needed
-because our TextPanel animation can be interrupted, causing associated audio to be stopped
+given sound effect id should be stopped if it is currently playing (`loader.get_sfx_resource(id).stop()`).
+This is needed because our TextPanel animation can be interrupted, causing associated audio to be stopped
 if in progress.
 
 ## Appearance options
@@ -105,13 +118,16 @@ if in progress.
 - `icon`: if `None`, no icon is displayed. If specified, the icon is scaled proportionally until its height
   fits inside the border of the TextPanel, and aligned at the left inside edge of the TextPanel
   (inside the border, no margin). The icon is never stretched to fit - aspect ratio is preserved.
+  The icon might need to be scaled *up* if it is smaller than its display area, but the typical case
+  will be scaling the icon *down* if it is larger. Both should work - the icon is always displayed
+  such that its scaled height fits inside the border of the TextPanel.
   Icons that are too wide to render in the text panel are clipped at the inside edge of the panel border.
   Note that very wide icons may therefore leave no room for text - this is a client responsibility.
   Our rendering is best-effort based on the parameters given to us by the client.
-- `text`: if blank, empty, or `None`, no text is displayed. Text is rendered using foregroundNormal
-  and the configured font retrieved from the Theme class.
+- `text`: if blank, empty, or `None`, no text is displayed. Text is rendered using the state-appropriate
+  foreground color and the configured font retrieved from the Theme class.
 - `rect`: (inherited from `Widget`): a `pygame.Rect` describing the left, top, width, and height of the TextPanel
-  (in design resolution). The rect is filled with backgroundNormal before drawing panel border and contents.
+  (in design resolution). The rect is filled with the state-appropriate background color before drawing panel border and contents.
   Respect the theme's corner radius when filling the rect!
 - `border_width`: a pixel width (in design resolution) for the border. Border is drawn using foregroundNormal.
   Set to 0 for no border. Respect the theme's corner radius when drawing the border!
@@ -124,10 +140,9 @@ from the current theme are therefore never used here.
 
 ## Animation options
 
-By default, TextPanels simply appear according to their rect when added to UIManager
-with their text fully rendered. But TextPanel should support animation options via
-setters. Animation speeds are measured in frames, not in clock units - UIManager
-invokes `update()` once per frame, so that Widget implementations (and unit tests)
+By default, TextPanels simply become visible with their text fully rendered when added to UIManager. 
+But TextPanel should support animation options via setters. Animation speeds are measured in frames,
+not in clock units - UIManager invokes `update()` once per frame, so that Widget implementations (and unit tests)
 have an easy way of measuring animation progress irrespective of the clock.
 
 ### Appearance/disappearance options:
@@ -152,7 +167,7 @@ and fully opaque (255 alpha) within the caller-supplied duration.
 
 Any given `frames` value less than or equal to 0 disables the animation (instant appear/disappear).
 
-The `slide_in()`, `fade_in()`, `slide_out`, and `fade_out` functions can be invoked multiple
+The `slide_in()`, `fade_in()`, `slide_out()`, and `fade_out()` functions can be invoked multiple
 times before `appear()` is first invoked. The most recent invocation's parameters are used.
 Invocations after `appear()` are ignored - the options are set at that point.
 
@@ -174,7 +189,7 @@ a new appearance animation (or instant appearance if no appearance animation opt
 cases, the new animation continues from the current interpolated state.
 
 UIManager only invokes `update()` for non-disabled widgets! Disabling a widget effectively
-freezes all animation options! Clients must take care to avoid disabling a widget if animation
+freezes all animation! Clients must take care to avoid disabling a widget if animation
 options are given.
 
 ### Typing animation
@@ -204,15 +219,19 @@ typing animation does not repeat.
 If `disappear()` is invoked before the typing animation has completed, the typing animation is
 cancelled and the text is simply fully rendered (useful in case `appear()` is subsequently invoked).
 
+Note that if the text given to the constructor was empty or None, the typing animation is a no-op.
+
 ## Displaying text
 
 Text is top-aligned within the available space. Line height is the font line height (`get_height()`).
+Text cannot be changed after construction.
 
 Text is never scaled! The client specifies the font size as a constructor option, or
-accepts the default size of 14pt. Text line-wraps automatically at word boundaries using
-any whitespace. Explicit `\n` in the given text is interpreted as a line break. Runs
-of consecutive whitespace (multiple spaces, for example) are kept as-is, not collapsed.
-So, multiple `\n` in the text result in multiple line breaks.
+accepts the default size of 14pt. Font size cannot be changed after construction.
+Text line-wraps automatically at word boundaries using any whitespace (tabs included).
+Explicit `\n` in the given text is interpreted as a line break. Runs
+of consecutive whitespace (multiple spaces, for example) are kept as-is, not collapsed,
+even if the break point for line wrap falls inside a whitespace run.
 
 There are several scenarios where text cannot be fully rendered:
 - client specifies a rect that is too small and/or a font size that is too large.
@@ -248,7 +267,9 @@ the appearance audio, and `disappear()` with no disappearance animation still tr
 the disappearance audio. If animation options are specified, audio does not wait for the
 animation to complete - audio begins playing at the *start* of the animation.
 If an animation is interrupted (for example, if `disappear()` is invoked while the
-appearance audio is still playing), the audio is stopped.
+appearance audio is still playing), the audio is stopped. Invoking `disappear()`
+stops any in-progress appearance audio; invoking `appear()` stops any in-progress
+disappearance audio.
 
 TextPanel uses the global singleton AudioManager instance in the audio module.
 Testing note: the test suite must use the `mixer_ready` fixture (the spec 05 pattern)
@@ -267,6 +288,8 @@ This document introduces no new configuration keys.
 
 - A TextPanel with no icon and no text simply renders an empty rect with the appropriate colors.
 - A TextPanel with an icon but no text renders the icon at the left inside edge of the panel.
+- A large icon is scaled down proportionally to fit inside the TextPanel's border.
+- A small icon is scaled up proportionally until its scaled height matches the internal height of the panel.
 - A TextPanel with no icon but with text renders the text inside the panel, respecting the
   margin between text and inner edge of panel border on all sides.
 - A TextPanel with both icon and text renders the icon at the left inside edge of the panel,
@@ -282,10 +305,13 @@ This document introduces no new configuration keys.
   appearance audio has completed stops playing the appearance audio. Invoking `appear()` afterwards
   plays the appearance audio again.
 - Disabling a TextPanel changes its appearance according to the current theme.
+- Disabling a TextPanel mid-animation freezes that animation (because `update()` is no longer being called by UIManager).
+  - Re-enabling a TextPanel that was frozen mid-animation resumes the animation.
 - Selecting a TextPanel changes its appearance according to the current theme.
   (Note: disabling has a higher precedence than selecting - if both selected and disabled, the panel is disabled).
 - Animation options (appearance, disappearance, and typing) are respected if `appear()/disappear()` is invoked.
 - The `appear()`, `disappear()`, `appear()` cycle can be repeated to make a panel appear, then disappear, then reappear.
+- `current_rect()` returns the mid-animation position of a TextPanel during a slide-in or slide-out animation.
 - Text wraps at word boundaries in a best-effort fashion (text too large to display for any reason gets clipped at the inner border edge).
 - If valid audio IDs are given for appearance/disappearance, they are played.
   - If a panel appears/disappears multiple times, the associated audio plays once per successful appearance/disappearance.
