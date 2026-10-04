@@ -28,13 +28,14 @@ class TextPanel(Widget):
         font_size: int = 14,
         icon: pygame.Surface | None = None,
         border_width: int = 0,
-        audio_on_appear: str = None,
-        audio_on_disappear: str = None,
+        audio_on_appear: str | None = None,
+        audio_on_disappear: str | None = None,
     ) -> None:
         super().__init__(rect)
         self.text = text
         self.icon = icon
         self.border_width = border_width
+        # etc.
 
     # -- input (spec 04: Widgets) ------------------------------------------
     def update(self, events: list[pygame.event.Event]) -> None:
@@ -43,12 +44,10 @@ class TextPanel(Widget):
     # -- rendering (spec 04: Widgets) ---------------------
     def draw(self, surf: pygame.Surface, theme: Theme) -> None:
         # TextPanel displays in normal theme colors (foregroundNormal, backgroundNormal)
-        # TextPanel can be programmatically selected:
-        #    set_selected(), is_selected()
+        # TextPanel can be programmatically selected using the selected property in parent Widget class
         # A selected TextPanel changes colors (foregroundSelected, backgroundSelected)
         # TextPanels don't respond to mouse hover events! The "*Hover" colors are not used.
-        # TextPanel can be programmatically disabled:
-        #    set_enabled(), is_enabled()
+        # TextPanel can be programmatically disabled using the enabled property in parent Widget class
         # A disabled TextPanel changes colors (foregroundDisabled, backgroundDisabled)
 
     def appear(self) -> None:
@@ -145,7 +144,7 @@ The use of an appearance animation does not require the matching disappearance o
 For example, a TextPanel can slide in on `appear()` without sliding out on `disappear()`.
 
 Quadratic easing formula: `slide_in` uses quadratic ease-out `p(t) = 1 − (1−t)²` (arrives slowly),
-and `slide_out` uses quadratic ease-in `p(t) = t²` (departs fast). This formula is not
+and `slide_out` uses quadratic ease-in `p(t) = t²` (departs slowly). This formula is not
 caller-configurable - only the duration of the animation can be controlled by the client.
 
 Fade-in and fade-out are handled with simple linear transition between fully transparent (0 alpha)
