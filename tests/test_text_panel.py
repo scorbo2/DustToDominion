@@ -796,6 +796,27 @@ class TestTextRendering:
         assert _contains_pixel(screen, pygame.Rect(0, 0, 120, 60), NORMAL_FG)
         assert _all_pixels_equal(screen, pygame.Rect(120, 0, 40, 60), BLACK)
 
+    def test_unwrappable_word_followed_by_whitespace_should_still_draw_clipped(
+        self, font_ready: None
+    ) -> None:
+        # GIVEN the same far-too-wide word, but followed by a space and
+        # a second word - the case the bare-word test misses, and the
+        # shape of a long identifier inside ordinary prose:
+        panel = TextPanel(
+            pygame.Rect(0, 0, 120, 60),
+            text="a" * 80 + " tail",
+            font_size=TEXT_FONT_SIZE,
+        )
+
+        # WHEN it appears and draws:
+        screen = _appear_and_draw(panel, _theme(TEST_THEME_JSON))
+
+        # THEN the draw survives (it used to raise ValueError from the
+        # wrap) and still clips at the inner border edge, with nothing
+        # outside the panel (spec 06: no scrolling):
+        assert _contains_pixel(screen, pygame.Rect(0, 0, 120, 60), NORMAL_FG)
+        assert _all_pixels_equal(screen, pygame.Rect(120, 0, 40, 60), BLACK)
+
     @pytest.mark.parametrize("text", [None, "", "   ", "\t"])
     def test_blank_empty_or_none_text_should_render_no_text(
         self, font_ready: None, text: str | None
@@ -1602,6 +1623,24 @@ class TestWrapText:
         # (spec 06: no scrolling):
         assert wrap_text("supercalifragilistic", font, 10) == [
             "supercalifragilistic"
+        ]
+
+    def test_wrap_text_with_whitespace_after_an_unwrappable_word_should_not_raise(
+        self, font_ready: None
+    ) -> None:
+        # GIVEN an over-long word followed by a whitespace run and a
+        # second word, at a width far too small for either word (the
+        # shape of a long URL or identifier inside a narrow tooltip):
+        font = _theme(TEST_THEME_JSON).get_font(TEXT_FONT_SIZE)
+
+        # WHEN it is wrapped:
+        # THEN the over-long word is emitted whole, the whitespace run
+        # carries to the next line, and no ValueError escapes
+        # (spec 06: unwrappable words are the caller's business):
+        assert wrap_text("supercalifragilistic expialidocious", font, 10) == [
+            "supercalifragilistic",
+            " ",
+            "expialidocious",
         ]
 
     def test_wrap_text_should_treat_tabs_as_wrap_points(self, font_ready: None) -> None:

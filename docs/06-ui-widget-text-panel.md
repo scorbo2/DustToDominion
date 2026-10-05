@@ -90,10 +90,10 @@ class TextPanel(Widget):
     def set_typing_options(self, speed: int, show_cursor: bool = False) -> None:
         # See Typing animation section
 
-    def set_audio_on_appear(self, id : str | None) -> None:
+    def set_audio_on_appear(self, resource_id: str | None) -> None:
         # Changes the audio id to play on appearance (None unsets it).
 
-    def set_audio_on_disappear(self, id : str | None) -> None:
+    def set_audio_on_disappear(self, resource_id: str | None) -> None:
         # Changes the audio id to play on disappearance (None unsets it).
 ```
 
@@ -158,7 +158,7 @@ from the current theme are therefore never used here.
 ## Animation options
 
 Before the first `update()`, the panel draws nothing and `is_visible()` returns False.
-Disabling a panel before the first `update()` prevents from appearing at all.
+Disabling a panel before the first `update()` prevents it from appearing at all.
 
 By default, the first time `update()` is invoked by the UIManager on a non-disabled TextPanel, the TextPanel will
 simply become visible at full opacity at its given rect. But, TextPanel also offers animation options
@@ -316,7 +316,7 @@ This document introduces no new configuration keys.
 - Disabling a TextPanel before first `update()` prevents its appearance. Enabling it causes it to appear on next `update()`.
 - Disabling a TextPanel after first `update()` changes its appearance according to the current theme.
   (Uses theme's `*Disabled` colors). Re-enabling it changes it back to the `*Normal` or `*Selected` colors as appropriate.
-- Attempting to change animation options after the first call to `update()` are ignored.
+- Attempts to change animation options after the first call to `update()` are ignored.
 - Disabling a TextPanel mid-animation freezes that animation (because `update()` is no longer being called by UIManager).
   - Re-enabling a TextPanel that was frozen mid-animation resumes the animation.
 - Selecting a non-disabled TextPanel changes its appearance according to the current theme.

@@ -45,11 +45,15 @@ import pygame
 
 from dtd import game_constants
 from dtd.audio import get_audio_manager
-from dtd.ui import Theme, Widget, current_scale
+from dtd.ui import Scale, Theme, Widget, current_scale
 
 #: A whitespace run or a single word - the tokenization unit for
 #: word-boundary wrapping (spec 06: Displaying text).
 _WHITESPACE_OR_WORD = re.compile(r"\s+|\S+")
+
+#: The design-space viewport used by ``is_visible()`` (spec 06). Clients
+#: poll it every frame during a disappearance, so it is built once.
+_DESIGN_VIEWPORT = pygame.Rect(0, 0, game_constants.DESIGN_W, game_constants.DESIGN_H)
 
 _FULLY_OPAQUE = 255
 
@@ -89,9 +93,16 @@ def _wrap_paragraph(
                 # still fits on this line, carry the rest over
                 # (spec 06: runs are kept as-is, not collapsed).
                 fit = max(
-                    count
-                    for count in range(len(token), -1, -1)
-                    if font.size(current + token[:count])[0] <= max_width
+                    (
+                        count
+                        for count in range(len(token), -1, -1)
+                        if font.size(current + token[:count])[0] <= max_width
+                    ),
+                    # default=0: `current` is itself an over-long word
+                    # wider than max_width, so no split fits. Emit it
+                    # whole and carry the run over - the spec's
+                    # "unwrappable words get clipped" rule.
+                    default=0,
                 )
                 current += token[:fit]
                 lines.append(current)
@@ -200,6 +211,8 @@ class TextPanel(Widget):
         self._typing: tuple[int, bool] | None = None
         self._revealed = 0.0
         self._typing_complete = False
+        # (cache key, rendered overlay) - see _rendered_overlay().
+        self._render_cache: tuple[tuple, pygame.Surface] | None = None
 
     # -- input (spec 04: Widgets) ------------------------------------------
     def update(self, events: list[pygame.event.Event]) -> None:
@@ -231,6 +244,11 @@ class TextPanel(Widget):
         the panel's current interpolated state; with no disappearance
         options the panel simply becomes fully transparent. Once
         dismissed, the panel can never be made visible again.
+
+        Gotcha: interrupting a fade-in with no fade-out configured
+        freezes alpha at its partial value - the panel stays
+        semi-transparently visible while its position is on screen.
+        Same client-guard caveat as an onscreen slide-out destination.
         """
         if not self._has_appeared or self._is_dismissed:
             return
@@ -258,8 +276,7 @@ class TextPanel(Widget):
         """
         if self._alpha <= 0:
             return False
-        viewport = pygame.Rect(0, 0, game_constants.DESIGN_W, game_constants.DESIGN_H)
-        return self.current_rect().colliderect(viewport)
+        return self.current_rect().colliderect(_DESIGN_VIEWPORT)
 
     def current_rect(self) -> pygame.Rect:
         """The panel's current position in design space (spec 06).
@@ -308,7 +325,13 @@ class TextPanel(Widget):
     # -- audio ids (mutable at any time; handed to AudioManager on
     # appear/disappear - spec 06: Audio) ------------------------------------
     def set_audio_on_appear(self, resource_id: str | None) -> None:
-        """Change (or unset with ``None``) the appearance audio id."""
+        """Change (or unset with ``None``) the appearance audio id.
+
+        Gotcha: ``disappear()`` stops whichever id is set *now*, not the
+        id that was actually played - swapping the id after the panel
+        appeared leaves the old sound playing. Spec 06 is silent on
+        mid-flight id swaps; this behavior is documented, not fixed.
+        """
         self._audio_on_appear = resource_id
 
     def set_audio_on_disappear(self, resource_id: str | None) -> None:
@@ -414,7 +437,11 @@ class TextPanel(Widget):
     # -- rendering (spec 06: TextPanel options / Displaying text) ---------
     def draw(self, surf: pygame.Surface, theme: Theme) -> None:
         """Paint the panel at its current position - or nothing at all
-        before it has appeared or while fully transparent (spec 06)."""
+        before it has appeared or while fully transparent (spec 06).
+
+        The chrome+contents overlay is cached and only rebuilt when
+        something visible actually changed; see :meth:`_rendered_overlay`.
+        """
         if not self._has_appeared or self._alpha <= 0:
             return
         scale = current_scale()
@@ -423,8 +450,74 @@ class TextPanel(Widget):
         if panel.w <= 0 or panel.h <= 0:
             return
         fg, bg = self._state_colors(theme)
-        overlay = pygame.Surface(panel.size, pygame.SRCALPHA)
-        box = pygame.Rect(0, 0, panel.w, panel.h)
+        overlay = self._rendered_overlay(panel.size, scale, theme, fg, bg)
+        overlay.set_alpha(self._alpha)
+        surf.blit(overlay, panel.topleft)
+
+    def _rendered_overlay(
+        self,
+        size: tuple[int, int],
+        scale: Scale,
+        theme: Theme,
+        fg: pygame.Color,
+        bg: pygame.Color,
+    ) -> pygame.Surface:
+        """The panel's contents overlay, rebuilt only when something
+        visible changed.
+
+        The cache key covers everything :meth:`_build_overlay` reads
+        that can change after construction: pixel size and scale
+        (window resize), theme colors and corner radius (state or
+        theme change), the visible text prefix and cursor (typing),
+        and the nominally-immutable icon, border width, and font size
+        (in case a client breaks that convention). While typing runs
+        the prefix changes every frame, so the layout runs exactly
+        then; once typing completes - or without typing at all - the
+        cached overlay is reused untouched.
+
+        Gotcha: the ``Font`` itself is not in the key -
+        ``Theme.get_font``'s fallback path builds a fresh ``Font`` on
+        every call, so font identity could never hit. A theme edit
+        that changes *only* the font (identical colors and corner
+        radius) keeps the cached text until any other key component
+        changes.
+        """
+        prefix = self._visible_prefix()
+        cursor_shown = self._cursor_should_show()
+        key = (
+            size,
+            scale.scale,
+            theme.cornerRadius,
+            tuple(fg),
+            tuple(bg),
+            self.border_width,
+            self.font_size,
+            self.icon,
+            prefix,
+            cursor_shown,
+        )
+        if self._render_cache is not None and self._render_cache[0] == key:
+            return self._render_cache[1]
+        overlay = self._build_overlay(size, scale, theme, fg, bg, prefix, cursor_shown)
+        self._render_cache = (key, overlay)
+        return overlay
+
+    def _build_overlay(
+        self,
+        size: tuple[int, int],
+        scale: Scale,
+        theme: Theme,
+        fg: pygame.Color,
+        bg: pygame.Color,
+        prefix: str,
+        cursor_shown: bool,
+    ) -> pygame.Surface:
+        """Render chrome, icon, and the visible text prefix to a fresh
+        per-pixel-alpha (``SRCALPHA``) overlay, because theme colors may
+        carry alpha and ``pygame.draw`` ignores color alpha on plain
+        surfaces (spec 04: Theme Configuration)."""
+        overlay = pygame.Surface(size, pygame.SRCALPHA)
+        box = pygame.Rect(0, 0, size[0], size[1])
         corner = int(theme.cornerRadius * scale.scale)
         border_px = (
             max(1, int(self.border_width * scale.scale)) if self.border_width > 0 else 0
@@ -436,9 +529,8 @@ class TextPanel(Widget):
             )
         interior = box.inflate(-2 * border_px, -2 * border_px)
         icon_width = self._draw_icon(overlay, interior)
-        self._draw_text(overlay, interior, icon_width, theme, fg)
-        overlay.set_alpha(self._alpha)
-        surf.blit(overlay, panel.topleft)
+        self._draw_text(overlay, interior, icon_width, theme, fg, prefix, cursor_shown)
+        return overlay
 
     def _state_colors(self, theme: Theme) -> tuple[pygame.Color, pygame.Color]:
         """(foreground, background) for the panel's current state.
@@ -481,6 +573,8 @@ class TextPanel(Widget):
         icon_width: int,
         theme: Theme,
         fg: pygame.Color,
+        prefix: str,
+        cursor_shown: bool,
     ) -> None:
         """Render the visible prefix of the wrapped text, top-aligned.
 
@@ -488,10 +582,11 @@ class TextPanel(Widget):
         (spec 06: Displaying text). Text clips at the inner border edge
         and never scrolls. With typing animation only the revealed
         prefix is laid out and drawn, plus the block cursor when
-        requested (spec 06: Typing animation).
+        requested (spec 06: Typing animation). The blank-text guard
+        checks the full text, not the prefix, so the cursor still
+        renders at the start position before the first character.
         """
-        text = self.text
-        if text is None or not text.strip():
+        if self.text is None or not self.text.strip():
             return
         font = theme.get_font(self.font_size)
         margin = font.size("0")[1] // 2
@@ -503,7 +598,7 @@ class TextPanel(Widget):
         )
         if area.w <= 0 or area.h <= 0:
             return
-        lines = wrap_text(self._visible_prefix(), font, area.w)
+        lines = wrap_text(prefix, font, area.w)
         top = area.y
         line_height = font.get_height()
         for line in lines:
@@ -511,7 +606,7 @@ class TextPanel(Widget):
                 break
             self._blit_line_clipped(overlay, font.render(line, True, fg), area, top)
             top += line_height
-        if self._cursor_should_show():
+        if cursor_shown:
             self._draw_cursor(overlay, font, fg, area, lines, line_height)
 
     @staticmethod
