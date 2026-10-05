@@ -18,9 +18,33 @@ from dtd.errors import (
 from dtd.game_config import GameConfig
 
 
+@pytest.fixture
+def synthesized_project(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """A fake project dir whose ``resources/`` tree holds one synthesized resource.
+
+    Tests that let ``run()`` load resources for real must not scan the repo's
+    actual ``resources/`` directory - the suite is hermetic (spec 00), so the
+    result must not depend on whether real assets happen to be checked out.
+    A single UTF-8 text file is the cheapest valid dev-mode resource: no
+    mixer or font decoding is involved, and the default config's empty
+    theme/font values use the built-in defaults without ever querying the
+    loader (spec 04), so one text file is all ``run()`` needs to get to a
+    window.
+    """
+    project = tmp_path / "fake-project"
+    resource = project / "resources/data/hermetic.txt"
+    resource.parent.mkdir(parents=True)
+    resource.write_text("synthesized for a hermetic test", encoding="utf-8")
+    monkeypatch.setattr(resource_loader, "project_directory", lambda: project)
+    return project
+
+
 class TestRun:
     def test_should_open_window_and_exit_cleanly_on_quit_event(
-        self, bootstrapped_persistence: Path, monkeypatch: pytest.MonkeyPatch
+        self,
+        bootstrapped_persistence: Path,
+        synthesized_project: Path,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         # Post a QUIT event on the first event pump so the (otherwise
         # infinite) skeletal loop terminates hermetically. The window size is
@@ -47,7 +71,10 @@ class TestRun:
         assert observed["size"] == (1280, 720)
 
     def test_when_unrelated_pygame_modules_fail_should_open_window_and_exit_cleanly(
-        self, bootstrapped_persistence: Path, monkeypatch: pytest.MonkeyPatch
+        self,
+        bootstrapped_persistence: Path,
+        synthesized_project: Path,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         # GIVEN a machine whose unrelated pygame modules fail (e.g. a
         # headless server without MIDI or joystick drivers) - simulated by
