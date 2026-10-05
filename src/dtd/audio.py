@@ -48,7 +48,7 @@ class _LoopRegistry:
 
     Every loop start/stop/deregister flows through this helper so the
     per-frame idempotency rules and the budget-exhaustion rules live in
-    exactly one place (spec 06 dev plan stage 3 refactoring note).
+    exactly one place.
     """
 
     def __init__(self) -> None:

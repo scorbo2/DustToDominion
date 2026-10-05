@@ -1,12 +1,12 @@
 """Unit tests for the ``TextPanel`` widget (spec 06: TextPanel).
 
-Stage 2 coverage (spec 06 dev plan): rendering, layout, icon scaling,
-line wrap, and the no-animation appearance/disappearance state machine.
-Stage 3 coverage: appearance/disappearance audio through the global
-AudioManager singleton. Stage 4 coverage: slide/fade/typing animation
-and the pure ``wrap_text`` layout helper. Pixel assertions read the
-display surface after ``ui.draw`` at the design resolution (scale 1),
-following the Button test patterns.
+Covers rendering and layout (chrome, icon scaling, fixed margins),
+word-boundary line wrap including the pure ``wrap_text`` helper, the
+appearance/disappearance state machine with slide/fade/typing
+animation, and appearance/disappearance audio through the global
+AudioManager singleton. Pixel assertions read the display surface after
+``ui.draw`` at the design resolution (scale 1), following the Button
+test patterns.
 """
 from __future__ import annotations
 
@@ -1176,6 +1176,26 @@ class TestPanelAnimation:
         assert panel.is_visible() is True
         assert _clear_and_draw(ui).get_at((125, 25)) == NORMAL_BG
 
+    def test_zero_frames_disappearance_options_should_dismiss_instantly(
+        self, font_ready: None
+    ) -> None:
+        # GIVEN an appeared panel whose disappearance durations are <= 0:
+        panel = TextPanel(pygame.Rect(100, 0, 50, 50))
+        panel.set_slide_out_options(pygame.Rect(900, 0, 50, 50), frames=0)
+        panel.set_fade_out_options(frames=-2)
+        ui = _register(panel, _theme(TEST_THEME_JSON))
+        ui.update([])
+
+        # WHEN disappear() is invoked:
+        panel.disappear()
+
+        # THEN the disappearance animations are disabled: fully
+        # transparent at once, and the panel never moved:
+        assert panel.is_visible() is False
+        assert panel.current_rect() == panel.rect
+        _run_frames(ui, 3)
+        assert _clear_and_draw(ui).get_at((125, 25)) == BLACK
+
     def test_animation_option_setters_after_first_update_should_be_ignored(
         self, font_ready: None
     ) -> None:
@@ -1250,6 +1270,27 @@ class TestPanelAnimation:
         _run_frames(ui, 5)
         assert panel.current_rect().x == 900
         assert panel.is_visible() is True
+
+    def test_slide_out_to_offscreen_destination_should_end_invisible(
+        self, font_ready: None
+    ) -> None:
+        # GIVEN an appeared panel with a slide-out to a destination
+        # fully below the viewport:
+        dest_y = game_constants.DESIGN_H + 40
+        panel = TextPanel(pygame.Rect(100, 0, 50, 50))
+        panel.set_slide_out_options(pygame.Rect(100, dest_y, 50, 50), frames=10)
+        ui = _register(panel, _theme(TEST_THEME_JSON))
+        ui.update([])
+
+        # WHEN disappear() runs the slide-out to completion:
+        panel.disappear()
+        _run_frames(ui, 10)
+
+        # THEN it has arrived off screen and is no longer visible
+        # (spec 06: is_visible() is False after an offscreen
+        # slide-out completes):
+        assert panel.current_rect().y == dest_y
+        assert panel.is_visible() is False
 
     def test_disappear_with_fade_out_should_become_invisible_after_all_frames(
         self, font_ready: None
@@ -1510,9 +1551,8 @@ class TestPanelTyping:
 
 
 class TestWrapText:
-    """The pure ``wrap_text`` layout helper (spec 06 dev plan stage 4
-    refactoring: whitespace-splitting rules unit-testable without any
-    rendering)."""
+    """The pure ``wrap_text`` layout helper (spec 06: Displaying text) -
+    the whitespace-splitting rules, unit-tested without any rendering."""
 
     def test_wrap_text_with_a_break_inside_a_whitespace_run_should_split_the_run(
         self, font_ready: None

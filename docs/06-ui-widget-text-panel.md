@@ -1,6 +1,6 @@
 ---
 description: Describes a new UI widget for the game: TextPanel
-status: proposed
+status: active
 ---
 
 # TextPanel
@@ -366,6 +366,7 @@ The spec is too large to implement in one pass. The following staged dev plan is
      extract a small internal loop-registry helper so start/stop/deregister and the idempotency rules live in
      exactly one place.
 4. Implement animation options for appearance and disappearance.
+   **Completed 2026-10-04**
    - Refactoring note from stage 2: the wrap logic (`_wrap_lines`/`_wrap_paragraph`) in
      `dtd/widgets/text_panel.py` is pure text layout currently living inside the widget. The typing animation
      will need to wrap a *prefix* of the text and know where that wrapped prefix ends (for the block cursor).
@@ -374,5 +375,6 @@ The spec is too large to implement in one pass. The following staged dev plan is
      rules become unit-testable without any rendering.
 5. Final checks: all tests should be green, all code and docstrings should align with the spec.
    No stale TODO or "will be done in stage N" style comments or docstrings.
+   **Completed 2026-10-04**
 
 
