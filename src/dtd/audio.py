@@ -117,6 +117,23 @@ class AudioManager:
         """Stop all currently-looping sound effects (spec 05)."""
         self.set_active_loops(frozenset())
 
+    def stop_sfx(self, resource_id: str) -> None:
+        """Stop the given sound effect id if it is currently playing
+        (spec 05: Stopping sound effects, added by spec 06: TextPanel).
+
+        Unknown ids and ids that are not playing are silent no-ops. With
+        sfx disabled nothing can be playing, so this is inherently a
+        no-op in that state. ``Sound.stop()`` halts the sound on ALL
+        channels, so this may also silence another consumer playing the
+        same sound - acceptable per spec 06.
+        """
+        sound = self._loader.get_sfx_resource(resource_id)
+        if sound is not None:
+            sound.stop()
+        # The stop() above already silenced any loop of this sound; only
+        # the bookkeeping needs clearing (spec 06 implementation notes).
+        self._active_loops.pop(resource_id, None)
+
     def _start_loop(self, resource_id: str) -> None:
         sound = self._loader.get_sfx_resource(resource_id)
         if sound is None:

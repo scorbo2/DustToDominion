@@ -355,9 +355,14 @@ This document introduces no new configuration keys.
 The spec is too large to implement in one pass. The following staged dev plan is proposed (each stage should include tests):
 
 1. Implement the amendments to previous spec docs. Change the specs, then update the code for both 04 and 05.
+   **Completed 2026-10-04**
 2. Implement TextPanel with stubbed animation handling. No sliding, no fading, no typing - just simple rendering.
    Line-wrap, icon scaling, and widget layout are implemented at this stage.
 3. Implement audio support for panel appearance and disappearance.
+   - Refactoring note from stage 1: the `_active_loops` bookkeeping in `dtd/audio.py` is now touched in four
+     places (`set_active_loops`, `_start_loop`, `stop_sfx`, `_stop_all_sfx`). Once TextPanel audio is wired in,
+     extract a small internal loop-registry helper so start/stop/deregister and the idempotency rules live in
+     exactly one place.
 4. Implement animation options for appearance and disappearance.
 5. Final checks: all tests should be green, all code and docstrings should align with the spec.
    No stale TODO or "will be done in stage N" style comments or docstrings.
