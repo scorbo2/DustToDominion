@@ -358,12 +358,19 @@ The spec is too large to implement in one pass. The following staged dev plan is
    **Completed 2026-10-04**
 2. Implement TextPanel with stubbed animation handling. No sliding, no fading, no typing - just simple rendering.
    Line-wrap, icon scaling, and widget layout are implemented at this stage.
+   **Completed 2026-10-04**
 3. Implement audio support for panel appearance and disappearance.
    - Refactoring note from stage 1: the `_active_loops` bookkeeping in `dtd/audio.py` is now touched in four
      places (`set_active_loops`, `_start_loop`, `stop_sfx`, `_stop_all_sfx`). Once TextPanel audio is wired in,
      extract a small internal loop-registry helper so start/stop/deregister and the idempotency rules live in
      exactly one place.
 4. Implement animation options for appearance and disappearance.
+   - Refactoring note from stage 2: the wrap logic (`_wrap_lines`/`_wrap_paragraph`) in
+     `dtd/widgets/text_panel.py` is pure text layout currently living inside the widget. The typing animation
+     will need to wrap a *prefix* of the text and know where that wrapped prefix ends (for the block cursor).
+     Extract a module-level `wrap_text(text, font, max_width) -> list[str]` helper (or a small layout object
+     carrying lines plus metrics) so drawing and typing share one layout pass, and the whitespace-splitting
+     rules become unit-testable without any rendering.
 5. Final checks: all tests should be green, all code and docstrings should align with the spec.
    No stale TODO or "will be done in stage N" style comments or docstrings.
 

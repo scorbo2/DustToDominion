@@ -22,10 +22,10 @@ Rendering contract (spec 06):
   verbatim, honors explicit newlines, and clips at the inner edge of
   the border - there is no scrolling.
 
-Implementation status (spec 06 dev plan): stage 2 - rendering, layout,
-icon scaling, and line wrap are complete. The appearance/disappearance
-state machine implements the no-animation default (instant appear and
-disappear); audio arrives in stage 3 and slide/fade/typing animation in
+Implementation status (spec 06 dev plan): stages 2-3 complete -
+rendering, layout, icon scaling, line wrap, and appearance/disappearance
+audio. The state machine still implements the no-animation default
+(instant appear and disappear); slide/fade/typing animation arrives in
 stage 4.
 """
 from __future__ import annotations
@@ -35,6 +35,7 @@ import re
 import pygame
 
 from dtd import game_constants
+from dtd.audio import get_audio_manager
 from dtd.ui import Theme, Widget, current_scale
 
 #: A whitespace run or a single word - the tokenization unit for
@@ -103,7 +104,11 @@ class TextPanel(Widget):
         if not self._has_appeared:
             self._has_appeared = True
             self._alpha = _FULLY_OPAQUE
-            # Spec 06 dev plan stage 3: play audio_on_appear here.
+            if self._audio_on_appear is not None:
+                # Spec 06: Audio - the id goes to AudioManager as-is;
+                # the panel never validates it, and audio does not wait
+                # for any animation.
+                get_audio_manager().play_sfx(self._audio_on_appear)
 
     def disappear(self) -> None:
         """Dismiss the panel (spec 06: Appearance/disappearance options).
@@ -117,8 +122,12 @@ class TextPanel(Widget):
             return
         self._is_dismissed = True
         self._alpha = 0
-        # Spec 06 dev plan stage 3: play audio_on_disappear and stop any
-        # in-progress appearance audio here.
+        if self._audio_on_appear is not None:
+            # Spec 06: Audio - disappear() silences any in-progress
+            # appearance audio before its own starts playing.
+            get_audio_manager().stop_sfx(self._audio_on_appear)
+        if self._audio_on_disappear is not None:
+            get_audio_manager().play_sfx(self._audio_on_disappear)
 
     def is_visible(self) -> bool:
         """Whether the panel is on screen with an alpha above zero.
@@ -170,7 +179,8 @@ class TextPanel(Widget):
             return
         self._typing = (speed, show_cursor)
 
-    # -- audio ids (played in spec 06 dev plan stage 3) -------------------
+    # -- audio ids (mutable at any time; handed to AudioManager on
+    # appear/disappear - spec 06: Audio) ------------------------------------
     def set_audio_on_appear(self, resource_id: str | None) -> None:
         """Change (or unset with ``None``) the appearance audio id."""
         self._audio_on_appear = resource_id

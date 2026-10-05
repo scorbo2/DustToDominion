@@ -42,14 +42,66 @@ class _UnboundedVolume(BaseModel):
     value: int
 
 
+class _LoopRegistry:
+    """Bookkeeping for which sfx loops are playing on which channels
+    (spec 05: Channel budget).
+
+    Every loop start/stop/deregister flows through this helper so the
+    per-frame idempotency rules and the budget-exhaustion rules live in
+    exactly one place (spec 06 dev plan stage 3 refactoring note).
+    """
+
+    def __init__(self) -> None:
+        self._channels: dict[str, pygame.mixer.Channel] = {}
+
+    def active_ids(self) -> set[str]:
+        """The ids currently marked as looping."""
+        return set(self._channels)
+
+    def start(
+        self, resource_id: str, sound: pygame.mixer.Sound, volume_fraction: float
+    ) -> None:
+        """Start ``sound`` looping for ``resource_id``.
+
+        Any in-flight one-shot of the same sound is killed first (spec 05:
+        an id already playing via ``play_sfx`` restarts AS a loop). Budget
+        exhaustion simply leaves the id inactive - it is retried on a
+        later frame (spec 05: Channel budget).
+        """
+        sound.stop()
+        sound.set_volume(volume_fraction)
+        channel = pygame.mixer.find_channel(force=False)
+        if channel is None:
+            return
+        channel.play(sound, loops=-1)
+        self._channels[resource_id] = channel
+
+    def stop(self, resource_id: str) -> None:
+        """Stop and deregister one loop. Unknown ids are a no-op."""
+        channel = self._channels.pop(resource_id, None)
+        if channel is not None:
+            channel.stop()
+
+    def deregister(self, resource_id: str) -> None:
+        """Drop one loop's bookkeeping without stopping anything - the
+        caller has already silenced the sound on every channel (the
+        ``stop_sfx`` path, per the spec 06 implementation notes)."""
+        self._channels.pop(resource_id, None)
+
+    def clear(self) -> None:
+        """Drop all loop bookkeeping without stopping anything - the
+        caller has already silenced the channels."""
+        self._channels.clear()
+
+
 class AudioManager:
     """Plays sound effects and music on behalf of the game (spec 05).
 
     State kept:
 
-    - ``_active_loops``: resource id -> the mixer channel a sfx loop is
-      playing on, so ``channel.stop()`` can target exactly that loop
-      (spec 05: Channel budget).
+    - ``_loops``: a ``_LoopRegistry`` mapping resource id -> the mixer
+      channel a sfx loop is playing on, so ``channel.stop()`` can target
+      exactly that loop (spec 05: Channel budget).
     - ``_current_music_id``: the id of the music track currently loaded and
       playing, so re-requesting it is a no-op rather than a restart
       (spec 05: AudioManager).
@@ -72,7 +124,7 @@ class AudioManager:
         # that calling it earlier raises "mixer not initialized" (spec 05:
         # Channel budget).
         pygame.mixer.set_num_channels(AUDIO_CHANNEL_BUDGET)
-        self._active_loops: dict[str, pygame.mixer.Channel] = {}
+        self._loops = _LoopRegistry()
         self._current_music_id: str | None = None
         # Apply the persisted music volume up front so the first track
         # starts at the configured level (spec 05: startup applies config).
@@ -108,9 +160,9 @@ class AudioManager:
         if not self._config.sfx_enabled:
             return
         desired = set(resource_ids)
-        for resource_id in set(self._active_loops) - desired:
-            self._active_loops.pop(resource_id).stop()
-        for resource_id in desired - set(self._active_loops):
+        for resource_id in self._loops.active_ids() - desired:
+            self._loops.stop(resource_id)
+        for resource_id in desired - self._loops.active_ids():
             self._start_loop(resource_id)
 
     def stop_loops(self) -> None:
@@ -130,25 +182,18 @@ class AudioManager:
         sound = self._loader.get_sfx_resource(resource_id)
         if sound is not None:
             sound.stop()
-        # The stop() above already silenced any loop of this sound; only
-        # the bookkeeping needs clearing (spec 06 implementation notes).
-        self._active_loops.pop(resource_id, None)
+        # The stop() above already silenced any loop of this sound on every
+        # channel; only the bookkeeping needs clearing (spec 06
+        # implementation notes).
+        self._loops.deregister(resource_id)
 
     def _start_loop(self, resource_id: str) -> None:
         sound = self._loader.get_sfx_resource(resource_id)
         if sound is None:
             return
-        # Spec 05: an id already playing via play_sfx is restarted AS a
-        # loop, so kill any in-flight one-shot(s) of this sound first.
-        sound.stop()
-        sound.set_volume(self._sfx_volume_fraction())
-        channel = pygame.mixer.find_channel(force=False)
-        if channel is None:
-            # Budget exhausted: not marked active, retried next frame
-            # (spec 05: Channel budget).
-            return
-        channel.play(sound, loops=-1)
-        self._active_loops[resource_id] = channel
+        # The registry owns the restart-as-loop and channel-budget rules
+        # (spec 05: Channel budget).
+        self._loops.start(resource_id, sound, self._sfx_volume_fraction())
 
     # ------------------------------------------------------------------ #
     # music
@@ -262,7 +307,7 @@ class AudioManager:
     def _stop_all_sfx(self) -> None:
         for channel in self._iter_channels():
             channel.stop()
-        self._active_loops.clear()
+        self._loops.clear()
 
     def _coerce_volume(self, field_name: str, value: object) -> int:
         """Coerce a caller-supplied volume under spec 05's validation rules.
