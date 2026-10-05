@@ -350,3 +350,16 @@ This document introduces no new configuration keys.
 - Can TextPanels be selected programmatically? Does it affect their appearance? Can they be unselected again?
 - Can TextPanels be disabled programmatically? Does it affect their appearance? Can they be enabled again?
 
+## Dev plan
+
+The spec is too large to implement in one pass. The following staged dev plan is proposed (each stage should include tests):
+
+1. Implement the amendments to previous spec docs. Change the specs, then update the code for both 04 and 05.
+2. Implement TextPanel with stubbed animation handling. No sliding, no fading, no typing - just simple rendering.
+   Line-wrap, icon scaling, and widget layout are implemented at this stage.
+3. Implement audio support for panel appearance and disappearance.
+4. Implement animation options for appearance and disappearance.
+5. Final checks: all tests should be green, all code and docstrings should align with the spec.
+   No stale TODO or "will be done in stage N" style comments or docstrings.
+
+
