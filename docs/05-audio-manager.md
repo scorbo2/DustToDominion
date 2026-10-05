@@ -101,6 +101,13 @@ class AudioManager:
         # Stop all currently-looping sound effects:
         self.set_active_loops(frozenset())
 
+    def stop_sfx(self, id: str) -> None:
+        # Request that the given sound effect id be stopped if it is currently
+        # playing. (Added 2026-10-04 per spec 06: TextPanel - an interrupted
+        # panel animation must silence its audio.)
+        # It is not an error if id does not resolve to a sound effect, or is
+        # not currently playing: nothing happens.
+
     # Also include: getters and setters for configuration properties:
     #   sfx_enabled
     #   music_enabled
@@ -151,6 +158,23 @@ Note that the 16-channel pool is shared between one-shot sfx and loops (this is 
 (Verified against pygame-ce 2.5.8: `set_num_channels` must be called *after* `mixer.init()`,
  otherwise you get `pygame.error: mixer not initialized`.)
 
+### Stopping sound effects
+
+*Amended 2026-10-04 per spec 06 (TextPanel).*
+
+`stop_sfx(id)` requests that the given sound effect id be stopped if it is currently playing.
+Implementation notes:
+
+- if `loader.get_sfx_resource(id)` resolves to a `mixer.Sound` instance, invoke `stop()` on it;
+- if the id was in the active-loops bookkeeping, remove it (the `stop()` invocation above has
+  already stopped it anyway);
+- invoking `stop()` on the Sound object will stop it playing on ALL channels. This may cause it to
+  stop even if some other consumer (for example, another TextPanel instance) was also playing the
+  same sound. Acceptable.
+
+When `sfx_enabled` is false nothing can be playing, so `stop_sfx` is inherently a silent no-op in
+that state.
+
 ## Testing
 
 Our hermetic test environment already contains a dummy audio driver and a `mixer_ready` fixture - use them.
@@ -175,6 +199,15 @@ Simple, short, single-tone sounds are sufficient.
   - `sfx_volume` can be adjusted while audio is playing - changes take effect immediately.
   - setting `sfx_enabled` to False while any sfx is playing stops it.
   - `play_sfx` with a music-typed resource id does nothing.
+  - `stop_sfx` (added by spec 06):
+    - `stop_sfx` with a valid id that is currently playing stops it.
+    - `stop_sfx` stops the sound on all channels, even if it was played more than once.
+    - `stop_sfx` with an id that is an active loop stops the loop and removes it from the active
+      set (re-submitting the same set starts it again).
+    - `stop_sfx` with a non-existent id is a silent no-op.
+    - `stop_sfx` with a valid id that is not playing does not disturb other currently playing sfx.
+    - `stop_sfx` with a music-typed id does not affect the currently playing music track.
+    - `stop_sfx` when `sfx_enabled` is false is a silent no-op.
 - When `music_enabled` is true:
   - `play_music` with a non-existent id is a silent no-op if no music is currently playing.
   - `play_music` with a valid track id starts playing the given track, and loops it when it completes.

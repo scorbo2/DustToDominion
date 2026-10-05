@@ -118,6 +118,7 @@ class Widget:
         self.rect = rect # in design space
         self.hovered = False
         self.enabled = True
+        self.selected = False # programmatic only; see "Selecting widgets"
 
     def hit(self, pos) -> bool:
         return self.rect.collidepoint(pos) # in design space
@@ -181,7 +182,27 @@ or from the fallback described above.
 
 All widgets are enabled by default. This means they render using the "normal", "selected", and "hover"
 colors from the current theme. If a widget is disabled, it is rendered using the "disabled" colors,
-and no longer responds to mouse click or mouse hover events. Disabled widgets cannot be selected/highlighted.
+and no longer responds to mouse click or mouse hover events. A disabled widget that is also selected
+is rendered as disabled - the `*Selected` theme colors are not used while the widget is disabled
+(see the precedence note in "Selecting widgets" below).
+
+### Selecting widgets
+
+*Amended 2026-10-04 per spec 06 (TextPanel).*
+
+The `Widget` base class carries a `selected` property alongside `enabled`. It defaults to `False`
+and is only ever set programmatically by client code - the framework itself never selects or
+deselects widgets. A selected, enabled widget renders using the `*Selected` colors from the current
+theme. Not every widget supports selection: a widget that cannot be selected (such as Button)
+simply never uses the `*Selected` colors.
+
+Precedence note: a Widget that is both selected and disabled is considered disabled - "disabled" has
+higher precedence than "selected" when determining which theme colors to use when rendering the
+widget. Each Widget implementation class is responsible for managing its appearance accordingly.
+Setting a widget to both selected and disabled does not cancel the selected status - it merely
+effectively hides it from the user until the widget is re-enabled. The precedence order described
+here is purely cosmetic. A disabled widget's "selected" status can still hold whatever meaning the
+game assigns to that state, even while the selection state is not visible to the user.
 
 ### Widget coordinates
 
@@ -267,6 +288,8 @@ button inside the Button's rect. The left mouse button is the click button.
 - valid font supplied: should be available from `get_font_resource`
 - buttons can be created and displayed; they should respect the current theme settings
 - a disabled button should ignore mouse events
+- the `Widget` base class exposes a `selected` property that defaults to False, and the base class
+  never clears it when the widget is disabled (spec 06 amendment)
 - widget rects specified in design resolution are translated to correct pixel rects in other resolutions.
 - an enabled button should change appearance when hovered over
 - an enabled button should respond to mouse clicks (ONLY when mouse press+up happens within the button's rect).
@@ -308,6 +331,8 @@ The spec can be implemented in stages:
 2. Implement configuration for theme and font; write tests for configuration. **Completed 2026-10-01**
 3. Wire up `UIManager` and `Theme` to use actual configured values. **Completed 2026-10-01**
 4. Implement the `Button` widget. Write all remaining tests. **Completed 2026-10-01**
+5. Amendment per spec 06 (TextPanel): add the `selected` property to the `Widget` base class and
+   document the disabled-over-selected precedence. **Completed 2026-10-04**
 
 Upon completion, if all tests pass, mark this document as "active". (Done 2026-10-01;
 full suite green at 280 tests.)
