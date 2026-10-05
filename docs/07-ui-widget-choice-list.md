@@ -8,12 +8,23 @@ status: proposed
 This document proposes a new `dtd/widgets/choice_list.py` module containing a new
 UI widget for the game: `ChoiceList`. This is NOT a dropdown/combobox, and it is NOT
 a multi-line list chooser. This is a simple single-line component, visually similar
-to the existing Button widget, but with `<` and `>` controls on the left and right sides
+to the existing Button widget, but with `<` and `>` pager controls on the left and right sides
 of the widget to cycle through the available list options one at a time, with list-wrapping
-at both ends of the list. The currently-selected option is displayed in the center of the widget.
+at both ends of the list. The currently-selected list item is displayed in the center of the widget.
+
+## Amendments to previous spec docs
+
+Spec `04-ui-widgets.md` should be amended to clarify that if a Widget is both
+"selected" and in a mouse-hover state, the "selected" state takes precedence for rendering
+purposes. Widgets that support "selection" and mouse hover are responsible for rendering
+accordingly. (Terminology note for this document: a Widget's "selection" state is unrelated
+to the ChoiceList's selected item - widget selection is a cosmetic feature offered by
+the UI framework to visually highlight certain widgets).
+
+## ChoiceList details
 
 There is no keyboard interaction for this widget - the user must use the mouse to click the
-left and right arrows to cycle through options. Clicking the text of the currently-selected
+left and right pager controls to cycle through options. Clicking the text of the currently-selected
 option does nothing.
 
 Related to `04-ui-widgets.md`:
@@ -21,20 +32,21 @@ Related to `04-ui-widgets.md`:
 - The widget can be enabled and disabled, changing its color and enabling/disabling mouse
   interaction with the pager controls.
 - The widget can be "selected" programmatically (a purely cosmetic change).
-  Note that a "selected" widget ignores mouse hover events, but still responds to mouse clicks.
+  Note that a "selected" widget does not render in `*Hover` colors, but still responds to mouse clicks.
 
 If the caller-supplied list of options is empty, the ChoiceList disables itself
 automatically and displays no item. The ChoiceList cannot be programmatically enabled
 if its list is empty. The pager controls are still rendered but are inoperative because
-the widget is disabled.
+the widget is disabled. ChoiceList should implement a property override for the parent
+class's bare `enabled` attribute to manage this.
 
-The caller-supplied list is supplied once as a constructor parameter (only strings
-are accepted), and cannot be modified once set. The ChoiceList constructor performs
+The caller-supplied list is supplied once as a constructor parameter,
+and cannot be modified once set. The ChoiceList constructor performs
 sanitization on the input list, in this order:
-1. Non-strings are removed.
+1. Non-strings are removed, if any were supplied (our type hint is advisory).
 2. Remove `\n` from all items.
 3. Remove any item that is empty ("") or blank (whitespace-only).
-4. Remove duplicates case-insensitively. Keep first occurrence, drop all others.
+4. Remove duplicates case-insensitively (`str.casefold()`). Keep first occurrence, drop all others.
 5. Sort the list case-insensitively.
 
 If the list is empty after sanitization, this is equivalent to supplying an
@@ -42,18 +54,21 @@ empty input list - disable and display no item text.
 
 An optional numeric index can be supplied to the constructor - this is the index
 of the list item which should be selected initially. Note that this is an index
-into the *caller-supplied* list, which may need to be mapped to the actual list
-after sanitization. If the given index is invalid (out of range, or points to
-an item that was removed during sanitization), the default behavior is used. Default behavior:
-the initially-selected item is the first in the list AFTER sanitization. 
-For example: given ["cherry", "banana", "apple"] and no index, the initially-selected
-item will be "apple". Given the same list and an index of 1 ("banana"), the
-initially-selected item will be "banana". Given a list ["", "hello"] and an
-index of 0, the initially-selected item will be "hello" (because the 0th
-item was empty and therefore stripped, so we fall back to the default behavior).
-If an out-of-range or negative value is supplied for this index argument,
-we fall back to the default behavior, and the same applies if a non-int
-value is supplied for the index.
+into the *caller-supplied* list, which needs to be mapped to the actual list
+after sanitization. The mapped index should point to the new index of the exact
+item at that position in the caller list, if that exact entry survived sanitization; 
+otherwise default. Entries that were modified but not removed (example: `"ban\nana"`)
+still count as surviving, mapped to their new position.
+
+If the given `initial_index` is invalid (out of range, or points to
+an item that was removed during sanitization, or is not an integer), the default
+behavior is used. Default behavior: the initially-selected item is the first in the
+list AFTER sanitization. For example: given ["cherry", "banana", "apple"] and no
+index, the initially-selected item will be "apple". Given the same list and an
+index of 1 ("banana"), the initially-selected item will be "banana". Given a
+list ["", "zzz", "hello"] and an index of 0, the initially-selected item will
+be "hello" (because the 0th item was empty and therefore stripped, so we fall
+back to the default behavior).
 
 Note that setting the initial item during construction does NOT trigger
 a callback. Callers can invoke `get_current_item` to learn which item
@@ -64,7 +79,9 @@ class ChoiceList(Widget):
     """A simple list display with cycling pager controls.
 
     ``rect`` is in design space (inherited from ``Widget``); ``border_width``
-    is a width in *design* pixels (0 = no border).
+    is a width in *design* pixels (0 = no border). ``items`` is immutable
+    after construction, but can be partially inspected via ``get_current_item``
+    and ``get_item_count``.
     """
 
     def __init__(
@@ -76,7 +93,7 @@ class ChoiceList(Widget):
         selection_callback: Callable[[str], None] | None = None
     ) -> None:
         super().__init__(rect)
-        self.items = items
+        self._items = items
         self.border_width = border_width
         self._left_pressed = False  # left button pressed inside the left control?
         self._right_pressed = False # left button pressed inside the right control?
@@ -112,10 +129,16 @@ top of the pager controls.
 The pager controls are square, borderless regions on either horizontal end
 of the widget. Their side length is the minimum of 33% of the widget's width,
 or the widget's internal height (that is, the height of the widget minus the border
-width on top and bottom). Their background color is always the same as the ChoiceList's background color.
+width on top and bottom). If the computed side length is less than or equal to 0
+(for example, if border width is greater than half the widget height), then
+the pager controls do not render and the ChoiceList is effectively inoperable
+(not disabled, just not interactive from the user's point of view).
+This is a client problem - our rendering is best-effort.
+
+The background color for pager controls is always the same as the ChoiceList's background color.
 Their foreground (text) color is always the same as the ChoiceList's foreground color.
 The font size for the control's glyph is the largest font size such that the glyph
-plus its top and bottom margin will fit the pager's control square (i.e. the side length defined above).
+plus its top and bottom margin will fit the pager control's boundary (using the side length defined above).
 This may not match the effective font size used for the selected item - that is acceptable.
 Each pager glyph has a margin equal to half the height of the `0` character in the pager control's
 effective font size. This margin is applied on all four sides of the glyph.
@@ -127,6 +150,8 @@ for the pager control, it counts as a mouse click on that control.
 If a pager control's computed side length is less than the internal height of
 the ChoiceList (can happen for tall ChoiceLists), the pager controls should be
 centered vertically within the ChoiceList.
+
+The pager control's text labels are the literal characters `<` and `>`.
 
 ## Determining currently-selected item
 
@@ -160,11 +185,18 @@ This document introduces no new configuration keys.
 - Input lists are sanitized and deduplicated correctly.
   Example: ["apple", "Apple", "APPLE", "banana"] results in ["apple", "banana"] and
   `get_item_count()` should return 2 (the size of the sanitized list, NOT the size of the input list).
+- Supplying a list containing a non-string should result in the non-string item(s) being stripped.
+- List items that differ only by leading/trailing whitespace survive deduplication.
+  Example: ["apple", " apple ", "apple "] results in [" apple ", "apple", "apple "].
+  Note that the order is rearranged due to `casefold()`, but all items remain in the sanitized list.
+  This is not a bug - it is a client-side problem.
 - Supplying a valid input list and an initially selected index should NOT trigger a callback.
 - A ChoiceList with multiple items supplied to its constructor renders normally, and the
   pager controls trigger a callback with the newly-selected item.
   - The given items are alphabetized automatically.
   - Blank or empty items are stripped.
+- If an invalid initial index is given to a ChoiceList (not an int), default behavior should be used.
+- If a ChoiceList is both "selected" and disabled, it should render as disabled, as per spec 04.
 - A ChoiceList with blank or empty items supplied to its constructor does not render them
   (they are dropped from the input list). If this results in an empty list (i.e. all items
   in the list are blank or empty), the ChoiceList behaves as though it were given an empty list.
@@ -177,14 +209,16 @@ This document introduces no new configuration keys.
   to be selected, and vice versa.
 - A ChoiceList given an unreasonably long item that cannot be scaled results in the text
   being clipped. Text does not overlap the pager controls.
+- A ChoiceList with an unreasonably thick border (greater than half the ChoiceList height)
+  prevents the pager controls from rendering. This is not a bug - it's a client-side problem.
 - A "selected" ChoiceList displays in the `*Selected` theme colors, ignoring mouse hover events.
 - The text for each item is scaled to fit the available display space on a best-effort basis.
 - `get_current_item` returns None if the list is empty, or the currently-selected item's text otherwise.
 - ChoiceList responds to mouse hover events by changing color appropriately (unless disabled or selected).
-- ChoiceList can be programmatically selected (cosmetic change only for this widget).
+- ChoiceList can be programmatically "selected" (cosmetic change only for this widget).
 - ChoiceList can be disabled programmatically. Mouse events (including hover) are ignored.
 - Tall ChoiceLists render their pager controls vertically centered within the widget.
-- Narrow choicelists don't allow more than 33% of their horizontal space to be used by the pager controls.
+- Narrow ChoiceLists don't allow more than 33% of their horizontal space to be used by the pager controls.
 
 ## Acceptance criteria
 
@@ -199,4 +233,26 @@ This document introduces no new configuration keys.
 - Can callers query for the currently-selected item?
 - Do the pager controls allow list-wrapping at both ends of the list?
 - Does the ChoiceList de-duplicate and sanitize input lists as expected?
+
+## Dev plan
+
+This specification is too large to implement in one pass. The following staged
+implementation plan is suggested (each stage after 1 should include tests):
+
+1. Small amendment to the 04 spec doc (wording addition only; no code/test changes needed).
+2. Create the ChoiceList class, but stub out `update()` and any internal rendering functions.
+   Implement list sanitization and deduplication. No rendering at this stage.
+   Expose a temporary getter if needed so that tests can inspect the sanitized `_items` list.
+   `get_current_item()` should return the expected value after construction - either the
+   value that the caller requested with `initial_index`, or a default selection as outlined
+   in this spec. No rendering or layout logic in this stage - just item list handling.
+   Strongly recommend that the sanitization pipeline be extracted to a module-level function
+   `sanitize_choices(raw: list) -> list[str]`, to make unit testing easy without any pygame surface.
+3. Implement rendering and layout logic. Handle all edge cases described in this document regarding
+   possible geometry of the widget. Ensure text scaling and clipping works as specified.
+   Remove any temporary access functions that were added in stage 2.
+4. Final pass to ensure the code fully matches the spec and that all tests pass.
+   Clean up any stale code comments or docstrings added by previous stages such as
+   "will be done in stage N". Upon completion, flip the status of this document from "proposed" to "active".
+
 
