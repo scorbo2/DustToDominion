@@ -129,13 +129,29 @@ class TestWidget:
         assert not widget.hit((9.0, 15.0))
         assert not widget.hit((31.0, 15.0))
 
-    def test_new_widget_should_not_be_hovered_and_should_be_enabled(self) -> None:
+    def test_new_widget_should_start_unhovered_enabled_and_unselected(self) -> None:
         # GIVEN a freshly constructed widget:
         widget = Widget(pygame.Rect(0, 0, 10, 10))
 
-        # THEN it starts in its resting state:
+        # THEN it starts in its resting state (spec 04: Selecting
+        # widgets, as amended by spec 06 - selected defaults to False
+        # alongside enabled):
         assert widget.hovered is False
         assert widget.enabled is True
+        assert widget.selected is False
+
+    def test_disabling_should_not_clear_the_selected_flag(self) -> None:
+        # GIVEN a widget the client selected and then disabled:
+        widget = Widget(pygame.Rect(0, 0, 10, 10))
+        widget.selected = True
+        widget.enabled = False
+
+        # THEN the base class keeps both flags intact and independent
+        # (spec 04/06: the disabled-over-selected precedence is purely
+        # cosmetic and applied by each widget implementation - the base
+        # class never cancels the selection):
+        assert widget.selected is True
+        assert widget.enabled is False
 
 
 class TestThemeDefaults:

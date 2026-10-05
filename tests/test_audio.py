@@ -1,7 +1,8 @@
 """Unit tests for the AudioManager (spec 05: Audio Manager).
 
-Covers the play/stop/loop behavior, the channel budget, the immediate +
-persisted configuration setters, and the module-level singleton. Tracks are
+Covers the play/stop/loop behavior (including ``stop_sfx``, added by the
+spec 06 amendment), the channel budget, the immediate + persisted
+configuration setters, and the module-level singleton. Tracks are
 synthesized in-test as short single-tone WAVs (spec 05: Testing).
 """
 from __future__ import annotations
@@ -364,6 +365,101 @@ class TestSetActiveLoops:
         # Spec 05: stop_loops() is set_active_loops(frozenset()).
         audio_manager.set_active_loops(frozenset({SFX_BOOM, SFX_LASER}))
         audio_manager.stop_loops()
+        assert _busy_channel_indices() == []
+
+
+class TestStopSfx:
+    """stop_sfx (spec 05: Stopping sound effects, added by spec 06:
+    TextPanel - an interrupted panel animation must silence its audio)."""
+
+    def test_with_playing_one_shot_should_stop_it(
+        self, audio_manager: None, loaded_loader: ResourceLoader
+    ) -> None:
+        # GIVEN a one-shot sfx that is still playing (150 ms long):
+        sound = loaded_loader.get_sfx_resource(SFX_LONG_HIT)
+        audio_manager.play_sfx(SFX_LONG_HIT)
+        assert _channels_playing(sound) != []
+
+        # WHEN the client requests that id be stopped:
+        audio_manager.stop_sfx(SFX_LONG_HIT)
+
+        # THEN nothing is playing that sound any more:
+        assert _channels_playing(sound) == []
+        assert _busy_channel_indices() == []
+
+    def test_with_sound_playing_on_multiple_channels_should_stop_all_of_them(
+        self, audio_manager: None, loaded_loader: ResourceLoader
+    ) -> None:
+        # GIVEN the same sfx played twice, occupying two channels (spec 06
+        # note: Sound.stop() stops it on ALL channels):
+        sound = loaded_loader.get_sfx_resource(SFX_LONG_HIT)
+        audio_manager.play_sfx(SFX_LONG_HIT)
+        audio_manager.play_sfx(SFX_LONG_HIT)
+        assert len(_channels_playing(sound)) == 2
+
+        # WHEN stop_sfx is requested a single time:
+        audio_manager.stop_sfx(SFX_LONG_HIT)
+
+        # THEN every channel playing that sound is silent:
+        assert _channels_playing(sound) == []
+
+    def test_with_active_loop_should_stop_loop_and_deregister_it(
+        self, audio_manager: None, loaded_loader: ResourceLoader
+    ) -> None:
+        # GIVEN an active sfx loop:
+        sound = loaded_loader.get_sfx_resource(SFX_BOOM)
+        audio_manager.set_active_loops(frozenset({SFX_BOOM}))
+        assert len(_channels_playing(sound)) == 1
+
+        # WHEN the id is stopped:
+        audio_manager.stop_sfx(SFX_BOOM)
+
+        # THEN the loop is silent...
+        assert _channels_playing(sound) == []
+        # ...and removed from the active set, so re-submitting the same
+        # set starts it again rather than treating it as already running:
+        audio_manager.set_active_loops(frozenset({SFX_BOOM}))
+        assert len(_channels_playing(sound)) == 1
+
+    def test_with_nonexistent_id_should_be_silent_noop(self, audio_manager: None) -> None:
+        # Spec 05: it is not an error if the id does not resolve.
+        audio_manager.stop_sfx("audio/sfx/does_not_exist.wav")
+        assert _busy_channel_indices() == []
+
+    def test_with_id_not_playing_should_not_disturb_other_playing_sfx(
+        self, audio_manager: None, loaded_loader: ResourceLoader
+    ) -> None:
+        # GIVEN one sfx playing and a second valid id that is not:
+        long_hit = loaded_loader.get_sfx_resource(SFX_LONG_HIT)
+        audio_manager.play_sfx(SFX_LONG_HIT)
+
+        # WHEN the idle id is stopped:
+        audio_manager.stop_sfx(SFX_BOOM)
+
+        # THEN the playing sfx is untouched:
+        assert _channels_playing(long_hit) != []
+
+    def test_with_music_typed_id_should_not_affect_playing_music(
+        self, audio_manager: None
+    ) -> None:
+        # GIVEN a music track playing (a music id never resolves as an
+        # sfx resource):
+        audio_manager.play_music(MUSIC_THEME)
+        assert pygame.mixer.music.get_busy()
+
+        # WHEN stop_sfx is called with the music id:
+        audio_manager.stop_sfx(MUSIC_THEME)
+
+        # THEN the music keeps playing:
+        assert pygame.mixer.music.get_busy()
+
+    def test_when_sfx_disabled_should_be_silent_noop(
+        self, loaded_loader: ResourceLoader
+    ) -> None:
+        # Spec 05: with sfx disabled nothing can be playing, so
+        # stop_sfx is inherently a no-op in that state.
+        manager = AudioManager(loaded_loader, AudioConfig(sfx_enabled=False))
+        manager.stop_sfx(SFX_BOOM)
         assert _busy_channel_indices() == []
 
 

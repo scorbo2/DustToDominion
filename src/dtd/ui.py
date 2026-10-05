@@ -69,12 +69,21 @@ class Widget:
     ``rect`` is stored in design space (spec 04: Widget coordinates);
     ``hit`` expects design-space positions; ``draw`` converts to pixel
     space against the target surface.
+
+    The state flags (``hovered``/``enabled``/``selected``) are plain
+    state: the base class never interprets them, and each widget
+    implementation decides how (and whether) they affect rendering.
+    ``selected`` is programmatic-only (spec 04: Selecting widgets, as
+    amended by spec 06); where a widget honors both flags, "disabled"
+    takes precedence over "selected" cosmetically, but disabling never
+    clears the selection.
     """
 
     def __init__(self, rect: pygame.Rect) -> None:
         self.rect = rect  # in design space
         self.hovered = False
         self.enabled = True
+        self.selected = False  # set only by client code (spec 06 amendment)
 
     def hit(self, pos: tuple[float, float]) -> bool:
         """Whether a design-space position is inside this widget's rect."""
