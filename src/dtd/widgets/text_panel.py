@@ -22,11 +22,20 @@ Rendering contract (spec 06):
   verbatim, honors explicit newlines, and clips at the inner edge of
   the border - there is no scrolling.
 
-Implementation status (spec 06 dev plan): stages 2-3 complete -
-rendering, layout, icon scaling, line wrap, and appearance/disappearance
-audio. The state machine still implements the no-animation default
-(instant appear and disappear); slide/fade/typing animation arrives in
-stage 4.
+Animation contract (spec 06: Animation options):
+
+- The first ``update()`` starts the appearance at t=0; every subsequent
+  ``update()`` advances each running animation by exactly one frame, so
+  animation is measured in frames, never in clock units.
+- Slide-in uses quadratic ease-out, slide-out uses quadratic ease-in,
+  and fades are linear. A ``frames`` value of zero or less disables
+  that animation (instant appear/disappear).
+- ``disappear()`` cancels any running appearance animation and starts
+  the disappearance from the panel's current interpolated state;
+  aspects without a disappearance option simply stay frozen.
+- Typing reveals ``speed`` characters per second (60 frames) and runs
+  concurrently with the other animations; during a disappearance it
+  continues only while the panel is still visible.
 """
 from __future__ import annotations
 
@@ -43,6 +52,98 @@ from dtd.ui import Theme, Widget, current_scale
 _WHITESPACE_OR_WORD = re.compile(r"\s+|\S+")
 
 _FULLY_OPAQUE = 255
+
+
+def wrap_text(text: str, font: pygame.font.Font, max_width: int) -> list[str]:
+    """Greedy word wrap honoring explicit newlines (spec 06).
+
+    Whitespace runs are kept verbatim - never collapsed - and a run
+    straddling a break point is split between the two lines. A word too
+    long for an empty line is emitted whole; clipping it is the
+    caller's business.
+
+    This is deliberately a pure function of (text, font, width): the
+    renderer and the typing animation share this one layout pass.
+    Greedy wrapping is prefix-stable - wrapping a prefix of the text
+    yields exactly the lines the full text would draw, except that the
+    last one may be partial - which is what lets the typing cursor land
+    at the end of the currently-visible prefix.
+    """
+    lines: list[str] = []
+    for paragraph in text.split("\n"):
+        lines.extend(_wrap_paragraph(paragraph, font, max_width))
+    return lines
+
+
+def _wrap_paragraph(
+    paragraph: str, font: pygame.font.Font, max_width: int
+) -> list[str]:
+    if not paragraph:
+        return [""]
+    lines: list[str] = []
+    current = ""
+    for token in _WHITESPACE_OR_WORD.findall(paragraph):
+        if current and font.size(current + token)[0] > max_width:
+            if token.isspace():
+                # The break falls inside a whitespace run: keep what
+                # still fits on this line, carry the rest over
+                # (spec 06: runs are kept as-is, not collapsed).
+                fit = max(
+                    count
+                    for count in range(len(token), -1, -1)
+                    if font.size(current + token[:count])[0] <= max_width
+                )
+                current += token[:fit]
+                lines.append(current)
+                current = token[fit:]
+            else:
+                lines.append(current)
+                current = token
+        else:
+            current += token
+    lines.append(current)
+    return lines
+
+
+def _lerp(start: float, end: float, progress: float) -> float:
+    """Linear interpolation between two floats at ``progress`` in [0, 1]."""
+    return start + (end - start) * progress
+
+
+class _FrameAnimation:
+    """A frame-counted 0..1 transition (spec 06: measured in frames).
+
+    The owning widget calls :meth:`advance` once per ``update()``; the
+    first frame of an animation is t=0 and the transition completes
+    after ``frames`` advances. Only constructed with ``frames > 0`` -
+    zero or negative durations mean "no animation" (spec 06).
+    """
+
+    def __init__(self, frames: int) -> None:
+        self.frames = frames
+        self.elapsed = 0
+
+    @property
+    def complete(self) -> bool:
+        return self.elapsed >= self.frames
+
+    def advance(self) -> None:
+        if not self.complete:
+            self.elapsed += 1
+
+    def linear(self) -> float:
+        """Raw progress clamped to [0, 1] - the fade curves (spec 06)."""
+        return min(1.0, self.elapsed / self.frames)
+
+    def ease_out(self) -> float:
+        """Quadratic ease-out: arrives slowly (spec 06: slide-in)."""
+        t = self.linear()
+        return 1.0 - (1.0 - t) ** 2
+
+    def ease_in(self) -> float:
+        """Quadratic ease-in: departs slowly (spec 06: slide-out)."""
+        t = self.linear()
+        return t ** 2
 
 
 class TextPanel(Widget):
@@ -74,68 +175,86 @@ class TextPanel(Widget):
         self.border_width = border_width
         self._audio_on_appear = audio_on_appear
         self._audio_on_disappear = audio_on_disappear
-        # Visibility state machine. With no animation options the alpha
-        # is binary: fully transparent before appearing or after
-        # dismissal, fully opaque while shown (spec 06: Animation
-        # options - the default appearance/disappearance).
+        # Visibility and animation state machine. Before the first
+        # update() the panel is invisible; the first update() starts
+        # the appearance at t=0 (spec 06: Animation options).
         self._has_appeared = False
         self._is_dismissed = False
+        # Interpolated presentation state. _position is float because
+        # slide easing is fractional; current_rect() rounds, as the
+        # spec requires.
+        self._position = (float(rect.x), float(rect.y))
         self._alpha = 0
-        # Animation options are accepted and locked per the spec's rules,
-        # but not interpolated until spec 06 dev plan stage 4.
+        self._appearance_slide: _FrameAnimation | None = None
+        self._appearance_fade: _FrameAnimation | None = None
+        self._disappearance_slide: _FrameAnimation | None = None
+        self._disappearance_fade: _FrameAnimation | None = None
+        self._disappearance_start_position = self._position
+        self._disappearance_start_alpha = 0
+        # Animation options are accepted until the first update(); the
+        # most recent call per animation type wins (spec 06).
         self._slide_in: tuple[pygame.Rect, int] | None = None
         self._fade_in_frames: int | None = None
         self._slide_out: tuple[pygame.Rect, int] | None = None
         self._fade_out_frames: int | None = None
         self._typing: tuple[int, bool] | None = None
+        self._revealed = 0.0
+        self._typing_complete = False
 
     # -- input (spec 04: Widgets) ------------------------------------------
     def update(self, events: list[pygame.event.Event]) -> None:
-        """Drive the appearance state machine once per frame.
+        """Advance the animation state machine by exactly one frame.
 
         TextPanels never respond to input events (spec 06), but the
         UIManager calls ``update()`` once per frame on enabled widgets -
-        that tick is what starts the appearance. The UIManager never
-        calls disabled widgets, which is exactly what freezes animation
-        (spec 06); the guard here keeps direct calls equally honest.
+        that tick is what starts and paces the appearance. The
+        UIManager never calls disabled widgets, which is exactly what
+        freezes animation (spec 06); the guard here keeps direct calls
+        equally honest.
         """
-        if not self.enabled or self._is_dismissed:
+        if not self.enabled:
             return
         if not self._has_appeared:
-            self._has_appeared = True
-            self._alpha = _FULLY_OPAQUE
-            if self._audio_on_appear is not None:
-                # Spec 06: Audio - the id goes to AudioManager as-is;
-                # the panel never validates it, and audio does not wait
-                # for any animation.
-                get_audio_manager().play_sfx(self._audio_on_appear)
+            self._begin_appearance()
+            return
+        if self._is_dismissed:
+            self._advance_disappearance()
+        else:
+            self._advance_appearance()
+        self._advance_typing()
 
     def disappear(self) -> None:
-        """Dismiss the panel (spec 06: Appearance/disappearance options).
+        """Dismiss the panel, animating if disappearance options exist.
 
-        Before the first ``update()`` this is a no-op. With no
-        disappearance options set the panel simply becomes fully
-        transparent. Once the (eventual) disappearance animation has
-        completed the panel can never be made visible again.
+        Before the first ``update()`` this is a no-op. It cancels any
+        running appearance animation and starts the disappearance from
+        the panel's current interpolated state; with no disappearance
+        options the panel simply becomes fully transparent. Once
+        dismissed, the panel can never be made visible again.
         """
         if not self._has_appeared or self._is_dismissed:
             return
         self._is_dismissed = True
-        self._alpha = 0
-        if self._audio_on_appear is not None:
-            # Spec 06: Audio - disappear() silences any in-progress
-            # appearance audio before its own starts playing.
-            get_audio_manager().stop_sfx(self._audio_on_appear)
-        if self._audio_on_disappear is not None:
-            get_audio_manager().play_sfx(self._audio_on_disappear)
+        # The current interpolated state is the t=0 state of the
+        # disappearance (spec 06: it begins from where the panel is).
+        self._disappearance_start_position = self._position
+        self._disappearance_start_alpha = self._alpha
+        if self._slide_out is not None and self._slide_out[1] > 0:
+            self._disappearance_slide = _FrameAnimation(self._slide_out[1])
+        if self._fade_out_frames is not None and self._fade_out_frames > 0:
+            self._disappearance_fade = _FrameAnimation(self._fade_out_frames)
+        if self._disappearance_slide is None and self._disappearance_fade is None:
+            self._alpha = 0
+        self._stop_sfx_if_set(self._audio_on_appear)
+        self._play_sfx_if_set(self._audio_on_disappear)
 
     def is_visible(self) -> bool:
         """Whether the panel is on screen with an alpha above zero.
 
         "On screen" means the current design-space rect intersects the
         design viewport (spec 06). Clients may poll this during a
-        (stage 4) disappearance animation to learn when the panel can be
-        removed from the UIManager.
+        disappearance animation to learn when the panel can be removed
+        from the UIManager.
         """
         if self._alpha <= 0:
             return False
@@ -145,12 +264,19 @@ class TextPanel(Widget):
     def current_rect(self) -> pygame.Rect:
         """The panel's current position in design space (spec 06).
 
-        Identical to ``rect`` until slide animation exists (stage 4);
+        Equals ``rect`` except while a slide animation is running;
         ``rect`` itself always stays exactly as the client supplied it.
+        Fractional interpolated coordinates are rounded to the nearest
+        integer, as the spec requires.
         """
-        return self.rect.copy()
+        return pygame.Rect(
+            round(self._position[0]),
+            round(self._position[1]),
+            self.rect.w,
+            self.rect.h,
+        )
 
-    # -- animation options (interpolated in spec 06 dev plan stage 4) -----
+    # -- animation options (locked at the first update - spec 06) ----------
     # The most recent call before the first update() wins; calls after
     # that are ignored (spec 06: Appearance/disappearance options).
 
@@ -189,15 +315,111 @@ class TextPanel(Widget):
         """Change (or unset with ``None``) the disappearance audio id."""
         self._audio_on_disappear = resource_id
 
+    # -- appearance/disappearance state machine (spec 06) ------------------
+    def _begin_appearance(self) -> None:
+        """Start the appearance at t=0 on the very first update()."""
+        self._has_appeared = True
+        if self._slide_in is not None and self._slide_in[1] > 0:
+            self._appearance_slide = _FrameAnimation(self._slide_in[1])
+            self._position = (float(self._slide_in[0].x), float(self._slide_in[0].y))
+        if self._fade_in_frames is not None and self._fade_in_frames > 0:
+            self._appearance_fade = _FrameAnimation(self._fade_in_frames)
+            self._alpha = 0
+        else:
+            self._alpha = _FULLY_OPAQUE
+        self._begin_typing()
+        self._play_sfx_if_set(self._audio_on_appear)
+
+    def _advance_appearance(self) -> None:
+        if self._appearance_slide is not None:
+            self._appearance_slide.advance()
+            start = self._slide_in[0]
+            progress = self._appearance_slide.ease_out()
+            self._position = (
+                _lerp(start.x, self.rect.x, progress),
+                _lerp(start.y, self.rect.y, progress),
+            )
+        if self._appearance_fade is not None:
+            self._appearance_fade.advance()
+            self._alpha = round(_FULLY_OPAQUE * self._appearance_fade.linear())
+
+    def _advance_disappearance(self) -> None:
+        if self._disappearance_slide is not None:
+            self._disappearance_slide.advance()
+            dest = self._slide_out[0]
+            start_x, start_y = self._disappearance_start_position
+            progress = self._disappearance_slide.ease_in()
+            self._position = (
+                _lerp(start_x, dest.x, progress),
+                _lerp(start_y, dest.y, progress),
+            )
+        if self._disappearance_fade is not None:
+            self._disappearance_fade.advance()
+            self._alpha = round(
+                self._disappearance_start_alpha
+                * (1.0 - self._disappearance_fade.linear())
+            )
+
+    # -- typing animation (spec 06: Typing animation) -----------------------
+    def _begin_typing(self) -> None:
+        """Arm the typing animation, or drop it if it cannot run."""
+        if self._typing is None or self._typing[0] <= 0 or not self.text:
+            # Spec 06: speed <= 0 disables typing, and empty or None
+            # text makes the whole animation a no-op.
+            self._typing = None
+            return
+        self._revealed = 0.0
+        self._typing_complete = False
+
+    def _advance_typing(self) -> None:
+        if self._typing is None or self._typing_complete:
+            return
+        if self._is_dismissed and not self.is_visible():
+            # Spec 06: during a disappearance, typing continues only
+            # while the panel is still visible.
+            return
+        speed, _show_cursor = self._typing
+        self._revealed = min(
+            self._revealed + speed * game_constants.SIM_STEP,
+            float(len(self.text)),
+        )
+        if self._revealed >= len(self.text):
+            self._typing_complete = True
+
+    def _visible_prefix(self) -> str:
+        """The text revealed so far, or everything without typing."""
+        if self._typing is None:
+            return self.text or ""
+        return self.text[: int(self._revealed)]
+
+    def _cursor_should_show(self) -> bool:
+        return (
+            self._typing is not None
+            and self._typing[1]
+            and not self._typing_complete
+        )
+
+    # -- audio helpers (spec 06: Audio) --------------------------------------
+    def _play_sfx_if_set(self, resource_id: str | None) -> None:
+        if resource_id is not None:
+            # The id goes to AudioManager as-is; the panel never
+            # validates it, and audio does not wait for any animation.
+            get_audio_manager().play_sfx(resource_id)
+
+    def _stop_sfx_if_set(self, resource_id: str | None) -> None:
+        if resource_id is not None:
+            # An interrupted appearance silences its audio (spec 06).
+            get_audio_manager().stop_sfx(resource_id)
+
     # -- rendering (spec 06: TextPanel options / Displaying text) ---------
     def draw(self, surf: pygame.Surface, theme: Theme) -> None:
-        """Paint the panel - or nothing at all before it has appeared or
-        after it has been dismissed (spec 06: before the first
-        ``update()`` the panel draws nothing)."""
+        """Paint the panel at its current position - or nothing at all
+        before it has appeared or while fully transparent (spec 06)."""
         if not self._has_appeared or self._alpha <= 0:
             return
         scale = current_scale()
-        panel = scale.rect(self.rect.x, self.rect.y, self.rect.w, self.rect.h)
+        current = self.current_rect()
+        panel = scale.rect(current.x, current.y, current.w, current.h)
         if panel.w <= 0 or panel.h <= 0:
             return
         fg, bg = self._state_colors(theme)
@@ -260,11 +482,13 @@ class TextPanel(Widget):
         theme: Theme,
         fg: pygame.Color,
     ) -> None:
-        """Render wrapped text top-aligned in the space beside the icon.
+        """Render the visible prefix of the wrapped text, top-aligned.
 
         The fixed margin is half the height of ``0`` in the panel's font
         (spec 06: Displaying text). Text clips at the inner border edge
-        and never scrolls.
+        and never scrolls. With typing animation only the revealed
+        prefix is laid out and drawn, plus the block cursor when
+        requested (spec 06: Typing animation).
         """
         text = self.text
         if text is None or not text.strip():
@@ -279,13 +503,16 @@ class TextPanel(Widget):
         )
         if area.w <= 0 or area.h <= 0:
             return
+        lines = wrap_text(self._visible_prefix(), font, area.w)
         top = area.y
         line_height = font.get_height()
-        for line in self._wrap_lines(text, font, area.w):
+        for line in lines:
             if top >= area.bottom:
                 break
             self._blit_line_clipped(overlay, font.render(line, True, fg), area, top)
             top += line_height
+        if self._cursor_should_show():
+            self._draw_cursor(overlay, font, fg, area, lines, line_height)
 
     @staticmethod
     def _blit_line_clipped(
@@ -303,45 +530,21 @@ class TextPanel(Widget):
             overlay.blit(line_surface, (area.x, top), clip)
 
     @staticmethod
-    def _wrap_lines(text: str, font: pygame.font.Font, max_width: int) -> list[str]:
-        """Greedy word wrap honoring explicit newlines (spec 06).
-
-        Whitespace runs are kept verbatim - never collapsed - and a run
-        straddling a break point is split between the two lines. A word
-        too long for an empty line is emitted whole and clipped by the
-        caller.
-        """
-        lines: list[str] = []
-        for paragraph in text.split("\n"):
-            lines.extend(TextPanel._wrap_paragraph(paragraph, font, max_width))
-        return lines
-
-    @staticmethod
-    def _wrap_paragraph(
-        paragraph: str, font: pygame.font.Font, max_width: int
-    ) -> list[str]:
-        if not paragraph:
-            return [""]
-        lines: list[str] = []
-        current = ""
-        for token in _WHITESPACE_OR_WORD.findall(paragraph):
-            if current and font.size(current + token)[0] > max_width:
-                if token.isspace():
-                    # The break falls inside a whitespace run: keep what
-                    # still fits on this line, carry the rest over
-                    # (spec 06: runs are kept as-is, not collapsed).
-                    fit = max(
-                        count
-                        for count in range(len(token), -1, -1)
-                        if font.size(current + token[:count])[0] <= max_width
-                    )
-                    current += token[:fit]
-                    lines.append(current)
-                    current = token[fit:]
-                else:
-                    lines.append(current)
-                    current = token
-            else:
-                current += token
-        lines.append(current)
-        return lines
+    def _draw_cursor(
+        overlay: pygame.Surface,
+        font: pygame.font.Font,
+        fg: pygame.Color,
+        area: pygame.Rect,
+        lines: list[str],
+        line_height: int,
+    ) -> None:
+        """Draw the solid block cursor at the end of the wrapped prefix
+        (spec 06: same width and height as ``0``, no blink). Like the
+        text itself, it clips at the inner border edge."""
+        cursor_width, cursor_height = font.size("0")
+        x = area.x + font.size(lines[-1])[0]
+        y = area.y + (len(lines) - 1) * line_height
+        visible_width = max(0, min(cursor_width, area.right - x))
+        visible_height = max(0, min(cursor_height, area.bottom - y))
+        if visible_width > 0 and visible_height > 0:
+            pygame.draw.rect(overlay, fg, (x, y, visible_width, visible_height))

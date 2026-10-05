@@ -360,6 +360,7 @@ The spec is too large to implement in one pass. The following staged dev plan is
    Line-wrap, icon scaling, and widget layout are implemented at this stage.
    **Completed 2026-10-04**
 3. Implement audio support for panel appearance and disappearance.
+   **Completed 2026-10-04**
    - Refactoring note from stage 1: the `_active_loops` bookkeeping in `dtd/audio.py` is now touched in four
      places (`set_active_loops`, `_start_loop`, `stop_sfx`, `_stop_all_sfx`). Once TextPanel audio is wired in,
      extract a small internal loop-registry helper so start/stop/deregister and the idempotency rules live in

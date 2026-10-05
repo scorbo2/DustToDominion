@@ -3,10 +3,10 @@
 Stage 2 coverage (spec 06 dev plan): rendering, layout, icon scaling,
 line wrap, and the no-animation appearance/disappearance state machine.
 Stage 3 coverage: appearance/disappearance audio through the global
-AudioManager singleton. Pixel assertions read the display surface after
-``ui.draw`` at the design resolution (scale 1), following the Button
-test patterns. Slide/fade/typing animation (stage 4) is not covered
-here.
+AudioManager singleton. Stage 4 coverage: slide/fade/typing animation
+and the pure ``wrap_text`` layout helper. Pixel assertions read the
+display surface after ``ui.draw`` at the design resolution (scale 1),
+following the Button test patterns.
 """
 from __future__ import annotations
 
@@ -23,7 +23,7 @@ from dtd import audio, game_constants, resource_loader
 from dtd.game_config import AudioConfig, ResourcesConfig
 from dtd.resource_loader import ResourceLoader
 from dtd.ui import Theme, UIManager
-from dtd.widgets.text_panel import TextPanel
+from dtd.widgets.text_panel import TextPanel, wrap_text
 
 # Distinguishable custom theme: red/green in the normal state, blue/
 # white when selected, dark grays when disabled.
@@ -181,6 +181,67 @@ def _record_stop_sfx(manager: audio.AudioManager) -> list[str]:
 
     manager.stop_sfx = record
     return stopped
+
+
+def _run_frames(ui: UIManager, count: int) -> None:
+    """Advance the UI by exactly ``count`` frames (spec 06: animation is
+    measured in update() calls, never in clock units)."""
+    for _ in range(count):
+        ui.update([])
+
+
+def _clear_and_draw(ui: UIManager) -> pygame.Surface:
+    """Draw onto a freshly cleared screen.
+
+    UIManager.draw does not clear, and fade frames blend onto whatever
+    is already there - alpha assertions need a known (black) starting
+    point.
+    """
+    screen = _screen()
+    screen.fill(BLACK)
+    ui.draw(screen)
+    return screen
+
+
+def _rightmost_fg_column(
+    surf: pygame.Surface, area: pygame.Rect, color
+) -> int | None:
+    """The rightmost x within ``area`` painted in ``color``, or None.
+
+    Used to measure how far typed text (and its block cursor) has
+    reached without assuming anything about glyph widths. Only valid
+    while the panel is fully opaque - mid-fade pixels are blended and
+    match no exact color.
+    """
+    for x in range(area.right - 1, area.x - 1, -1):
+        for y in range(area.y, area.bottom):
+            if surf.get_at((x, y)) == color:
+                return x
+    return None
+
+
+def _rightmost_nonbackground_column(
+    surf: pygame.Surface, area: pygame.Rect, background
+) -> int | None:
+    """The rightmost x within ``area`` NOT painted in ``background``.
+
+    The mid-fade sibling of ``_rightmost_fg_column``: blended text
+    pixels match no exact color, but they do differ from the (also
+    blended, but uniform) panel background.
+    """
+    for x in range(area.right - 1, area.x - 1, -1):
+        for y in range(area.y, area.bottom):
+            if surf.get_at((x, y)) != background:
+                return x
+    return None
+
+
+def _reference_rightmost(text: str, panel_rect: pygame.Rect) -> int | None:
+    """Rightmost text column of the same text rendered with no typing
+    animation - the "fully revealed" reference for typing assertions."""
+    panel = TextPanel(panel_rect, text=text, font_size=TEXT_FONT_SIZE)
+    screen = _appear_and_draw(panel, _theme(TEST_THEME_JSON))
+    return _rightmost_fg_column(screen, panel_rect, NORMAL_FG)
 
 
 @pytest.fixture
@@ -972,3 +1033,544 @@ class TestPanelAudio:
 
         # THEN the most recent id is the one handed over:
         assert played == [SFX_SUSTAINED]
+
+
+class TestPanelAnimation:
+    """Slide/fade appearance and disappearance (spec 06: Animation
+    options). Timing is counted in update() calls: the first update()
+    starts the animation at t=0, each later one advances it a frame."""
+
+    def test_set_slide_in_options_should_interpolate_from_start_to_target(
+        self, font_ready: None
+    ) -> None:
+        # GIVEN a panel sliding in from x=900 to x=100 over 10 frames:
+        panel = TextPanel(pygame.Rect(100, 0, 50, 50))
+        panel.set_slide_in_options(pygame.Rect(900, 0, 50, 50), frames=10)
+        ui = _register(panel, _theme(TEST_THEME_JSON))
+
+        # WHEN the first update() starts the animation (t=0):
+        ui.update([])
+        assert panel.current_rect().x == 900
+
+        # THEN after 5 frames the quadratic ease-out has carried it 75%
+        # of the way (p(t) = 1 - (1-t)^2 at t=0.5):
+        _run_frames(ui, 5)
+        assert panel.current_rect().x == 300
+
+        # ...and after all 10 frames it has arrived at the target rect:
+        _run_frames(ui, 5)
+        assert panel.current_rect().x == 100
+        assert panel.current_rect() == panel.rect
+
+    def test_slide_in_should_draw_at_the_current_position(
+        self, font_ready: None
+    ) -> None:
+        # GIVEN a panel mid-slide-in (5 of 10 frames done):
+        panel = TextPanel(pygame.Rect(100, 0, 50, 50))
+        panel.set_slide_in_options(pygame.Rect(900, 0, 50, 50), frames=10)
+        ui = _register(panel, _theme(TEST_THEME_JSON))
+        _run_frames(ui, 6)
+        assert panel.current_rect().x == 300
+
+        # WHEN the UI draws:
+        screen = _draw(ui)
+
+        # THEN the panel is painted at its interpolated position, not at
+        # its final rect (spec 06: current_rect is the rendered rect):
+        assert _pixel(screen, 325, 25) == NORMAL_BG
+        assert _pixel(screen, 125, 25) == BLACK
+
+    def test_set_fade_in_options_should_reach_full_opacity_only_after_all_frames(
+        self, font_ready: None
+    ) -> None:
+        # GIVEN a panel fading in over 10 frames:
+        panel = TextPanel(pygame.Rect(100, 0, 50, 50))
+        panel.set_fade_in_options(frames=10)
+        ui = _register(panel, _theme(TEST_THEME_JSON))
+
+        # WHEN the first update() starts the fade (t=0):
+        ui.update([])
+
+        # THEN nothing is drawn yet (alpha 0):
+        assert _clear_and_draw(ui).get_at((125, 25)) == BLACK
+
+        # ...halfway through, the panel is partially visible (blended
+        # onto the black screen, so the green channel is between 0 and
+        # 255 - never the exact fill color):
+        _run_frames(ui, 5)
+        mid = _clear_and_draw(ui).get_at((125, 25))
+        assert 0 < mid[1] < 255
+
+        # ...and only after all frames is it exactly fully opaque:
+        _run_frames(ui, 5)
+        assert _clear_and_draw(ui).get_at((125, 25)) == NORMAL_BG
+
+    def test_slide_and_fade_should_run_concurrently(self, font_ready: None) -> None:
+        # GIVEN a panel that slides in AND fades in over 10 frames:
+        panel = TextPanel(pygame.Rect(100, 0, 50, 50))
+        panel.set_slide_in_options(pygame.Rect(900, 0, 50, 50), frames=10)
+        panel.set_fade_in_options(frames=10)
+        ui = _register(panel, _theme(TEST_THEME_JSON))
+
+        # WHEN 5 frames pass:
+        _run_frames(ui, 6)
+
+        # THEN both animations are halfway (spec 06: options are not
+        # exclusive):
+        assert panel.current_rect().x == 300
+        mid = _clear_and_draw(ui).get_at((325, 25))
+        assert 0 < mid[1] < 255
+
+    def test_fade_in_default_duration_should_be_thirty_frames(
+        self, font_ready: None
+    ) -> None:
+        # GIVEN a fade-in with the default duration (no frames argument):
+        panel = TextPanel(pygame.Rect(100, 0, 50, 50))
+        panel.set_fade_in_options()
+        ui = _register(panel, _theme(TEST_THEME_JSON))
+
+        # WHEN 30 frames have passed (the default, spec 06):
+        _run_frames(ui, 31)
+
+        # THEN it is fully opaque...
+        assert _clear_and_draw(ui).get_at((125, 25)) == NORMAL_BG
+
+        # ...but a fresh panel one frame short of that is not:
+        late = TextPanel(pygame.Rect(100, 100, 50, 50))
+        late.set_fade_in_options()
+        late_ui = _register(late, _theme(TEST_THEME_JSON))
+        _run_frames(late_ui, 30)
+        almost = _clear_and_draw(late_ui).get_at((125, 125))
+        assert 0 < almost[1] < 255
+
+    def test_last_slide_in_call_before_update_should_win(
+        self, font_ready: None
+    ) -> None:
+        # GIVEN two slide-in option calls before the first update():
+        panel = TextPanel(pygame.Rect(100, 0, 50, 50))
+        panel.set_slide_in_options(pygame.Rect(900, 0, 50, 50), frames=1)
+        panel.set_slide_in_options(pygame.Rect(1500, 0, 50, 50), frames=1)
+        ui = _register(panel, _theme(TEST_THEME_JSON))
+
+        # WHEN the appearance starts:
+        ui.update([])
+
+        # THEN the most recent call's parameters are used (spec 06):
+        assert panel.current_rect().x == 1500
+
+    def test_zero_or_negative_frames_should_disable_that_animation(
+        self, font_ready: None
+    ) -> None:
+        # GIVEN a panel whose slide-in and fade-in durations are <= 0:
+        panel = TextPanel(pygame.Rect(100, 0, 50, 50))
+        panel.set_slide_in_options(pygame.Rect(900, 0, 50, 50), frames=0)
+        panel.set_fade_in_options(frames=-3)
+        ui = _register(panel, _theme(TEST_THEME_JSON))
+
+        # WHEN the first update() runs:
+        ui.update([])
+
+        # THEN both animations are disabled: instant appearance
+        # (spec 06: frames <= 0 means instant appear/disappear):
+        assert panel.current_rect() == panel.rect
+        assert panel.is_visible() is True
+        assert _clear_and_draw(ui).get_at((125, 25)) == NORMAL_BG
+
+    def test_animation_option_setters_after_first_update_should_be_ignored(
+        self, font_ready: None
+    ) -> None:
+        # GIVEN a panel that has already appeared with no options:
+        panel = TextPanel(pygame.Rect(100, 0, 50, 50))
+        ui = _register(panel, _theme(TEST_THEME_JSON))
+        ui.update([])
+
+        # WHEN animation options are set afterwards:
+        panel.set_slide_in_options(pygame.Rect(900, 0, 50, 50), frames=10)
+        panel.set_fade_in_options(frames=10)
+        _run_frames(ui, 5)
+
+        # THEN they are ignored - the panel stays fully visible at its
+        # rect (spec 06: options are locked at the first update()):
+        assert panel.current_rect() == panel.rect
+        assert _clear_and_draw(ui).get_at((125, 25)) == NORMAL_BG
+
+    def test_is_visible_should_be_false_until_a_slide_in_enters_the_viewport(
+        self, font_ready: None
+    ) -> None:
+        # GIVEN a panel sliding in from fully offscreen right:
+        panel = TextPanel(pygame.Rect(100, 100, 200, 120))
+        panel.set_slide_in_options(
+            pygame.Rect(game_constants.DESIGN_W + 80, 100, 200, 120), frames=10
+        )
+        ui = _register(panel, _theme(TEST_THEME_JSON))
+
+        # WHEN the appearance starts at the offscreen start rect:
+        ui.update([])
+        assert panel.is_visible() is False
+
+        # THEN one frame later it has entered the viewport and counts
+        # as visible (spec 06: any on-screen part with alpha > 0):
+        _run_frames(ui, 1)
+        assert panel.is_visible() is True
+
+    def test_current_rect_should_round_fractional_positions(
+        self, font_ready: None
+    ) -> None:
+        # GIVEN a slide whose easing produces a fractional x (5.55...):
+        panel = TextPanel(pygame.Rect(10, 0, 10, 10))
+        panel.set_slide_in_options(pygame.Rect(0, 0, 10, 10), frames=3)
+        ui = _register(panel, _theme(TEST_THEME_JSON))
+        _run_frames(ui, 2)
+
+        # THEN current_rect rounds to the nearest integer (spec 06):
+        assert panel.current_rect().x == 6
+
+    def test_disappear_with_slide_out_should_move_to_the_destination(
+        self, font_ready: None
+    ) -> None:
+        # GIVEN an appeared panel with a slide-out to x=900 over 10
+        # frames (an on-screen destination, deliberately):
+        panel = TextPanel(pygame.Rect(100, 0, 50, 50))
+        panel.set_slide_out_options(pygame.Rect(900, 0, 50, 50), frames=10)
+        ui = _register(panel, _theme(TEST_THEME_JSON))
+        ui.update([])
+
+        # WHEN disappear() starts the disappearance (t=0):
+        panel.disappear()
+        assert panel.current_rect().x == 100
+
+        # THEN after 5 frames the quadratic ease-in has carried it 25%
+        # of the way (p(t) = t^2 at t=0.5):
+        _run_frames(ui, 5)
+        assert panel.current_rect().x == 300
+
+        # ...and after all frames it is at the destination. With no
+        # fade-out and an on-screen destination it stays visible - not
+        # a bug, the client must choose an offscreen destination:
+        _run_frames(ui, 5)
+        assert panel.current_rect().x == 900
+        assert panel.is_visible() is True
+
+    def test_disappear_with_fade_out_should_become_invisible_after_all_frames(
+        self, font_ready: None
+    ) -> None:
+        # GIVEN an appeared panel with a fade-out over 10 frames:
+        panel = TextPanel(pygame.Rect(100, 0, 50, 50))
+        panel.set_fade_out_options(frames=10)
+        ui = _register(panel, _theme(TEST_THEME_JSON))
+        ui.update([])
+
+        # WHEN disappear() is invoked and 9 frames pass:
+        panel.disappear()
+        _run_frames(ui, 9)
+
+        # THEN it is still (faintly) visible:
+        assert panel.is_visible() is True
+        assert 0 < _clear_and_draw(ui).get_at((125, 25))[1] < 255
+
+        # ...and after the final frame it is fully transparent:
+        _run_frames(ui, 1)
+        assert panel.is_visible() is False
+        assert _clear_and_draw(ui).get_at((125, 25)) == BLACK
+
+    def test_disappear_mid_slide_in_should_continue_from_the_current_position(
+        self, font_ready: None
+    ) -> None:
+        # GIVEN a panel 5 frames into a slide-in from x=900 to x=100
+        # (currently at x=300), with a slide-out to x=1700 configured:
+        panel = TextPanel(pygame.Rect(100, 0, 50, 50))
+        panel.set_slide_in_options(pygame.Rect(900, 0, 50, 50), frames=10)
+        panel.set_slide_out_options(pygame.Rect(1700, 0, 50, 50), frames=10)
+        ui = _register(panel, _theme(TEST_THEME_JSON))
+        _run_frames(ui, 6)
+        assert panel.current_rect().x == 300
+
+        # WHEN disappear() cancels the appearance and starts the
+        # disappearance from the interpolated state (spec 06):
+        panel.disappear()
+        assert panel.current_rect().x == 300
+
+        # THEN the slide-out eases from x=300 toward x=1700:
+        _run_frames(ui, 5)
+        assert panel.current_rect().x == 650
+        _run_frames(ui, 5)
+        assert panel.current_rect().x == 1700
+
+    def test_disabling_mid_slide_in_should_freeze_and_re_enabling_should_resume(
+        self, font_ready: None
+    ) -> None:
+        # GIVEN a panel one frame into a 10-frame slide-in (x=748):
+        panel = TextPanel(pygame.Rect(100, 0, 50, 50))
+        panel.set_slide_in_options(pygame.Rect(900, 0, 50, 50), frames=10)
+        ui = _register(panel, _theme(TEST_THEME_JSON))
+        _run_frames(ui, 2)
+        assert panel.current_rect().x == 748
+
+        # WHEN the panel is disabled for several frames:
+        panel.enabled = False
+        _run_frames(ui, 3)
+
+        # THEN the animation is frozen exactly where it was (spec 06:
+        # the UIManager stops calling update() on disabled widgets):
+        assert panel.current_rect().x == 748
+
+        # AND WHEN it is re-enabled, the next frame resumes from there:
+        panel.enabled = True
+        _run_frames(ui, 1)
+        assert panel.current_rect().x == 612
+
+    def test_completed_fade_out_should_never_become_visible_again(
+        self, font_ready: None
+    ) -> None:
+        # GIVEN a panel whose fade-out animation has completed:
+        panel = TextPanel(pygame.Rect(100, 0, 50, 50))
+        panel.set_fade_out_options(frames=5)
+        ui = _register(panel, _theme(TEST_THEME_JSON))
+        ui.update([])
+        panel.disappear()
+        _run_frames(ui, 5)
+        assert panel.is_visible() is False
+
+        # WHEN many more frames pass:
+        _run_frames(ui, 10)
+
+        # THEN it cannot be made visible again (spec 06):
+        assert panel.is_visible() is False
+        assert _clear_and_draw(ui).get_at((125, 25)) == BLACK
+
+
+class TestPanelTyping:
+    """Typing animation and block cursor (spec 06: Typing animation)."""
+
+    PANEL_AREA = pygame.Rect(0, 0, 300, 100)
+
+    def test_typing_should_reveal_the_text_progressively(
+        self, font_ready: None
+    ) -> None:
+        # GIVEN a panel typing "Hello World" at 60 chars/sec (1 per
+        # frame) with no cursor:
+        panel = TextPanel(
+            self.PANEL_AREA, text="Hello World", font_size=TEXT_FONT_SIZE
+        )
+        panel.set_typing_options(60)
+        ui = _register(panel, _theme(TEST_THEME_JSON))
+
+        # WHEN the appearance starts (t=0):
+        ui.update([])
+
+        # THEN nothing of the text is revealed yet:
+        assert _rightmost_fg_column(_draw(ui), self.PANEL_AREA, NORMAL_FG) is None
+
+        # AND WHEN 5 more frames pass, 5 characters are on screen:
+        _run_frames(ui, 5)
+        partial = _rightmost_fg_column(_draw(ui), self.PANEL_AREA, NORMAL_FG)
+        assert partial is not None
+
+        # AND WHEN the animation completes, the full text matches a
+        # panel that never had typing options at all:
+        _run_frames(ui, 6)
+        full = _rightmost_fg_column(_draw(ui), self.PANEL_AREA, NORMAL_FG)
+        assert full == _reference_rightmost("Hello World", self.PANEL_AREA)
+        assert partial < full
+
+    def test_cursor_should_track_the_typed_prefix_and_vanish_on_completion(
+        self, font_ready: None
+    ) -> None:
+        # GIVEN a panel typing "Hello World" at 1 char/frame with the
+        # block cursor shown:
+        theme = _theme(TEST_THEME_JSON)
+        font, margin, _ = _font_metrics(theme, TEXT_FONT_SIZE)
+        cursor_width = font.size("0")[0]
+        panel = TextPanel(
+            self.PANEL_AREA, text="Hello World", font_size=TEXT_FONT_SIZE
+        )
+        panel.set_typing_options(60, show_cursor=True)
+        ui = _register(panel, theme)
+
+        # WHEN the appearance starts (0 characters revealed):
+        ui.update([])
+
+        # THEN the cursor block sits at the start of the text area,
+        # exactly font.size("0") wide (spec 06):
+        screen = _draw(ui)
+        assert (
+            _rightmost_fg_column(screen, self.PANEL_AREA, NORMAL_FG)
+            == margin + cursor_width - 1
+        )
+
+        # AND WHEN 5 characters are revealed, the cursor has moved to
+        # the end of the wrapped prefix:
+        _run_frames(ui, 5)
+        screen = _draw(ui)
+        prefix_width = font.size("Hello")[0]
+        assert (
+            _rightmost_fg_column(screen, self.PANEL_AREA, NORMAL_FG)
+            == margin + prefix_width + cursor_width - 1
+        )
+
+        # AND WHEN the animation completes, the cursor is gone and the
+        # rightmost text column matches the cursor-less reference:
+        _run_frames(ui, 6)
+        screen = _draw(ui)
+        assert _rightmost_fg_column(
+            screen, self.PANEL_AREA, NORMAL_FG
+        ) == _reference_rightmost("Hello World", self.PANEL_AREA)
+
+    def test_typing_should_continue_during_a_fade_out_until_invisible(
+        self, font_ready: None
+    ) -> None:
+        # GIVEN a panel 5 characters into typing, then dismissed with a
+        # 10-frame fade-out:
+        panel = TextPanel(
+            self.PANEL_AREA, text="Hello World", font_size=TEXT_FONT_SIZE
+        )
+        panel.set_typing_options(60)
+        panel.set_fade_out_options(frames=10)
+        ui = _register(panel, _theme(TEST_THEME_JSON))
+        _run_frames(ui, 6)
+        before = _rightmost_nonbackground_column(
+            _draw(ui), self.PANEL_AREA, NORMAL_BG
+        )
+        assert before is not None
+        panel.disappear()
+
+        # WHEN 3 fade frames pass (panel still faintly visible):
+        _run_frames(ui, 3)
+        assert panel.is_visible() is True
+
+        # THEN typing has kept revealing characters (spec 06: it
+        # continues while is_visible() reports True). Mid-fade pixels
+        # are blended, so we measure "anything that is not the panel
+        # background" rather than an exact text color:
+        during = _rightmost_nonbackground_column(
+            _draw(ui), self.PANEL_AREA, NORMAL_BG
+        )
+        assert during > before
+
+        # AND WHEN the fade-out completes, the panel is gone:
+        _run_frames(ui, 7)
+        assert panel.is_visible() is False
+
+    def test_typing_should_run_concurrently_with_a_slide_in(
+        self, font_ready: None
+    ) -> None:
+        # GIVEN a panel that slides in over 10 frames and types at 1
+        # char/frame at the same time:
+        panel = TextPanel(
+            pygame.Rect(0, 0, 300, 100), text="Hello World", font_size=TEXT_FONT_SIZE
+        )
+        panel.set_typing_options(60)
+        panel.set_slide_in_options(pygame.Rect(900, 0, 300, 100), frames=10)
+        ui = _register(panel, _theme(TEST_THEME_JSON))
+        _run_frames(ui, 4)
+
+        # THEN text is being revealed while the panel is mid-slide
+        # (spec 06: typing runs concurrently with other animation):
+        current = panel.current_rect()
+        assert current.x == 441
+        assert (
+            _rightmost_fg_column(_draw(ui), current, NORMAL_FG) is not None
+        )
+
+    @pytest.mark.parametrize("speed", [0, -10])
+    def test_nonpositive_typing_speed_should_show_the_full_text_immediately(
+        self, font_ready: None, speed: int
+    ) -> None:
+        # GIVEN a panel whose typing speed is zero or negative:
+        panel = TextPanel(
+            self.PANEL_AREA, text="Hello World", font_size=TEXT_FONT_SIZE
+        )
+        panel.set_typing_options(speed, show_cursor=True)
+        ui = _register(panel, _theme(TEST_THEME_JSON))
+
+        # WHEN the appearance starts:
+        ui.update([])
+
+        # THEN typing is disabled entirely - full text, no cursor
+        # (spec 06: speed <= 0 disables the animation):
+        assert _rightmost_fg_column(
+            _draw(ui), self.PANEL_AREA, NORMAL_FG
+        ) == _reference_rightmost("Hello World", self.PANEL_AREA)
+
+    @pytest.mark.parametrize("text", [None, ""])
+    def test_typing_with_empty_or_none_text_should_be_a_noop(
+        self, font_ready: None, text: str | None
+    ) -> None:
+        # GIVEN a panel with typing options but empty or None text:
+        panel = TextPanel(self.PANEL_AREA, text=text, font_size=TEXT_FONT_SIZE)
+        panel.set_typing_options(60, show_cursor=True)
+        ui = _register(panel, _theme(TEST_THEME_JSON))
+
+        # WHEN many frames pass (must not raise):
+        _run_frames(ui, 5)
+
+        # THEN no text and no cursor ever render (spec 06: no-op):
+        screen = _draw(ui)
+        assert _rightmost_fg_column(screen, self.PANEL_AREA, NORMAL_FG) is None
+
+
+class TestWrapText:
+    """The pure ``wrap_text`` layout helper (spec 06 dev plan stage 4
+    refactoring: whitespace-splitting rules unit-testable without any
+    rendering)."""
+
+    def test_wrap_text_with_a_break_inside_a_whitespace_run_should_split_the_run(
+        self, font_ready: None
+    ) -> None:
+        # GIVEN a width that fits exactly three of the six spaces after
+        # "hello" (same word on both sides so proportional fonts are
+        # deterministic):
+        font = _theme(TEST_THEME_JSON).get_font(TEXT_FONT_SIZE)
+        max_width = font.size("hello")[0] + 3 * font.size(" ")[0]
+
+        # WHEN the text is wrapped:
+        lines = wrap_text("hello      hello", font, max_width)
+
+        # THEN the run is split, never collapsed: three spaces end the
+        # first line, three spaces begin the second (spec 06):
+        assert lines == ["hello   ", "   hello"]
+
+    def test_wrap_text_should_keep_whitespace_runs_verbatim_when_they_fit(
+        self, font_ready: None
+    ) -> None:
+        # GIVEN a width wide enough for the whole text:
+        font = _theme(TEST_THEME_JSON).get_font(TEXT_FONT_SIZE)
+
+        # WHEN text with a double space is wrapped:
+        # THEN the run is preserved as-is:
+        assert wrap_text("a  b", font, 1000) == ["a  b"]
+
+    def test_wrap_text_should_honor_explicit_newlines_including_blank_lines(
+        self, font_ready: None
+    ) -> None:
+        # GIVEN text with an explicit blank line:
+        font = _theme(TEST_THEME_JSON).get_font(TEXT_FONT_SIZE)
+
+        # WHEN it is wrapped:
+        # THEN each explicit newline is a break and the blank line
+        # survives as an empty line (spec 06):
+        assert wrap_text("a\n\nb", font, 1000) == ["a", "", "b"]
+
+    def test_wrap_text_should_emit_an_unwrappable_word_whole(
+        self, font_ready: None
+    ) -> None:
+        # GIVEN a width far too small for a single long word:
+        font = _theme(TEST_THEME_JSON).get_font(TEXT_FONT_SIZE)
+
+        # WHEN it is wrapped:
+        # THEN the word is emitted whole for the caller to clip
+        # (spec 06: no scrolling):
+        assert wrap_text("supercalifragilistic", font, 10) == [
+            "supercalifragilistic"
+        ]
+
+    def test_wrap_text_should_treat_tabs_as_wrap_points(self, font_ready: None) -> None:
+        # GIVEN a width that fits "a" but nothing more:
+        font = _theme(TEST_THEME_JSON).get_font(TEXT_FONT_SIZE)
+        max_width = font.size("a")[0]
+
+        # WHEN tab-separated words are wrapped:
+        # THEN the tab is a wrap point and its run is carried to the
+        # next line (spec 06: wrapping honors any whitespace, tabs
+        # included):
+        assert wrap_text("a\tb", font, max_width) == ["a", "\t", "b"]
