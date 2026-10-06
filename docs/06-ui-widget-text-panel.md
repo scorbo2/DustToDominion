@@ -5,7 +5,7 @@ status: active
 
 # TextPanel
 
-This document proposes a new `dtd/widgets/text_panel.py` module containing a new
+This document describes the `dtd/widgets/text_panel.py` module containing a
 UI widget for the game: `TextPanel`. This is a simple read-only multi-line text panel
 with line wrap at word boundaries. It extends the existing `Widget` base class.
 
@@ -120,9 +120,10 @@ Spec `05-audio-manager.md` should be amended to add `stop_sfx(id)` to request th
 given sound effect id should be stopped if it is currently playing. This is needed because our 
 TextPanel animation can be interrupted, causing associated audio to be stopped if in progress.
 
-Implementation notes for the proposed 05 spec amendment:
+Implementation notes for the 05 spec amendment (as implemented):
 - if `loader.get_sfx_resource(id)` resolves to a `mixer.Sound` instance, invoke `stop()` on it.
-- if the id was in `_active_loops`, remove it (the `stop()` invocation above has already stopped it anyway).
+- if the id has an entry in the loop registry (`AudioManager._loops`, a `_LoopRegistry`), drop its
+  bookkeeping via `_loops.deregister(id)` (the `stop()` invocation above has already stopped it anyway).
 - invoking `stop()` on the Sound object will stop it playing on ALL channels. This may
   cause it to stop even if some other TextPanel instance was also playing the same sound. Acceptable.
 
@@ -357,7 +358,7 @@ This document introduces no new configuration keys.
 
 ## Dev plan
 
-The spec is too large to implement in one pass. The following staged dev plan is proposed (each stage should include tests):
+The spec was too large to implement in one pass. The following staged dev plan was followed (each stage included tests):
 
 1. Implement the amendments to previous spec docs. Change the specs, then update the code for both 04 and 05.
    **Completed 2026-10-04**
@@ -366,10 +367,10 @@ The spec is too large to implement in one pass. The following staged dev plan is
    **Completed 2026-10-04**
 3. Implement audio support for panel appearance and disappearance.
    **Completed 2026-10-04**
-   - Refactoring note from stage 1: the `_active_loops` bookkeeping in `dtd/audio.py` is now touched in four
-     places (`set_active_loops`, `_start_loop`, `stop_sfx`, `_stop_all_sfx`). Once TextPanel audio is wired in,
-     extract a small internal loop-registry helper so start/stop/deregister and the idempotency rules live in
-     exactly one place.
+   - Refactoring note from stage 1 (completed): the loop bookkeeping in `dtd/audio.py` was touched in four
+     places (`set_active_loops`, `_start_loop`, `stop_sfx`, `_stop_all_sfx`). Once TextPanel audio was wired in,
+     a small internal loop-registry helper was extracted: `_LoopRegistry`, held by `AudioManager` as `_loops`,
+     so start/stop/deregister and the idempotency rules live in exactly one place.
 4. Implement animation options for appearance and disappearance.
    **Completed 2026-10-04**
    - Refactoring note from stage 2: the wrap logic (`_wrap_lines`/`_wrap_paragraph`) in

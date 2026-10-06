@@ -5,7 +5,7 @@ status: active
 
 # Audio Manager
 
-This document proposes a new `dtd/audio.py` module that defines an `AudioManager` class
+This document describes the `dtd/audio.py` module that defines an `AudioManager` class
 for managing all audio resources for the game.
 
 The game code should never directly query the resource manager for audio resources.

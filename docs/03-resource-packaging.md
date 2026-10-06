@@ -18,7 +18,7 @@ In both modes, the game should not make assumptions about the number of resource
 The intention is that additional resource packages can be made after the game ships, as
 add-on packs, and distributed to users as `*.pak` package files.
 
-This document proposes a new `resource_loader` module that is responsible for finding and loading
+This document describes the `resource_loader` module, which is responsible for finding and loading
 game resources at game startup. This resource loader is invoked during startup, after the game configuration
 has been processed, but before the main window is displayed. This is so that configuration errors are detected
 early and the game does not start up in an invalid state. This requires pygame's initialization to
@@ -220,7 +220,7 @@ cached as a `pygame.mixer.Sound` object, which music files have their raw bytes 
 
 ## Configuration
 
-A new top-level configuration key `resources` is proposed. This configuration field can explicitly set
+A top-level configuration key `resources` is defined by this spec. This configuration field can explicitly set
 a mode to be used ("dev" or "distribution"), along with the location of resources to be loaded.
 If "mode" is any value other than "dev" or "distribution", raise `InvalidConfigError` with a warning
 log message and assume "dev". If "mode" is missing entirely, assume "dev" with no log warning.

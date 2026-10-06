@@ -40,6 +40,11 @@ these possible values:
 
 If the frontmatter section of a document is missing, the document is assumed to be in `proposed` state.
 
+When a document moves from `proposed` to `active`, its prose must be updated to match: an implemented
+document *describes* (or *specifies*) what the code does - it no longer "proposes" it. Stale
+"proposes"/"proposed" wording in an `active` document is a spec/code-sync drift like any other, and
+the whole spec set should be checked for it when a feature is completed.
+
 Note that the `00-project-overview.md` document does not have Yaml frontmatter, as it is the only
 specification document that is not intended to produce runnable code - it is a guideline document.
 

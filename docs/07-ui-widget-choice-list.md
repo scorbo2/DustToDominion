@@ -5,7 +5,7 @@ status: active
 
 # ChoiceList
 
-This document proposes a new `dtd/widgets/choice_list.py` module containing a new
+This document describes the `dtd/widgets/choice_list.py` module containing a
 UI widget for the game: `ChoiceList`. This is NOT a dropdown/combobox, and it is NOT
 a multi-line list chooser. This is a simple single-line component, visually similar
 to the existing Button widget, but with `<` and `>` pager controls on the left and right sides
