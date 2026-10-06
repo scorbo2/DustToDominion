@@ -1061,7 +1061,20 @@ class TestAudioFixtureHygiene:
     """The ``audio_manager`` fixture must not leak the global singleton
     into later tests (issue #23). These two tests are order-dependent by
     design: pytest runs them in definition order, and the second one
-    asserts what the first one's fixture finalizer left behind."""
+    asserts what the first one's fixture finalizer left behind.
+
+    The class deliberately opts out of the autouse ``clean_audio_singleton``
+    backstop (see the same-named fixture below): with the backstop active,
+    its pre-test reset would make the second test pass unconditionally,
+    guarding the backstop instead of the fixture finalizer it targets."""
+
+    @pytest.fixture
+    def clean_audio_singleton(self) -> Iterator[None]:
+        """Shadows - and thereby disables - the autouse conftest backstop
+        for this class, the documented pytest pattern for opting out of an
+        autouse fixture. The rest of the suite keeps the backstop; if this
+        class ever leaks, the next test's backstop reset contains it."""
+        yield
 
     def test_audio_manager_fixture_should_install_the_global_singleton(
         self, audio_manager: audio.AudioManager

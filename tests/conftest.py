@@ -20,9 +20,9 @@ from pathlib import Path
 
 import pytest
 
-from dtd import audio, persistence
+from dtd import persistence
 
-# These MUST be set before pygame (i.e. SDL) is imported anywhere in the test
+# These MUST be set before pygame (i.e., SDL) is imported anywhere in the test
 # process. conftest.py is imported by pytest before any test module, which is
 # before dtd.main_window's top-level `import pygame`.
 os.environ.setdefault("SDL_VIDEODRIVER", "dummy")
@@ -32,6 +32,11 @@ os.environ.setdefault("SDL_AUDIODRIVER", "dummy")
 # module is imported by pytest before any test module (so before any other
 # pygame import in the process).
 import pygame
+
+# dtd.audio imports pygame at module level, so it must not join the
+# pre-env-vars import above - same invariant, one hop removed (PR #31
+# review).
+from dtd import audio
 
 
 @pytest.fixture(autouse=True)
