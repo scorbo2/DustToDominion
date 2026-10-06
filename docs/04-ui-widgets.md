@@ -188,7 +188,7 @@ is rendered as disabled - the `*Selected` theme colors are not used while the wi
 
 ### Selecting widgets
 
-*Amended 2026-10-04 per spec 06 (TextPanel).*
+*Amended 2026-10-04 per spec 06 (TextPanel). Amended 2026-10-05 per spec 07 (ChoiceList).*
 
 The `Widget` base class carries a `selected` property alongside `enabled`. It defaults to `False`
 and is only ever set programmatically by client code - the framework itself never selects or
@@ -203,6 +203,14 @@ Setting a widget to both selected and disabled does not cancel the selected stat
 effectively hides it from the user until the widget is re-enabled. The precedence order described
 here is purely cosmetic. A disabled widget's "selected" status can still hold whatever meaning the
 game assigns to that state, even while the selection state is not visible to the user.
+
+A Widget that is both selected and hovered by the mouse renders as selected: for rendering purposes,
+"selected" has higher precedence than "hover", and the `*Hover` theme colors are never used while an
+enabled widget is selected. A selected widget may still track mouse hover internally - for example,
+to restore the hover appearance if it is later deselected - and it still responds to mouse clicks
+normally. Widgets that support both selection and mouse hover are responsible for rendering
+accordingly. The complete precedence order for theme color selection is therefore: disabled, then
+selected, then hover, then normal.
 
 ### Widget coordinates
 
@@ -333,6 +341,8 @@ The spec can be implemented in stages:
 4. Implement the `Button` widget. Write all remaining tests. **Completed 2026-10-01**
 5. Amendment per spec 06 (TextPanel): add the `selected` property to the `Widget` base class and
    document the disabled-over-selected precedence. **Completed 2026-10-04**
+6. Amendment per spec 07 (ChoiceList): document the selected-over-hover rendering precedence.
+   Wording-only amendment; no code or test changes required. **Completed 2026-10-05**
 
 Upon completion, if all tests pass, mark this document as "active". (Done 2026-10-01;
 full suite green at 280 tests.)
