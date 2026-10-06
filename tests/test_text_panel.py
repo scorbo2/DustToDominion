@@ -1217,6 +1217,65 @@ class TestPanelAnimation:
         _run_frames(ui, 3)
         assert _clear_and_draw(ui).get_at((125, 25)) == BLACK
 
+    def test_explicit_nonpositive_fade_out_with_active_slide_out_should_dismiss_instantly(
+        self, font_ready: None
+    ) -> None:
+        # GIVEN an appeared panel with an explicit zero-frame fade-out
+        # and a 10-frame slide-out to an on-screen destination - the
+        # mixed case from issue #22:
+        panel = TextPanel(pygame.Rect(100, 0, 50, 50))
+        panel.set_fade_out_options(frames=0)
+        panel.set_slide_out_options(pygame.Rect(300, 0, 50, 50), frames=10)
+        ui = _register(panel, _theme(TEST_THEME_JSON))
+        ui.update([])
+
+        # WHEN disappear() is invoked:
+        panel.disappear()
+
+        # THEN alpha is zeroed at once (spec 06: frames <= 0 means
+        # instant disappear) even though a slide-out is running:
+        assert panel.is_visible() is False
+
+        # AND the slide-out still runs - the aspects are independent,
+        # and current_rect() still tracks it - but the panel stays
+        # invisible and draws nothing at the destination:
+        _run_frames(ui, 10)
+        assert panel.current_rect().x == 300
+        assert panel.is_visible() is False
+        assert _clear_and_draw(ui).get_at((325, 25)) == BLACK
+
+        # AND a negative fade-out duration behaves identically:
+        negative = TextPanel(pygame.Rect(100, 100, 50, 50))
+        negative.set_fade_out_options(frames=-5)
+        negative.set_slide_out_options(pygame.Rect(300, 100, 50, 50), frames=10)
+        negative_ui = _register(negative, _theme(TEST_THEME_JSON))
+        negative_ui.update([])
+        negative.disappear()
+        assert negative.is_visible() is False
+        _run_frames(negative_ui, 10)
+        assert negative.is_visible() is False
+
+    def test_disappear_mid_fade_in_with_explicit_zero_frame_fade_out_should_be_instantly_transparent(
+        self, font_ready: None
+    ) -> None:
+        # GIVEN a panel 5 frames into a 10-frame fade-in (half visible),
+        # with an explicit zero-frame fade-out configured:
+        panel = TextPanel(pygame.Rect(100, 0, 50, 50))
+        panel.set_fade_in_options(frames=10)
+        panel.set_fade_out_options(frames=0)
+        ui = _register(panel, _theme(TEST_THEME_JSON))
+        _run_frames(ui, 6)
+        assert 0 < _clear_and_draw(ui).get_at((125, 25))[1] < 255
+
+        # WHEN disappear() interrupts the fade-in:
+        panel.disappear()
+
+        # THEN the partial alpha is zeroed at once, not frozen at its
+        # mid-fade value - the freeze gotcha applies only to a
+        # never-configured fade-out:
+        assert panel.is_visible() is False
+        assert _clear_and_draw(ui).get_at((125, 25)) == BLACK
+
     def test_animation_option_setters_after_first_update_should_be_ignored(
         self, font_ready: None
     ) -> None:
