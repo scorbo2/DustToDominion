@@ -249,7 +249,7 @@ avoid the case where a border width of 1 might resolve to `0.67px` in 1280x720 m
 ### Supplied widget - Button
 
 This specification includes a `Button` widget to validate that new widget types can be created
-in the proposed framework. The Button widget should offer the following options:
+in this framework. The Button widget should offer the following options:
 
 - `icon`: if `None`, no icon is displayed.
 - `text`: if blank, empty, or `None`, no text is displayed. Text is rendered using foregroundNormal/foregroundHover
