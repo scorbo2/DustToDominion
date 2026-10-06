@@ -38,7 +38,11 @@ If the caller-supplied list of options is empty, the ChoiceList disables itself
 automatically and displays no item. The ChoiceList cannot be programmatically enabled
 if its list is empty. The pager controls are still rendered but are inoperative because
 the widget is disabled. ChoiceList should implement a property override for the parent
-class's bare `enabled` attribute to manage this.
+class's bare `enabled` attribute to manage this. Note that this override is invoked
+during construction: `Widget.__init__` assigns `self.enabled = True`, which calls the
+subclass setter before `super().__init__()` returns. The ChoiceList constructor must
+therefore establish its sanitized `_items` list *before* calling `super().__init__()`,
+or the setter will raise `AttributeError` on a not-yet-existing attribute.
 
 The caller-supplied list is supplied once as a constructor parameter,
 and cannot be modified once set. The ChoiceList constructor performs
@@ -61,8 +65,9 @@ otherwise default. Entries that were modified but not removed (example: `"ban\na
 still count as surviving, mapped to their new position.
 
 If the given `initial_index` is invalid (out of range, or points to
-an item that was removed during sanitization, or is not an integer), the default
-behavior is used. Default behavior: the initially-selected item is the first in the
+an item that was removed during sanitization, or is not an integer - note that
+negative indexes are out of range, rather than the Python style of counting from the end),
+the default behavior is used. Default behavior: the initially-selected item is the first in the
 list AFTER sanitization. For example: given ["cherry", "banana", "apple"] and no
 index, the initially-selected item will be "apple". Given the same list and an
 index of 1 ("banana"), the initially-selected item will be "banana". Given a
@@ -92,15 +97,31 @@ class ChoiceList(Widget):
         border_width: int = 0,
         selection_callback: Callable[[str], None] | None = None
     ) -> None:
+        # Sanitize BEFORE super().__init__(): Widget.__init__ assigns
+        # self.enabled = True, which invokes the property override below,
+        # and that override reads self._items.
+        self._items = sanitize_choices(items)
         super().__init__(rect)
-        self._items = items
         self.border_width = border_width
         self._left_pressed = False  # left button pressed inside the left control?
         self._right_pressed = False # left button pressed inside the right control?
-        # List sorting, stripping, and initial selection handling goes here...
+        # Initial selection handling (initial_index mapping) goes here...
+
+    @property
+    def enabled(self) -> bool:
+        return self._enabled and bool(self._items)
+
+    @enabled.setter
+    def enabled(self, value: bool) -> None:
+        # An empty (post-sanitization) list can never be enabled (see above).
+        self._enabled = value and bool(self._items)
 
     def get_current_item(self) -> str | None:
         # Return currently-selected item or None if list is empty
+
+    def set_current_item(self, item: str) -> None:
+        # If the given item exactly matches any contained item, select it.
+        # This triggers a selection callback.
 
     def get_item_count(self) -> int:
         # Return effective item count (after stripping and de-duplicating)
@@ -127,7 +148,7 @@ left pager control, and the right edge of the text and the right pager control
 top of the pager controls.
 
 The pager controls are square, borderless regions on either horizontal end
-of the widget. Their side length is the minimum of 33% of the widget's width,
+of the widget. Their side length is the minimum of 33% of the widget's width (in design space),
 or the widget's internal height (that is, the height of the widget minus the border
 width on top and bottom). If the computed side length is less than or equal to 0
 (for example, if border width is greater than half the widget height), then
@@ -140,6 +161,9 @@ Their foreground (text) color is always the same as the ChoiceList's foreground 
 The font size for the control's glyph is the largest font size such that the glyph
 plus its top and bottom margin will fit the pager control's boundary (using the side length defined above).
 This may not match the effective font size used for the selected item - that is acceptable.
+If no font size satisfies that constraint (not even point size 1), the glyph is simply
+not rendered at all. The pager control's hit area is unaffected: the control remains
+clickable even when its glyph is too small to draw.
 Each pager glyph has a margin equal to half the height of the `0` character in the pager control's
 effective font size. This margin is applied on all four sides of the glyph.
 The hit area for mouse clicks is the region of the pager control inclusive of its margin.
@@ -160,12 +184,17 @@ selection is changed. The text of the current selection is supplied as an
 argument to the callback. No-op changes (for example, the user clicks `>`
 when there is only one item in the list) do NOT cause a callback.
 
+If the callback raises, ChoiceList will let it propagate - we don't try to handle it.
+
 Additionally, ChoiceList should expose a `get_current_item` function which
 returns the current item (or None if the list is empty).
 
 The `get_item_count()` function can be invoked to learn the size of the
 sanitized list, which may not match the size of the input list. Callers can
 use this to discover if their input lists are being stripped for any reason.
+
+Callers can select any item with `set_current_item()`, but they must specify
+an EXACT match. This is a client responsibility.
 
 ## Additional dependencies
 
@@ -182,19 +211,22 @@ This document introduces no new configuration keys.
   and displays no item text (pager control glyphs are still visible however).
 - A ChoiceList with exactly one item supplied to its constructor renders normally, but the
   pager controls do not trigger a callback (no change is possible).
+- A ChoiceList that is too small to renders text does not render the glyps for the pager controls.
 - Input lists are sanitized and deduplicated correctly.
   Example: ["apple", "Apple", "APPLE", "banana"] results in ["apple", "banana"] and
   `get_item_count()` should return 2 (the size of the sanitized list, NOT the size of the input list).
 - Supplying a list containing a non-string should result in the non-string item(s) being stripped.
 - List items that differ only by leading/trailing whitespace survive deduplication.
   Example: ["apple", " apple ", "apple "] results in [" apple ", "apple", "apple "].
-  Note that the order is rearranged due to `casefold()`, but all items remain in the sanitized list.
+  Note that the order is rearranged due to the sort, but all items remain in the sanitized list.
   This is not a bug - it is a client-side problem.
 - Supplying a valid input list and an initially selected index should NOT trigger a callback.
 - A ChoiceList with multiple items supplied to its constructor renders normally, and the
   pager controls trigger a callback with the newly-selected item.
   - The given items are alphabetized automatically.
   - Blank or empty items are stripped.
+- Clicking the text of the currently-selected item does nothing (only the pager controls respond to clicks).
+- A selection callback that raises an exception results in the exception propagating, not being handled by ChoiceList.
 - If an invalid initial index is given to a ChoiceList (not an int), default behavior should be used.
 - If a ChoiceList is both "selected" and disabled, it should render as disabled, as per spec 04.
 - A ChoiceList with blank or empty items supplied to its constructor does not render them
@@ -209,6 +241,8 @@ This document introduces no new configuration keys.
   to be selected, and vice versa.
 - A ChoiceList given an unreasonably long item that cannot be scaled results in the text
   being clipped. Text does not overlap the pager controls.
+- `set_current_item()` with a non-existent item is a no-op. No callback is triggered.
+- `set_current_item()` with an exact existing item selects that item and triggers a selection callback.
 - A ChoiceList with an unreasonably thick border (greater than half the ChoiceList height)
   prevents the pager controls from rendering. This is not a bug - it's a client-side problem.
 - A "selected" ChoiceList displays in the `*Selected` theme colors, ignoring mouse hover events.
