@@ -274,14 +274,16 @@ This specification is too large to implement in one pass. The following staged
 implementation plan is suggested (each stage after 1 should include tests):
 
 1. Small amendment to the 04 spec doc (wording addition only; no code/test changes needed).
+   **Completed 2026-10-05**
 2. Create the ChoiceList class, but stub out `update()` and any internal rendering functions.
    Implement list sanitization and deduplication. No rendering at this stage.
    Expose a temporary getter if needed so that tests can inspect the sanitized `_items` list.
    `get_current_item()` should return the expected value after construction - either the
    value that the caller requested with `initial_index`, or a default selection as outlined
    in this spec. No rendering or layout logic in this stage - just item list handling.
-   Strongly recommend that the sanitization pipeline be extracted to a module-level function
-   `sanitize_choices(raw: list) -> list[str]`, to make unit testing easy without any pygame surface.
+    Strongly recommend that the sanitization pipeline be extracted to a module-level function
+    `sanitize_choices(raw: list) -> list[str]`, to make unit testing easy without any pygame surface.
+    **Completed 2026-10-05**
 3. Implement rendering and layout logic. Handle all edge cases described in this document regarding
    possible geometry of the widget. Ensure text scaling and clipping works as specified.
    Remove any temporary access functions that were added in stage 2.
