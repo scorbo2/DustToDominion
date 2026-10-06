@@ -211,7 +211,7 @@ This document introduces no new configuration keys.
   and displays no item text (pager control glyphs are still visible however).
 - A ChoiceList with exactly one item supplied to its constructor renders normally, but the
   pager controls do not trigger a callback (no change is possible).
-- A ChoiceList that is too small to renders text does not render the glyps for the pager controls.
+- A ChoiceList that is too small to render text does not render the glyphs for the pager controls.
 - Input lists are sanitized and deduplicated correctly.
   Example: ["apple", "Apple", "APPLE", "banana"] results in ["apple", "banana"] and
   `get_item_count()` should return 2 (the size of the sanitized list, NOT the size of the input list).
