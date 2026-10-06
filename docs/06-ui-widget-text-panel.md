@@ -308,6 +308,11 @@ This document introduces no new configuration keys.
   on first `update()`.
 - If no disappearance animation options are given, the panel simply becomes fully transparent on `disappear()`.
 - Specifying `speed` or `frames` less than or equal to 0 before invoking `update()`/`disappear()` disables the animation.
+- An explicitly configured fade-out with `frames` less than or equal to 0 combined with a slide-out of `frames` greater
+  than 0 makes the panel instantly fully transparent when `disappear()` is invoked: the slide-out still runs (and
+  `current_rect()` still tracks it), but `is_visible()` reports False from that moment on. This mirrors the appearance
+  side, where an explicit `fade-in` of `frames` <= 0 means instant full opacity. The "stays visible after slide-out"
+  case further below applies only when no fade-out was specified *at all*.
 - Invoking `update()` with typing animation options then invoking `disappear()` before the typing
   animation completes does not cause the typing animation to stop until the panel has fully disappeared.
 - Invoking `disappear()` before `update()` is a no-op: no animation is triggered, no audio plays.

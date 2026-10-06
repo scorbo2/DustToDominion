@@ -242,8 +242,10 @@ class TextPanel(Widget):
         Before the first ``update()`` this is a no-op. It cancels any
         running appearance animation and starts the disappearance from
         the panel's current interpolated state; with no disappearance
-        options the panel simply becomes fully transparent. Once
-        dismissed, the panel can never be made visible again.
+        options, or with an explicitly non-positive fade-out duration,
+        the panel becomes fully transparent at once (spec 06: frames
+        <= 0 means instant disappear). Once dismissed, the panel can
+        never be made visible again.
 
         Gotcha: interrupting a fade-in with no fade-out configured
         freezes alpha at its partial value - the panel stays
@@ -261,7 +263,14 @@ class TextPanel(Widget):
             self._disappearance_slide = _FrameAnimation(self._slide_out[1])
         if self._fade_out_frames is not None and self._fade_out_frames > 0:
             self._disappearance_fade = _FrameAnimation(self._fade_out_frames)
-        if self._disappearance_slide is None and self._disappearance_fade is None:
+        elif self._fade_out_frames is not None or self._disappearance_slide is None:
+            # Two paths lead to instant transparency (spec 06: frames <= 0
+            # means instant disappear): an explicitly configured non-positive
+            # fade-out - the mirror of _begin_appearance treating fade-in
+            # <= 0 as instant full opacity - or no running disappearance
+            # animation at all. Only a never-configured fade-out alongside a
+            # running slide-out leaves alpha alone, which is the spec's
+            # documented "stays visible" corner for slide-out-only panels.
             self._alpha = 0
         self._stop_sfx_if_set(self._audio_on_appear)
         self._play_sfx_if_set(self._audio_on_disappear)
