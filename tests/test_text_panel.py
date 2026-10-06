@@ -1337,6 +1337,102 @@ class TestPanelAnimation:
         assert panel.current_rect() == panel.rect
         assert _clear_and_draw(ui).get_at((125, 25)) == NORMAL_BG
 
+    def test_disappearance_option_setters_after_first_update_should_be_ignored(
+        self, font_ready: None
+    ) -> None:
+        # GIVEN a panel that has already appeared with no options:
+        panel = TextPanel(pygame.Rect(100, 0, 50, 50))
+        ui = _register(panel, _theme(TEST_THEME_JSON))
+        ui.update([])
+
+        # WHEN the disappearance setters are called afterwards, with
+        # durations that would be unmistakable if honored (a 10-frame
+        # slide to x=900 and a 10-frame fade):
+        panel.set_slide_out_options(pygame.Rect(900, 0, 50, 50), frames=10)
+        panel.set_fade_out_options(frames=10)
+        panel.disappear()
+
+        # THEN they are ignored - the panel neither moves nor fades, it
+        # simply becomes fully transparent at once (spec 06: calls after
+        # the first update() are ignored):
+        assert panel.is_visible() is False
+        assert panel.current_rect() == panel.rect
+        _run_frames(ui, 5)
+        assert panel.current_rect() == panel.rect
+        assert _clear_and_draw(ui).get_at((125, 25)) == BLACK
+
+    def test_typing_options_setter_after_first_update_should_be_ignored(
+        self, font_ready: None
+    ) -> None:
+        # GIVEN a panel that has already appeared with its full text:
+        panel = TextPanel(
+            pygame.Rect(0, 0, 300, 100),
+            text="Hello World",
+            font_size=TEXT_FONT_SIZE,
+        )
+        ui = _register(panel, _theme(TEST_THEME_JSON))
+        ui.update([])
+
+        # WHEN typing options are set afterwards, at a speed that would
+        # be unmistakable if honored (1 character per frame):
+        panel.set_typing_options(60)
+        _run_frames(ui, 5)
+
+        # THEN they are ignored - the full text is still rendered in one
+        # piece, identical to a panel that never had typing options
+        # (spec 06: calls after the first update() are ignored):
+        assert (
+            _rightmost_fg_column(_draw(ui), panel.rect, NORMAL_FG)
+            == _reference_rightmost("Hello World", panel.rect)
+        )
+
+    def test_last_typing_options_call_before_update_should_win(
+        self, font_ready: None
+    ) -> None:
+        # GIVEN a panel whose first typing call enables typing and
+        # whose second disables it (speed <= 0):
+        disabled = TextPanel(
+            pygame.Rect(0, 0, 300, 100),
+            text="Hello World",
+            font_size=TEXT_FONT_SIZE,
+        )
+        disabled.set_typing_options(60)
+        disabled.set_typing_options(0)
+        disabled_ui = _register(disabled, _theme(TEST_THEME_JSON))
+
+        # WHEN the appearance starts:
+        disabled_ui.update([])
+
+        # THEN the most recent call's parameters are used - no typing
+        # animation at all, full text immediately (spec 06: the most
+        # recent invocation's parameters for each animation type win):
+        assert (
+            _rightmost_fg_column(_draw(disabled_ui), disabled.rect, NORMAL_FG)
+            == _reference_rightmost("Hello World", disabled.rect)
+        )
+
+        # AND GIVEN the reverse order - disabled first, enabled second:
+        enabled = TextPanel(
+            pygame.Rect(0, 0, 300, 100),
+            text="Hello World",
+            font_size=TEXT_FONT_SIZE,
+        )
+        enabled.set_typing_options(0)
+        enabled.set_typing_options(60)
+        enabled_ui = _register(enabled, _theme(TEST_THEME_JSON))
+
+        # AND WHEN the appearance starts and 5 frames pass:
+        enabled_ui.update([])
+        _run_frames(enabled_ui, 5)
+
+        # THEN typing runs at the most recent call's speed - 5 of the
+        # 11 characters revealed, well short of the full text:
+        partial = _rightmost_fg_column(
+            _draw(enabled_ui), enabled.rect, NORMAL_FG
+        )
+        assert partial is not None
+        assert partial < _reference_rightmost("Hello World", enabled.rect)
+
     def test_is_visible_should_be_false_until_a_slide_in_enters_the_viewport(
         self, font_ready: None
     ) -> None:
