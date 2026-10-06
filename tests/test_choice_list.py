@@ -1,13 +1,13 @@
 """Unit tests for the ``ChoiceList`` widget (spec 07).
 
-Stage 2 covered item handling: the pure ``sanitize_choices`` pipeline,
-construction (including ``initial_index`` mapping and the empty-list
-auto-disable), the ``enabled`` property override, and the selection API.
-Stage 3 adds rendering, layout, and pager mouse handling: state colors
-through a real UIManager, synthesized mouse clicks against a dummy
-display at the design resolution (scale 1, following the Button test
-patterns), and the geometry edge cases (narrow, tall, and
-thick-bordered widgets, glyph-less tiny pagers, clipped text).
+Covers the pure ``sanitize_choices`` pipeline, construction (including
+``initial_index`` mapping and the empty-list auto-disable), the
+``enabled`` property override, the selection API, state colors through a
+real UIManager, pager mouse handling, and the geometry edge cases
+(narrow, tall, and thick-bordered widgets, glyph-less tiny pagers,
+clipped text). Mouse events are synthesized and pixel assertions read
+the display surface after ``ui.draw`` at the design resolution (scale 1,
+following the Button test patterns).
 """
 from __future__ import annotations
 
@@ -583,6 +583,21 @@ class TestPagerClicks:
         assert widget.get_current_item() == "alpha"
         assert recorded == []
 
+    def test_re_enabling_should_restore_pager_clicks(self) -> None:
+        # GIVEN a disabled three-item ChoiceList that ignored a click:
+        widget, ui, recorded = _choice_ui(pygame.Rect(0, 0, 400, 60), ["alpha", "beta", "gamma"])
+        widget.enabled = False
+        ui.update(_click(self.RIGHT))
+        assert recorded == []
+
+        # WHEN the widget is re-enabled and the pager clicked again,
+        # THEN mouse interaction is restored (spec 07: enabling/disabling
+        # mouse interaction with the pager controls):
+        widget.enabled = True
+        ui.update(_click(self.RIGHT))
+        assert widget.get_current_item() == "beta"
+        assert recorded == ["beta"]
+
     def test_pager_whose_glyph_cannot_render_should_stay_clickable(self) -> None:
         # GIVEN a ChoiceList whose 1px pagers cannot fit even a 1pt glyph
         # (side = min(33% of 4, 10) = 1; the smallest rendered glyph of
@@ -750,6 +765,20 @@ class TestStateColors:
         assert _pixels_in(screen, pygame.Rect(0, 0, 60, 60), DISABLED_FG) > 0
         # ...and no item text is displayed anywhere in the text area:
         assert not _any_pixel_differs(screen, pygame.Rect(60, 0, 280, 60), DISABLED_BG)
+
+    def test_single_item_should_render_normally_with_glyphs_and_text(
+        self, font_ready: None
+    ) -> None:
+        # GIVEN a ChoiceList with exactly one item:
+        _, ui, _ = _choice_ui(pygame.Rect(0, 0, 400, 60), ["alpha"])
+
+        # WHEN the UI draws,
+        # THEN it renders normally: normal fill, visible pager glyphs,
+        # and the item text inside the text area (spec 07: Testing):
+        screen = _draw(ui)
+        assert screen.get_at(self.BACKGROUND_SAMPLE) == NORMAL_BG
+        assert _pixels_in(screen, pygame.Rect(0, 0, 60, 60), NORMAL_FG) > 0
+        assert _pixels_in(screen, pygame.Rect(60, 0, 280, 60), NORMAL_FG) > 0
 
 
 class TestItemTextRendering:

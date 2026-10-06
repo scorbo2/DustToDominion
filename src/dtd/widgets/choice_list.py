@@ -40,9 +40,6 @@ Rendering contract (spec 07: Visual appearance):
   though not disabled - widget: a client geometry problem.
 - A click is a left-button press *and* release inside the same pager
   square (the same rule as Button, spec 04).
-
-Staged implementation (spec 07: Dev plan): stages 1-3 complete - item
-handling, rendering, layout, and pager mouse handling.
 """
 from __future__ import annotations
 
@@ -222,6 +219,8 @@ class ChoiceList(Widget):
         pagers; short ones get squares flush with the interior height.
         """
         inner = self._inner_rect()
+        # The 33% cap is floored: pagers never claim *more* than a third
+        # of the widget's width (spec 07: Narrow ChoiceLists).
         side = min(int(self.rect.w * 0.33), inner.h)
         if side <= 0:
             return None
@@ -406,7 +405,14 @@ class ChoiceList(Widget):
     def _fits_with_margins(
         area: pygame.Rect, theme: Theme, text: str, size: int
     ) -> bool:
-        """Whether ``text`` plus its all-sides margins fit ``area``."""
+        """Whether ``text`` plus its all-sides margins fit ``area``.
+
+        The spec names "top and bottom" margins for pager glyphs, but
+        the margins are defined on all four sides - so the fit check is
+        two-axis for both item text and glyphs. A glyph that passes
+        vertically but fails horizontally would otherwise sit with less
+        margin than the spec asks for.
+        """
         font = theme.get_font(size)
         margin = font.size("0")[1] // 2
         width, height = font.size(text)

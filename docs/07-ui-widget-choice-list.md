@@ -1,6 +1,6 @@
 ---
 description: Describes a new UI widget for the game: ChoiceList
-status: proposed
+status: active
 ---
 
 # ChoiceList
@@ -292,5 +292,10 @@ implementation plan is suggested (each stage after 1 should include tests):
 4. Final pass to ensure the code fully matches the spec and that all tests pass.
    Clean up any stale code comments or docstrings added by previous stages such as
    "will be done in stage N". Upon completion, flip the status of this document from "proposed" to "active".
+   **Completed 2026-10-05**
+
+Upon completion, if all tests pass, mark this document as "active". (Done 2026-10-05;
+full suite green at 495 tests. The two implementation judgment calls - two-axis glyph
+fitting and the floored 33% pager-width cap - were reviewed and accepted.)
 
 
