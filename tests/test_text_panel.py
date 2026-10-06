@@ -263,9 +263,7 @@ def sfx_loader(
 
 
 @pytest.fixture
-def audio_manager(
-    sfx_loader: ResourceLoader, monkeypatch: pytest.MonkeyPatch
-) -> Iterator[audio.AudioManager]:
+def audio_manager(sfx_loader: ResourceLoader) -> Iterator[audio.AudioManager]:
     """The global singleton, initialized the way startup does (spec 06:
     TextPanel uses the module-level AudioManager; spec 05 testing
     pattern: mixer_ready + init_audio_manager)."""
@@ -273,8 +271,11 @@ def audio_manager(
     try:
         yield manager
     finally:
-        # Keep the module global clean for other tests.
-        monkeypatch.setattr(audio, "_audio_manager", None)
+        # Keep the module global clean for other tests. Plain assignment,
+        # not monkeypatch.setattr: monkeypatch's undo runs after this
+        # finalizer and would restore the mutated instance (issue #23).
+        # The autouse conftest reset is the backstop, not the fix.
+        audio._audio_manager = None
 
 
 class TestVisibilityStateMachine:
@@ -1054,6 +1055,48 @@ class TestPanelAudio:
 
         # THEN the most recent id is the one handed over:
         assert played == [SFX_SUSTAINED]
+
+
+class TestAudioFixtureHygiene:
+    """The ``audio_manager`` fixture must not leak the global singleton
+    into later tests (issue #23). These two tests are order-dependent by
+    design: pytest runs them in definition order, and the second one
+    asserts what the first one's fixture finalizer left behind.
+
+    The class deliberately opts out of the autouse ``clean_audio_singleton``
+    backstop (see the same-named fixture below): with the backstop active,
+    its pre-test reset would make the second test pass unconditionally,
+    guarding the backstop instead of the fixture finalizer it targets."""
+
+    @pytest.fixture
+    def clean_audio_singleton(self) -> Iterator[None]:
+        """Shadows - and thereby disables - the autouse conftest backstop
+        for this class, the documented pytest pattern for opting out of an
+        autouse fixture. The rest of the suite keeps the backstop; if this
+        class ever leaks, the next test's backstop reset contains it."""
+        yield
+
+    def test_audio_manager_fixture_should_install_the_global_singleton(
+        self, audio_manager: audio.AudioManager
+    ) -> None:
+        # GIVEN the fixture initialized the module-level singleton the
+        # way startup does, and a test mutated the instance the way the
+        # recorder helpers do:
+        _record_play_sfx(audio_manager)
+
+        # THEN get_audio_manager() hands out exactly that instance -
+        # this test deliberately leaves the global set; cleaning it up
+        # is the fixture finalizer's job:
+        assert audio.get_audio_manager() is audio_manager
+
+    def test_after_the_audio_manager_fixture_the_global_should_be_unset(
+        self,
+    ) -> None:
+        # THEN the previous test's fixture finalizer left the module
+        # global unset - not pointing at a zombie instance with recorder
+        # stubs welded onto it (issue #23: monkeypatch.setattr in a
+        # fixture finalizer gets undone after the finalizer runs):
+        assert audio._audio_manager is None
 
 
 class TestPanelAnimation:

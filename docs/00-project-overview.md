@@ -36,6 +36,8 @@ The game will have a fully hermetic test suite:
 - pygame's process-wide state (display, mixer, event queue) is reset before and after
   every test, so no test may rely on - or leak into - another test's pygame
   initialization state
+- the `dtd.audio` module-level `AudioManager` singleton is reset (unset) before and after
+  every test, so no test may rely on - or leak into - another test's audio singleton
 - seeded RNG and injected clock for deterministic behavior
 - use of environment variables to override default persistence location(s) to system temp dir
   - `DUST_TO_DOMINION_CONFIG`: overrides the default `$HOME/.DustToDominion/game.json`

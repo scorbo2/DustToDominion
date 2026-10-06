@@ -7,19 +7,22 @@ Guarantees required by spec 00:
   ``~/.DustToDominion`` is never read or written
 - pygame's process-wide state is reset before and after every test, so tests
   cannot leak initialized display/mixer state into one another
+- the dtd.audio module-level AudioManager singleton is unset before and after
+  every test, so tests cannot leak a (possibly mutated) singleton into one another
 - seeded RNG and an injected (fake) clock available to tests
 """
 from __future__ import annotations
 
 import os
 import random
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
 
 from dtd import persistence
 
-# These MUST be set before pygame (i.e. SDL) is imported anywhere in the test
+# These MUST be set before pygame (i.e., SDL) is imported anywhere in the test
 # process. conftest.py is imported by pytest before any test module, which is
 # before dtd.main_window's top-level `import pygame`.
 os.environ.setdefault("SDL_VIDEODRIVER", "dummy")
@@ -29,6 +32,11 @@ os.environ.setdefault("SDL_AUDIODRIVER", "dummy")
 # module is imported by pytest before any test module (so before any other
 # pygame import in the process).
 import pygame
+
+# dtd.audio imports pygame at module level, so it must not join the
+# pre-env-vars import above - same invariant, one hop removed (PR #31
+# review).
+from dtd import audio
 
 
 @pytest.fixture(autouse=True)
@@ -57,6 +65,25 @@ def clean_pygame_state() -> None:
     pygame.quit()  # clear anything an earlier test leaked
     yield
     pygame.quit()  # leave the process clean for the next test
+
+
+@pytest.fixture(autouse=True)
+def clean_audio_singleton() -> Iterator[None]:
+    """Reset the module-level AudioManager singleton around every test (spec 00).
+
+    ``dtd.audio._audio_manager`` is process-wide state, exactly like pygame's
+    subsystems: a test or fixture that calls ``init_audio_manager()`` writes a
+    real module global, and any test calling ``get_audio_manager()`` afterwards
+    would receive that stale - possibly mutated - instance instead of the
+    RuntimeError that signals "not initialized yet".
+
+    Plain assignment, not ``monkeypatch.setattr``: monkeypatch's undo runs
+    *after* this fixture's finalizer and would restore the very instance we are
+    trying to discard (issue #23 - the bug this fixture exists to prevent).
+    """
+    audio._audio_manager = None
+    yield
+    audio._audio_manager = None
 
 
 @pytest.fixture
