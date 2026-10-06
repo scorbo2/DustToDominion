@@ -287,6 +287,8 @@ implementation plan is suggested (each stage after 1 should include tests):
 3. Implement rendering and layout logic. Handle all edge cases described in this document regarding
    possible geometry of the widget. Ensure text scaling and clipping works as specified.
    Remove any temporary access functions that were added in stage 2.
+   **Completed 2026-10-05** (also introduced the shared `ui.state_colors` helper, with Button
+   and TextPanel delegating to it - behavior unchanged)
 4. Final pass to ensure the code fully matches the spec and that all tests pass.
    Clean up any stale code comments or docstrings added by previous stages such as
    "will be done in stage N". Upon completion, flip the status of this document from "proposed" to "active".

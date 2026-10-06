@@ -1,10 +1,13 @@
-"""Unit tests for the ``ChoiceList`` widget (spec 07, stage 2).
+"""Unit tests for the ``ChoiceList`` widget (spec 07).
 
-Stage 2 covers item handling only: the pure ``sanitize_choices`` pipeline,
+Stage 2 covered item handling: the pure ``sanitize_choices`` pipeline,
 construction (including ``initial_index`` mapping and the empty-list
-auto-disable), the ``enabled`` property override, and the selection API
-(``get_current_item`` / ``set_current_item`` / ``get_item_count``).
-Rendering, layout, and pager mouse handling arrive in stage 3.
+auto-disable), the ``enabled`` property override, and the selection API.
+Stage 3 adds rendering, layout, and pager mouse handling: state colors
+through a real UIManager, synthesized mouse clicks against a dummy
+display at the design resolution (scale 1, following the Button test
+patterns), and the geometry edge cases (narrow, tall, and
+thick-bordered widgets, glyph-less tiny pagers, clipped text).
 """
 from __future__ import annotations
 
@@ -13,16 +16,47 @@ from collections.abc import Callable
 import pygame
 import pytest
 
+from dtd import game_constants
+from dtd.resource_loader import ResourceLoader
+from dtd.ui import Theme, UIManager
 from dtd.widgets.choice_list import ChoiceList, sanitize_choices
+
+# Distinguishable custom theme: red/green in the normal state, blue/white
+# when selected, cyan/yellow on hover, dark grays when disabled.
+TEST_THEME_JSON = {
+    "foregroundNormal": "ff0000",
+    "backgroundNormal": "00ff00",
+    "foregroundSelected": "0000ff",
+    "backgroundSelected": "ffffff",
+    "foregroundHover": "00ffff",
+    "backgroundHover": "ffff00",
+    "foregroundDisabled": "111111",
+    "backgroundDisabled": "222222",
+}
+
+NORMAL_FG = (255, 0, 0, 255)
+NORMAL_BG = (0, 255, 0, 255)
+SELECTED_BG = (255, 255, 255, 255)
+HOVER_BG = (255, 255, 0, 255)
+DISABLED_FG = (17, 17, 17, 255)
+DISABLED_BG = (34, 34, 34, 255)
+
+
+def _theme(json_data: dict | None = None) -> Theme:
+    """A Theme over an unloaded loader with its getters stubbed."""
+    loader = ResourceLoader()
+    loader.get_json_resource = lambda resource_id: json_data
+    loader.get_font_resource = lambda resource_id, size: None
+    return Theme("themes/test.json" if json_data is not None else "", "", loader)
 
 
 def _rect() -> pygame.Rect:
-    """A throwaway design-space rect: stage 2 never renders."""
+    """A throwaway design-space rect: item-handling tests never render."""
     return pygame.Rect(100, 100, 400, 40)
 
 
 def _make(items: list, initial_index=None, selection_callback=None) -> ChoiceList:
-    """A ChoiceList at a throwaway rect (stage 2 never renders)."""
+    """A ChoiceList at a throwaway rect (item handling only)."""
     return ChoiceList(
         _rect(), items, initial_index=initial_index, selection_callback=selection_callback
     )
@@ -36,6 +70,87 @@ def _selection_recorder() -> tuple[list[str], Callable[[str], None]]:
         recorded.append(item)
 
     return recorded, record
+
+
+def _choice_ui(
+    rect: pygame.Rect,
+    items: list,
+    initial_index: int | None = None,
+    border_width: int = 0,
+) -> tuple[ChoiceList, UIManager, list[str]]:
+    """A single ChoiceList registered with a fresh UIManager.
+
+    Returns (widget, ui, recorded) where ``recorded`` collects every
+    item handed to the selection callback.
+    """
+    recorded, callback = _selection_recorder()
+    widget = ChoiceList(
+        rect,
+        items,
+        initial_index=initial_index,
+        border_width=border_width,
+        selection_callback=callback,
+    )
+    ui = UIManager(_theme(TEST_THEME_JSON))
+    ui.widgets.append(widget)
+    return widget, ui, recorded
+
+
+def _motion(pos: tuple[int, int]) -> pygame.event.Event:
+    return pygame.event.Event(pygame.MOUSEMOTION, pos=pos, rel=(0, 0))
+
+
+def _down(pos: tuple[int, int], button: int = 1) -> pygame.event.Event:
+    return pygame.event.Event(pygame.MOUSEBUTTONDOWN, button=button, pos=pos)
+
+
+def _up(pos: tuple[int, int], button: int = 1) -> pygame.event.Event:
+    return pygame.event.Event(pygame.MOUSEBUTTONUP, button=button, pos=pos)
+
+
+def _click(pos: tuple[int, int], button: int = 1) -> list[pygame.event.Event]:
+    """A complete left-button click at ``pos`` (press then release)."""
+    return [_down(pos, button), _up(pos, button)]
+
+
+def _screen() -> pygame.Surface:
+    """The dummy display at the design resolution (scale 1)."""
+    surface = pygame.display.get_surface()
+    if surface is None:
+        surface = pygame.display.set_mode(
+            (game_constants.DESIGN_W, game_constants.DESIGN_H)
+        )
+    return surface
+
+
+def _draw(ui: UIManager) -> pygame.Surface:
+    screen = _screen()
+    ui.draw(screen)
+    return screen
+
+
+def _pixels_in(surf: pygame.Surface, area: pygame.Rect, color) -> int:
+    """How many pixels of ``color`` fall inside ``area``."""
+    return sum(
+        1
+        for x in range(area.x, area.right)
+        for y in range(area.y, area.bottom)
+        if surf.get_at((x, y)) == color
+    )
+
+
+def _any_pixel_differs(surf: pygame.Surface, area: pygame.Rect, background) -> bool:
+    """Whether any pixel inside ``area`` differs from ``background``.
+
+    The size-1-safe sibling of ``_pixels_in``: at point size 1 every
+    glyph stroke is anti-aliased, so no pixel matches the foreground
+    exactly even though text is plainly rendered.
+    """
+    return any(
+        surf.get_at((x, y)) != background
+        for x in range(area.x, area.right)
+        for y in range(area.y, area.bottom)
+    )
 
 
 class TestSanitizeChoices:
@@ -148,17 +263,6 @@ class TestConstructionItemHandling:
         assert choice_list.enabled is False
         choice_list.enabled = True
         assert choice_list.enabled is True
-
-    def test_should_store_the_sanitized_sorted_list(self) -> None:
-        # GIVEN an unsorted list with a case-insensitive duplicate:
-        choice_list = _make(["cherry", "apple", "Apple", "banana"])
-
-        # THEN the widget holds the sanitized, sorted list:
-        assert choice_list._sanitized_items_for_testing() == [
-            "apple",
-            "banana",
-            "cherry",
-        ]
 
     def test_get_item_count_should_report_the_sanitized_count_not_the_input_count(self) -> None:
         # GIVEN the spec 07 dedup example:
@@ -351,3 +455,337 @@ class TestSelectionApi:
         # THEN get_current_item reports the selection made via the API:
         choice_list.set_current_item("beta")
         assert choice_list.get_current_item() == "beta"
+
+
+class TestPagerClicks:
+    #: Geometry for the standard test rect (0, 0, 400, 60): pager squares
+    #: are 60px wide at each end (side = min(33% of 400, 60)), so their
+    #: centers are (30, 30) and (370, 30); the item text sits mid-widget.
+    LEFT = (30, 30)
+    RIGHT = (370, 30)
+    TEXT = (200, 30)
+
+    def test_clicking_the_right_pager_should_select_the_next_item_and_notify(
+        self,
+    ) -> None:
+        # GIVEN a three-item ChoiceList:
+        widget, ui, recorded = _choice_ui(pygame.Rect(0, 0, 400, 60), ["alpha", "beta", "gamma"])
+
+        # WHEN the right pager is clicked,
+        # THEN the next item is selected and the callback receives it:
+        ui.update(_click(self.RIGHT))
+        assert widget.get_current_item() == "beta"
+        assert recorded == ["beta"]
+
+    def test_clicking_the_left_pager_should_wrap_to_the_last_item(self) -> None:
+        # GIVEN a three-item ChoiceList on its first item:
+        widget, ui, recorded = _choice_ui(pygame.Rect(0, 0, 400, 60), ["alpha", "beta", "gamma"])
+
+        # WHEN the left pager is clicked,
+        # THEN the selection wraps to the last item (spec 07):
+        ui.update(_click(self.LEFT))
+        assert widget.get_current_item() == "gamma"
+        assert recorded == ["gamma"]
+
+    def test_clicking_the_right_pager_repeatedly_should_wrap_at_the_list_end(self) -> None:
+        # GIVEN a three-item ChoiceList:
+        widget, ui, recorded = _choice_ui(pygame.Rect(0, 0, 400, 60), ["alpha", "beta", "gamma"])
+
+        # WHEN the right pager is clicked once per item,
+        # THEN the selection visits every item and wraps back to the first:
+        for _ in range(3):
+            ui.update(_click(self.RIGHT))
+        assert recorded == ["beta", "gamma", "alpha"]
+        assert widget.get_current_item() == "alpha"
+
+    def test_pager_clicks_should_visit_items_in_sanitized_order(self) -> None:
+        # GIVEN an unsorted input list with a case-insensitive duplicate:
+        widget, ui, recorded = _choice_ui(
+            pygame.Rect(0, 0, 400, 60), ["cherry", "apple", "Apple", "banana"]
+        )
+
+        # WHEN the right pager is clicked,
+        # THEN the next item in the sanitized, sorted order is selected:
+        ui.update(_click(self.RIGHT))
+        assert widget.get_current_item() == "banana"
+        assert recorded == ["banana"]
+
+    def test_with_a_single_item_pager_clicks_should_not_change_or_notify(self) -> None:
+        # GIVEN a ChoiceList with exactly one item:
+        widget, ui, recorded = _choice_ui(pygame.Rect(0, 0, 400, 60), ["alpha"])
+
+        # WHEN either pager is clicked,
+        # THEN the no-op change never fires the callback (spec 07):
+        ui.update(_click(self.RIGHT))
+        ui.update(_click(self.LEFT))
+        assert widget.get_current_item() == "alpha"
+        assert recorded == []
+
+    def test_with_an_empty_list_pager_clicks_should_do_nothing(self) -> None:
+        # GIVEN a ChoiceList that disabled itself (empty list):
+        widget, ui, recorded = _choice_ui(pygame.Rect(0, 0, 400, 60), [])
+
+        # WHEN either pager is clicked,
+        # THEN nothing is selected and no callback fires:
+        ui.update(_click(self.RIGHT))
+        ui.update(_click(self.LEFT))
+        assert widget.get_current_item() is None
+        assert recorded == []
+
+    def test_clicking_the_item_text_should_do_nothing(self) -> None:
+        # GIVEN a three-item ChoiceList:
+        widget, ui, recorded = _choice_ui(pygame.Rect(0, 0, 400, 60), ["alpha", "beta", "gamma"])
+
+        # WHEN the text of the currently-selected item is clicked,
+        # THEN nothing happens (only the pagers respond, per spec 07):
+        ui.update(_click(self.TEXT))
+        assert widget.get_current_item() == "alpha"
+        assert recorded == []
+
+    def test_press_inside_then_release_outside_should_not_count_as_a_click(self) -> None:
+        # GIVEN a three-item ChoiceList:
+        widget, ui, recorded = _choice_ui(pygame.Rect(0, 0, 400, 60), ["alpha", "beta", "gamma"])
+
+        # WHEN the press is inside the right pager but the release outside it,
+        # THEN no click occurred (the Button click rule, spec 04/07):
+        ui.update([_down(self.RIGHT), _up(self.TEXT)])
+        assert widget.get_current_item() == "alpha"
+        assert recorded == []
+
+    def test_press_outside_then_release_inside_should_not_count_as_a_click(self) -> None:
+        # GIVEN a three-item ChoiceList:
+        widget, ui, recorded = _choice_ui(pygame.Rect(0, 0, 400, 60), ["alpha", "beta", "gamma"])
+
+        # WHEN the press is outside the pager but the release inside it,
+        # THEN no click occurred:
+        ui.update([_down(self.TEXT), _up(self.RIGHT)])
+        assert widget.get_current_item() == "alpha"
+        assert recorded == []
+
+    def test_non_left_mouse_button_should_not_page(self) -> None:
+        # GIVEN a three-item ChoiceList:
+        widget, ui, recorded = _choice_ui(pygame.Rect(0, 0, 400, 60), ["alpha", "beta", "gamma"])
+
+        # WHEN the right mouse button clicks the pager,
+        # THEN nothing happens (the left button is the click button):
+        ui.update(_click(self.RIGHT, button=3))
+        assert widget.get_current_item() == "alpha"
+        assert recorded == []
+
+    def test_disabled_widget_should_ignore_pager_clicks(self) -> None:
+        # GIVEN a disabled three-item ChoiceList:
+        widget, ui, recorded = _choice_ui(pygame.Rect(0, 0, 400, 60), ["alpha", "beta", "gamma"])
+        widget.enabled = False
+
+        # WHEN the right pager is clicked,
+        # THEN the disabled widget ignores it (spec 04: Disabling widgets):
+        ui.update(_click(self.RIGHT))
+        assert widget.get_current_item() == "alpha"
+        assert recorded == []
+
+    def test_pager_whose_glyph_cannot_render_should_stay_clickable(self) -> None:
+        # GIVEN a ChoiceList whose 1px pagers cannot fit even a 1pt glyph
+        # (side = min(33% of 4, 10) = 1; the smallest rendered glyph of
+        # the fallback font is 1x2):
+        widget, ui, recorded = _choice_ui(pygame.Rect(0, 0, 4, 10), ["alpha", "beta"])
+
+        # WHEN the (glyph-less) right pager center is clicked,
+        # THEN the hit area is unaffected and the selection changes:
+        ui.update(_click((3, 4)))
+        assert widget.get_current_item() == "beta"
+        assert recorded == ["beta"]
+
+
+class TestPagerGeometry:
+    def test_narrow_widget_should_cap_pager_width_at_33_percent(self) -> None:
+        # GIVEN a narrow ChoiceList (side = min(33% of 300, 120) = 99px):
+        widget, ui, recorded = _choice_ui(pygame.Rect(0, 0, 300, 120), ["alpha", "beta"])
+
+        # WHEN a point inside the 33% band is clicked, it pages...
+        ui.update(_click((90, 60)))
+        assert widget.get_current_item() == "beta"
+
+        # ...but a point just past the 33% band is item-text territory:
+        ui.update(_click((110, 60)))
+        assert widget.get_current_item() == "beta"
+        assert recorded == ["beta"]
+
+    def test_tall_widget_should_center_pagers_vertically(self, font_ready: None) -> None:
+        # GIVEN a tall ChoiceList (side = 132, centered: y in [84, 216)):
+        widget, ui, recorded = _choice_ui(
+            pygame.Rect(0, 0, 400, 300), ["alpha", "beta"]
+        )
+
+        # WHEN the UI draws,
+        screen = _draw(ui)
+
+        # THEN no glyph ink appears above the centered square...
+        upper_band = pygame.Rect(0, 0, 132, 84)
+        assert not _any_pixel_differs(screen, upper_band, NORMAL_BG)
+        # ...and glyph ink does appear inside it:
+        assert _pixels_in(screen, pygame.Rect(0, 84, 132, 132), NORMAL_FG) > 0
+
+        # AND the hit areas match the centered squares, not the full height:
+        ui.update(_click((50, 40)))  # above the centered square: no page
+        assert widget.get_current_item() == "alpha"
+        assert recorded == []
+        ui.update(_click((50, 150)))  # inside the centered square: pages
+        assert widget.get_current_item() == "beta"
+        assert recorded == ["beta"]
+
+    def test_thick_border_should_suppress_pagers_and_make_the_widget_inoperative(
+        self,
+    ) -> None:
+        # GIVEN a ChoiceList whose border is thicker than half its height
+        # (inner height = 100 - 120 < 0, so the pagers cannot exist):
+        widget, ui, recorded = _choice_ui(
+            pygame.Rect(0, 0, 400, 100), ["alpha", "beta"], border_width=60
+        )
+
+        # WHEN clicks land where the pagers would have been,
+        # THEN the widget is inoperative - not disabled, just unclickable:
+        ui.update(_click((30, 50)))
+        ui.update(_click((370, 50)))
+        assert widget.enabled is True
+        assert widget.get_current_item() == "alpha"
+        assert recorded == []
+
+    def test_pagers_too_small_for_any_glyph_should_render_no_glyphs(
+        self, font_ready: None
+    ) -> None:
+        # GIVEN a ChoiceList with 1px pagers - the smallest glyph the
+        # fallback font can render is 1x2, so even point size 1 cannot
+        # fit (side = min(33% of 4, 10) = 1):
+        _, ui, _ = _choice_ui(pygame.Rect(0, 0, 4, 10), ["a"])
+
+        # WHEN the UI draws,
+        # THEN neither pager column contains any ink at all:
+        screen = _draw(ui)
+        assert not _any_pixel_differs(screen, pygame.Rect(0, 0, 1, 10), NORMAL_BG)
+        assert not _any_pixel_differs(screen, pygame.Rect(3, 0, 1, 10), NORMAL_BG)
+
+
+class TestStateColors:
+    #: A point inside the standard test rect (0, 0, 400, 60) that is
+    #: background in every state: inside the left pager square but far
+    #: from its centered glyph, and far from the centered item text.
+    BACKGROUND_SAMPLE = (5, 5)
+
+    def test_normal_state_should_fill_with_background_normal(self, font_ready: None) -> None:
+        # GIVEN a freshly created ChoiceList:
+        _, ui, _ = _choice_ui(pygame.Rect(0, 0, 400, 60), ["alpha"])
+
+        # WHEN the UI draws,
+        # THEN the fill uses backgroundNormal:
+        screen = _draw(ui)
+        assert screen.get_at(self.BACKGROUND_SAMPLE) == NORMAL_BG
+
+    def test_hover_should_switch_to_hover_colors(self, font_ready: None) -> None:
+        # GIVEN a ChoiceList and the mouse moved over it:
+        _, ui, _ = _choice_ui(pygame.Rect(0, 0, 400, 60), ["alpha"])
+        ui.update([_motion((200, 30))])
+
+        # WHEN the UI draws,
+        # THEN the fill uses backgroundHover:
+        screen = _draw(ui)
+        assert screen.get_at(self.BACKGROUND_SAMPLE) == HOVER_BG
+
+    def test_selected_should_use_selected_colors(self, font_ready: None) -> None:
+        # GIVEN a programmatically selected ChoiceList:
+        widget, ui, _ = _choice_ui(pygame.Rect(0, 0, 400, 60), ["alpha"])
+        widget.selected = True
+
+        # WHEN the UI draws,
+        # THEN the fill uses backgroundSelected:
+        screen = _draw(ui)
+        assert screen.get_at(self.BACKGROUND_SAMPLE) == SELECTED_BG
+
+    def test_selected_should_ignore_mouse_hover(self, font_ready: None) -> None:
+        # GIVEN a selected ChoiceList with the mouse hovering over it
+        # (spec 04 as amended by spec 07: selected outranks hover):
+        widget, ui, _ = _choice_ui(pygame.Rect(0, 0, 400, 60), ["alpha"])
+        widget.selected = True
+        ui.update([_motion((200, 30))])
+
+        # WHEN the UI draws,
+        # THEN the *Selected colors win and no *Hover color appears:
+        screen = _draw(ui)
+        assert screen.get_at(self.BACKGROUND_SAMPLE) == SELECTED_BG
+
+    def test_disabled_should_use_disabled_colors_and_ignore_hover(
+        self, font_ready: None
+    ) -> None:
+        # GIVEN a disabled ChoiceList with the mouse over it:
+        widget, ui, _ = _choice_ui(pygame.Rect(0, 0, 400, 60), ["alpha"])
+        widget.enabled = False
+        ui.update([_motion((200, 30))])
+
+        # WHEN the UI draws,
+        # THEN the fill uses backgroundDisabled:
+        screen = _draw(ui)
+        assert screen.get_at(self.BACKGROUND_SAMPLE) == DISABLED_BG
+
+    def test_selected_and_disabled_should_render_as_disabled(self, font_ready: None) -> None:
+        # GIVEN a ChoiceList that is both selected and disabled (spec 04):
+        widget, ui, _ = _choice_ui(pygame.Rect(0, 0, 400, 60), ["alpha"])
+        widget.selected = True
+        widget.enabled = False
+
+        # WHEN the UI draws,
+        # THEN "disabled" outranks "selected":
+        screen = _draw(ui)
+        assert screen.get_at(self.BACKGROUND_SAMPLE) == DISABLED_BG
+
+    def test_empty_list_should_render_disabled_colors_with_visible_glyphs(
+        self, font_ready: None
+    ) -> None:
+        # GIVEN a ChoiceList with an empty list (auto-disabled):
+        _, ui, _ = _choice_ui(pygame.Rect(0, 0, 400, 60), [])
+
+        # WHEN the UI draws,
+        # THEN the fill uses backgroundDisabled...
+        screen = _draw(ui)
+        assert screen.get_at(self.BACKGROUND_SAMPLE) == DISABLED_BG
+        # ...the pager glyphs are still visible (in disabled colors)...
+        assert _pixels_in(screen, pygame.Rect(0, 0, 60, 60), DISABLED_FG) > 0
+        # ...and no item text is displayed anywhere in the text area:
+        assert not _any_pixel_differs(screen, pygame.Rect(60, 0, 280, 60), DISABLED_BG)
+
+
+class TestItemTextRendering:
+    def test_item_text_should_be_scaled_up_to_fit_the_available_space(
+        self, font_ready: None
+    ) -> None:
+        # GIVEN a short item in a 400x60 widget (text area 280x60):
+        _, ui, _ = _choice_ui(pygame.Rect(0, 0, 400, 60), ["hi"])
+
+        # WHEN the UI draws,
+        screen = _draw(ui)
+        # THEN the text is scaled well beyond point size 1: a 1pt glyph
+        # is ~10px tall, so a taller ink column proves best-effort
+        # scaling toward the available height:
+        text_rows = [
+            y
+            for y in range(0, 60)
+            if _pixels_in(screen, pygame.Rect(60, y, 280, 1), NORMAL_FG) > 0
+        ]
+        assert text_rows, "no item text was rendered at all"
+        assert text_rows[-1] - text_rows[0] + 1 >= 15
+
+    def test_unreasonably_long_item_should_be_clipped_and_never_overlap_pagers(
+        self, font_ready: None
+    ) -> None:
+        # GIVEN an item far too long to fit at any font size:
+        _, ui, _ = _choice_ui(pygame.Rect(0, 0, 400, 60), ["x" * 400])
+
+        # WHEN the UI draws,
+        screen = _draw(ui)
+        # THEN text ink exists inside the text area (clipped, not skipped).
+        # Exact-color matching is unsafe at point size 1 (anti-aliased
+        # strokes match no exact color), so we check for any deviation
+        # from the pure background:
+        assert _any_pixel_differs(screen, pygame.Rect(60, 0, 280, 60), NORMAL_BG)
+        # ...but the rightmost column of the left pager square stays pure
+        # background: the glyph never reaches that column, so any ink
+        # there could only come from unclipped item text:
+        assert screen.get_at((59, 30)) == NORMAL_BG

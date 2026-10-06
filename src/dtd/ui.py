@@ -97,6 +97,30 @@ class Widget:
         """Rendering only; converts the design-space rect to pixels."""
 
 
+def state_colors(
+    theme: Theme,
+    *,
+    enabled: bool,
+    selected: bool = False,
+    hovered: bool = False,
+) -> tuple[pygame.Color, pygame.Color]:
+    """The ``(foreground, background)`` pair for a widget's visual state.
+
+    Encodes the spec 04 precedence chain in one place: disabled >
+    selected > hover > normal (spec 04: Disabling/Selecting widgets, as
+    amended by specs 06 and 07). Widgets that do not support a state
+    simply never pass it: Button never selects, TextPanel never hovers,
+    and ChoiceList (spec 07) honors all three.
+    """
+    if not enabled:
+        return theme.foregroundDisabled, theme.backgroundDisabled
+    if selected:
+        return theme.foregroundSelected, theme.backgroundSelected
+    if hovered:
+        return theme.foregroundHover, theme.backgroundHover
+    return theme.foregroundNormal, theme.backgroundNormal
+
+
 class Theme:
     """The currently-selected theme's properties plus the resolved font
     (spec 04: Theme).

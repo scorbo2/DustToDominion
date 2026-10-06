@@ -29,7 +29,7 @@ from collections.abc import Callable
 
 import pygame
 
-from dtd.ui import Scale, Theme, Widget, current_scale
+from dtd.ui import Scale, Theme, Widget, current_scale, state_colors
 
 
 class Button(Widget):
@@ -101,12 +101,13 @@ class Button(Widget):
         surf.blit(overlay, rect.topleft)
 
     def _state_colors(self, theme: Theme) -> tuple[pygame.Color, pygame.Color]:
-        """(foreground, background) for the widget's current state."""
-        if not self.enabled:
-            return theme.foregroundDisabled, theme.backgroundDisabled
-        if self.hovered:
-            return theme.foregroundHover, theme.backgroundHover
-        return theme.foregroundNormal, theme.backgroundNormal
+        """(foreground, background) for the widget's current state.
+
+        Buttons are never selected, so ``selected`` is never passed
+        (spec 04: Supplied widget - Button); precedence lives in
+        ``ui.state_colors``.
+        """
+        return state_colors(theme, enabled=self.enabled, hovered=self.hovered)
 
     def _text_to_draw(self) -> str | None:
         text = (self.text or "").strip()

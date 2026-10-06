@@ -45,7 +45,7 @@ import pygame
 
 from dtd import game_constants
 from dtd.audio import get_audio_manager
-from dtd.ui import Scale, Theme, Widget, current_scale
+from dtd.ui import Scale, Theme, Widget, current_scale, state_colors
 
 #: A whitespace run or a single word - the tokenization unit for
 #: word-boundary wrapping (spec 06: Displaying text).
@@ -535,15 +535,10 @@ class TextPanel(Widget):
     def _state_colors(self, theme: Theme) -> tuple[pygame.Color, pygame.Color]:
         """(foreground, background) for the panel's current state.
 
-        "Disabled" takes precedence over "selected" (spec 04 as amended
-        by spec 06); the ``*Hover`` colors are never used here (spec 06:
-        TextPanels do not respond to mouse hover).
+        TextPanels do not respond to mouse hover, so ``hovered`` is
+        never passed (spec 06); precedence lives in ``ui.state_colors``.
         """
-        if not self.enabled:
-            return theme.foregroundDisabled, theme.backgroundDisabled
-        if self.selected:
-            return theme.foregroundSelected, theme.backgroundSelected
-        return theme.foregroundNormal, theme.backgroundNormal
+        return state_colors(theme, enabled=self.enabled, selected=self.selected)
 
     def _draw_icon(self, overlay: pygame.Surface, interior: pygame.Rect) -> int:
         """Blit the icon filling the interior height, flush left (spec 06).

@@ -14,7 +14,8 @@ Item handling contract (spec 07):
   (first occurrence wins), and the result is sorted case-insensitively.
   The list is immutable afterwards.
 - An empty post-sanitization list disables the widget permanently; the
-  ``enabled`` property override enforces this.
+  ``enabled`` property override enforces this. The pager controls still
+  render, but are inoperative, and no item text is displayed.
 - ``initial_index`` addresses the *caller-supplied* list and is mapped
   through sanitization; invalid requests fall back to selecting the first
   sanitized item. Setting the initial item never fires the callback.
@@ -22,9 +23,26 @@ Item handling contract (spec 07):
   optional ``selection_callback`` with the new item; no-op changes never
   fire it, and callback exceptions are allowed to propagate.
 
-Staged implementation (spec 07: Dev plan): stage 2 covers item handling
-only - ``update`` and ``draw`` are stubs until stage 3 adds mouse
-handling, rendering, and layout.
+Rendering contract (spec 07: Visual appearance):
+
+- The rect is filled with the state-appropriate background and optionally
+  bordered with the state-appropriate foreground, honoring the theme's
+  ``cornerRadius``. State precedence lives in ``ui.state_colors``.
+- Item text is scaled to fit on a best-effort basis (like Button), never
+  wraps, and is clipped at the text-area boundary - which excludes the
+  pager squares, so text never renders on top of them. Margins are half
+  the height of ``0`` at the effective font size.
+- The pager squares are borderless, share the widget's colors, and sit
+  at the horizontal ends of the interior; their side length is the
+  minimum of 33% of the widget width or the internal height, centered
+  vertically in tall widgets. A side length of 0 or less (e.g. a border
+  thicker than half the height) means no pagers and an inoperative -
+  though not disabled - widget: a client geometry problem.
+- A click is a left-button press *and* release inside the same pager
+  square (the same rule as Button, spec 04).
+
+Staged implementation (spec 07: Dev plan): stages 1-3 complete - item
+handling, rendering, layout, and pager mouse handling.
 """
 from __future__ import annotations
 
@@ -32,7 +50,7 @@ from collections.abc import Callable
 
 import pygame
 
-from dtd.ui import Theme, Widget
+from dtd.ui import Scale, Theme, Widget, current_scale, state_colors
 
 
 def sanitize_choices(raw: list) -> list[str]:
@@ -172,17 +190,224 @@ class ChoiceList(Widget):
             # Callback exceptions propagate to the caller (spec 07).
             self._selection_callback(self._items[index])
 
-    # -- input and rendering: stubs until stage 3 (spec 07: Dev plan) -----
-    def update(self, events: list[pygame.event.Event]) -> None:
-        """Pager click handling: press *and* release inside a control."""
+    def _page(self, delta: int) -> None:
+        """Cycle the selection, wrapping at both list ends (spec 07)."""
+        if self._current_index is None:
+            return  # empty list: the pagers render but are inoperative
+        self._select((self._current_index + delta) % len(self._items))
 
-    def draw(self, surf: pygame.Surface, theme: Theme) -> None:
-        """Theme-aware rendering of the item text and pager controls."""
+    # -- layout (spec 07: Visual appearance; design space) -----------------
+    def _inner_rect(self) -> pygame.Rect:
+        """The interior: the widget rect minus its border.
 
-    def _sanitized_items_for_testing(self) -> list[str]:
-        """TEMPORARY (spec 07 dev plan stage 2): inspect the sanitized list.
-
-        Removed in stage 3 once rendering exists; the pure
-        ``sanitize_choices`` pipeline is testable on its own.
+        A negative border width is treated as no border, matching the
+        Button widget's rendering behavior.
         """
-        return list(self._items)
+        border = max(0, self.border_width)
+        return pygame.Rect(
+            self.rect.x + border,
+            self.rect.y + border,
+            self.rect.w - 2 * border,
+            self.rect.h - 2 * border,
+        )
+
+    def _pager_rects(self) -> tuple[pygame.Rect, pygame.Rect] | None:
+        """The two pager squares in design space, or None when impossible.
+
+        Side length is the minimum of 33% of the widget width or the
+        internal height (spec 07). A side length of 0 or less (e.g. a
+        border thicker than half the height) means the pagers do not
+        render and the widget is inoperative - a client geometry problem,
+        not a disabled state. Tall widgets get vertically centered
+        pagers; short ones get squares flush with the interior height.
+        """
+        inner = self._inner_rect()
+        side = min(int(self.rect.w * 0.33), inner.h)
+        if side <= 0:
+            return None
+        top = inner.y + (inner.h - side) // 2
+        left = pygame.Rect(inner.x, top, side, side)
+        right = pygame.Rect(inner.right - side, top, side, side)
+        return left, right
+
+    def _text_area(self, pagers: tuple[pygame.Rect, pygame.Rect] | None) -> pygame.Rect:
+        """The design-space area available for item text.
+
+        The interior minus both pager squares: item text never renders
+        on top of the pagers (spec 07). With no pagers at all there is
+        nothing to keep the text off, so the whole interior is available.
+        """
+        inner = self._inner_rect()
+        if pagers is None:
+            return inner
+        left, right = pagers
+        return pygame.Rect(left.right, inner.y, right.left - left.right, inner.h)
+
+    # -- input (spec 07: click rules identical to Button, spec 04) ---------
+    def update(self, events: list[pygame.event.Event]) -> None:
+        """Track press-to-release on each pager control.
+
+        A click is a left-button press *and* release inside the same
+        pager's hit area (its square, inclusive of the glyph margin).
+        The UIManager only calls enabled widgets, but the guard below
+        keeps the contract safe if called directly.
+        """
+        if not self.enabled:
+            return
+        pagers = self._pager_rects()
+        scale = current_scale()
+        for event in events:
+            if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                self._left_pressed, self._right_pressed = self._pagers_hit(
+                    pagers, scale.mouse(event.pos)
+                )
+            elif event.type == pygame.MOUSEBUTTONUP and event.button == 1:
+                pressing_left, pressing_right = self._pagers_hit(
+                    pagers, scale.mouse(event.pos)
+                )
+                clicked_left = self._left_pressed and pressing_left
+                clicked_right = self._right_pressed and pressing_right
+                self._left_pressed = self._right_pressed = False
+                if clicked_left:
+                    self._page(-1)
+                elif clicked_right:
+                    self._page(+1)
+
+    @staticmethod
+    def _pagers_hit(
+        pagers: tuple[pygame.Rect, pygame.Rect] | None, pos: tuple[float, float]
+    ) -> tuple[bool, bool]:
+        """Whether a design-space position is inside each pager square."""
+        if pagers is None:  # inoperative geometry: nothing to hit
+            return False, False
+        left, right = pagers
+        return left.collidepoint(pos), right.collidepoint(pos)
+
+    # -- rendering (spec 07: Visual appearance) ----------------------------
+    def draw(self, surf: pygame.Surface, theme: Theme) -> None:
+        scale = current_scale()
+        rect = scale.rect(self.rect.x, self.rect.y, self.rect.w, self.rect.h)
+        if rect.w <= 0 or rect.h <= 0:
+            return
+        fg, bg = self._state_colors(theme)
+        overlay = pygame.Surface(rect.size, pygame.SRCALPHA)
+        corner = int(theme.cornerRadius * scale.scale)
+        border_px = (
+            max(1, int(self.border_width * scale.scale))
+            if self.border_width > 0
+            else 0
+        )
+        pygame.draw.rect(overlay, bg, (0, 0, rect.w, rect.h), border_radius=corner)
+        if border_px > 0:
+            pygame.draw.rect(
+                overlay, fg, (0, 0, rect.w, rect.h), width=border_px, border_radius=corner
+            )
+        pagers = self._pager_rects()
+        if pagers is not None:
+            squares = tuple(self._to_overlay_rect(p, rect, scale) for p in pagers)
+            self._draw_pager_glyphs(overlay, theme, fg, squares)
+        text_area = self._to_overlay_rect(self._text_area(pagers), rect, scale)
+        self._draw_item_text(overlay, theme, fg, text_area)
+        surf.blit(overlay, rect.topleft)
+
+    def _state_colors(self, theme: Theme) -> tuple[pygame.Color, pygame.Color]:
+        """(foreground, background) for the widget's current state.
+
+        ChoiceList honors all three states; precedence lives in
+        ``ui.state_colors`` (spec 04 as amended by spec 07).
+        """
+        return state_colors(
+            theme, enabled=self.enabled, selected=self.selected, hovered=self.hovered
+        )
+
+    @staticmethod
+    def _to_overlay_rect(
+        design: pygame.Rect, base: pygame.Rect, scale: Scale
+    ) -> pygame.Rect:
+        """A design-space rect converted to overlay-local pixel coords."""
+        return scale.rect(design.x, design.y, design.w, design.h).move(-base.x, -base.y)
+
+    def _draw_item_text(
+        self, overlay: pygame.Surface, theme: Theme, fg: pygame.Color, area: pygame.Rect
+    ) -> None:
+        """The current item, centered and clipped to the text area.
+
+        The area already excludes the pager squares, so clipped text can
+        never overlap them (spec 07). When even size 1 does not fit, the
+        text renders at size 1 and is clipped at the area boundary.
+        """
+        item = self.get_current_item()
+        if item is None or area.w <= 0 or area.h <= 0:
+            return
+        font_size = self._largest_fitting_size(area, theme, item)
+        if font_size is None:
+            font_size = 1
+        text_surface = theme.get_font(font_size).render(item, True, fg)
+        dest = pygame.Rect(
+            area.centerx - text_surface.get_width() // 2,
+            area.centery - text_surface.get_height() // 2,
+            text_surface.get_width(),
+            text_surface.get_height(),
+        )
+        visible = dest.clip(area)
+        if visible.w > 0 and visible.h > 0:
+            overlay.blit(text_surface, visible, visible.move(-dest.x, -dest.y))
+
+    def _draw_pager_glyphs(
+        self,
+        overlay: pygame.Surface,
+        theme: Theme,
+        fg: pygame.Color,
+        squares: tuple[pygame.Rect, pygame.Rect],
+    ) -> None:
+        """The literal ``<`` and ``>`` glyphs, centered in their squares.
+
+        The pagers have no chrome of their own: their background is the
+        widget background (already filled) and their color is the widget
+        foreground (spec 07). A glyph that does not fit even at size 1
+        is simply not drawn - its square remains clickable regardless.
+        """
+        for glyph, square in zip(("<", ">"), squares):
+            font_size = self._largest_fitting_size(square, theme, glyph)
+            if font_size is None:
+                continue
+            glyph_surface = theme.get_font(font_size).render(glyph, True, fg)
+            overlay.blit(
+                glyph_surface,
+                (
+                    square.centerx - glyph_surface.get_width() // 2,
+                    square.centery - glyph_surface.get_height() // 2,
+                ),
+            )
+
+    def _largest_fitting_size(
+        self, area: pygame.Rect, theme: Theme, text: str
+    ) -> int | None:
+        """The largest point size whose text plus margins fits ``area``.
+
+        Margins are half the height of ``0`` at the candidate size
+        (spec 07), so they are re-derived at every step of the binary
+        search. Returns ``None`` when even size 1 does not fit; callers
+        decide between clipping at size 1 (item text) and drawing nothing
+        (pager glyphs).
+        """
+        low, high = 1, max(1, min(area.w, area.h))
+        best: int | None = None
+        while low <= high:
+            mid = (low + high) // 2
+            if self._fits_with_margins(area, theme, text, mid):
+                best = mid
+                low = mid + 1
+            else:
+                high = mid - 1
+        return best
+
+    @staticmethod
+    def _fits_with_margins(
+        area: pygame.Rect, theme: Theme, text: str, size: int
+    ) -> bool:
+        """Whether ``text`` plus its all-sides margins fit ``area``."""
+        font = theme.get_font(size)
+        margin = font.size("0")[1] // 2
+        width, height = font.size(text)
+        return width <= area.w - 2 * margin and height <= area.h - 2 * margin
