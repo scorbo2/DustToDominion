@@ -551,7 +551,7 @@ class TestLoadPak:
 
         loaded = load_pak(out)
 
-        assert isinstance(loaded.sprites["graphics/ships/viper.png"], pygame.Surface)
+        assert isinstance(loaded.images["graphics/ships/viper.png"], pygame.Surface)
         assert isinstance(
             loaded.sound_effects["audio/sfx/boom.wav"], pygame.mixer.Sound
         )
@@ -873,7 +873,7 @@ class TestRoundTrip:
         loaded = load_pak(out)
         assert loaded.json_resources["data.json"] == payload
 
-    def test_create_then_load_preserves_sprite_dimensions(
+    def test_create_then_load_preserves_image_dimensions(
         self, tmp_path: Path
     ) -> None:
         src = tmp_path / "res"
@@ -886,7 +886,7 @@ class TestRoundTrip:
         create_pak(src, out)
 
         loaded = load_pak(out)
-        result = loaded.sprites["graphics/ship.png"]
+        result = loaded.images["graphics/ship.png"]
         assert isinstance(result, pygame.Surface)
         assert result.get_size() == (8, 16)
 
@@ -900,7 +900,7 @@ class TestRoundTrip:
 
         loaded = load_pak(out)
         assert loaded.resource_count == len(files)
-        assert "graphics/ships/viper.png" in loaded.sprites
+        assert "graphics/ships/viper.png" in loaded.images
         assert "audio/sfx/boom.wav" in loaded.sound_effects
         assert "audio/music/theme.wav" in loaded.music
         assert "data/dialog/frank.txt" in loaded.texts

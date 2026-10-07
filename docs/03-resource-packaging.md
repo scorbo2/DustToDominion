@@ -1,12 +1,12 @@
 ---
-description: Describes how the game loads resources (sprites, sound effects, music, etc.)
+description: Describes how the game loads resources (images, sound effects, music, etc.)
 status: active
 ---
 
 # Resource packaging
 
 The game needs to load resources from disk. Such resources include but are not limited to:
-- sprites for game objects (ships, asteroids, etc)
+- images for game objects (ships, asteroids, etc)
 - sound effects (either single-shot effects or effects designed for continuous looping)
 - music tracks
 
@@ -38,7 +38,7 @@ be executed before the resource loader is invoked. So, the game's startup order 
 ### Resource types and formats
 
 The following specific types of resources are loaded and tracked:
-- Sprite images (PNG or JPG format)
+- Images (PNG or JPG format)
 - Sound effects (WAV, OGG, or MP3 format)
 - Music tracks (WAV, OGG, or MP3 format)
 - Text resources (plain text format in UTF-8)
@@ -80,7 +80,7 @@ is loaded into memory with an ID relative to the `resources/` directory. For exa
 
 Additionally, any `location` specified in configuration will also be recursively scanned for valid resources,
 which are loaded into memory. Their IDs are computed relative to the named directory. For example,
-given a location of `/home/user/Sprites/`, the resource `/home/user/Sprites/graphics/myShips/awesome.png` is loaded
+given a location of `/home/user/Images/`, the resource `/home/user/Images/graphics/myShips/awesome.png` is loaded
 and given an ID of `graphics/myShips/awesome.png`.
 
 A resource that cannot be loaded (for example: an invalid PNG image, or a zero-byte `wav` file) triggers
@@ -94,8 +94,8 @@ recursive: only the top level of the project directory (and of any configured
 `location` directory) is examined for `*.pak` files. For example, all game resources might
 be packaged into a single `game_assets.pak`, or they may be packaged separately in `audio.pak`,
 `graphics.pak`, and `data.pak` (for example). Or, resources of the same type may be split across
-multiple package files, like `asteroids.pak` (containing asteroid sprites) and `ships.pak` (containing
-ship sprites).
+multiple package files, like `asteroids.pak` (containing asteroid images) and `ships.pak` (containing
+ship images).
 
 The contents of each package file are enumerated, extracted, and loaded into memory.
 
@@ -128,16 +128,26 @@ any fallback.
 
 The resource loader exposes functions to retrieve specific resource types:
 
-- `get_sprite_resource(id)` - returns a `pygame.Surface` object containing image data.
+- `get_image_resource(id)` - returns a `pygame.Surface` object containing image data.
+
+*Terminology note: this function was originally named `get_sprite_resource`. Renamed to
+`get_image_resource` on 2026-10-06 per spec 08 (Title Screen); all "sprite" wording in this
+project's docs and code became "image".*
+
 - `get_sfx_resource(id)` - returns a `pygame.mixer.Sound` object containing audio data.
 - `get_music_resource(id)` - returns raw audio bytes that can be used with `mixer.music.load(io.BytesIO(...))`. This is a client concern, and not something that the resource loader will do. The resource loader simply loads and caches the raw audio bytes.
 - `get_text_resource(id)` - returns a string.
 - `get_json_resource(id)` - returns a decoded object containing data from the Json resource.
 - `get_font_resource(id, size)` - returns a `pygame.font.Font` object containing the named font at the specified point size (clamped to `max(size,1)`). Note that the loader should cache the raw font bytes, and create a Font object as this function is invoked (similar to music handling). The resource loader should cache generated Font objects so that client code that repeatedly requests the same Font at the same size multiple times is served a cached copy for every request after the first. The cache can be unbounded.
+- `get_theme_resource_ids()` - returns a list of all theme resource ids: every loaded resource whose id begins with `themes/` and ends in `.json`. The search is recursive: both `themes/blue.json` and `themes/long/path/matrix.json` are found. The list is sorted alphabetically by full resource id (casefold). A sentinel display value `(Default theme)` is always added as the first item, so the returned list is never empty. The sentinel display value lives in `game_constants.py` and must not be hard-coded. (Added 2026-10-06 per spec 08: Title Screen.)
+- `get_font_resource_ids()` - returns a list of all font resource ids: every loaded resource whose id begins with `fonts/` and ends in `.ttf`. The search is recursive: both `fonts/iceland.ttf` and `fonts/long/path/sahara.ttf` are found. Sorted and sentinel rules are identical to `get_theme_resource_ids()`, except the sentinel display value is `(System default)`, also living in `game_constants.py`. (Added 2026-10-06 per spec 08: Title Screen.)
+
+These two id-listing accessors exist so future screens can offer the player a chooser of
+available fonts and themes without knowing what resources the user has installed.
 
 Each of these functions requires a unique ID to be specified. Return `None` if the given
 ID is not present, or if the given ID identifies a resource of the wrong type (example:
-`get_sprite_resource(someJsonID)` should return None).
+`get_image_resource(someJsonID)` should return None).
 
 ## Manifest
 
@@ -356,7 +366,7 @@ what the game itself uses:
 
 - `resources/audio/sfx` - base directory for sound effects
 - `resources/audio/music` - base directory for music
-- `resources/graphics` - base directory for sprites or background images
+- `resources/graphics` - base directory for images (game objects, backgrounds, etc.)
 - `resources/data` - base directory for miscellaneous data files.
 - `resources/fonts` - base directory for font files.
 
@@ -438,6 +448,13 @@ Unit tests should cover both modes thoroughly:
 - In both modes, a valid `.ttf` font file can be loaded as a resource.
 - In both modes, a zero-byte `.ttf` font file is rejected as invalid.
 - In both modes, an invalid `.ttf` file (wrong header) is rejected as invalid.
+- Theme and font id accessors (added 2026-10-06 per spec 08: Title Screen):
+  - `get_theme_resource_ids` with no resources in `themes/` returns a list of size 1 with item "(Default theme)".
+  - `get_font_resource_ids` with no resources in `fonts/` returns a list of size 1 with item "(System default)".
+  - `get_theme_resource_ids` returns all resources whose ids begin with `themes/` and end in `.json`
+    (recursive), sorted by full id (casefold), with the sentinel first.
+  - `get_font_resource_ids` returns all resources whose ids begin with `fonts/` and end in `.ttf`
+    (recursive), sorted by full id (casefold), with the sentinel first.
 
 ## Acceptance criteria
 
@@ -481,4 +498,7 @@ The spec is too large to implement all at once. The following staged dev plan is
     to distribution mode. Write all tests for distribution mode. **Completed 2026-09-27**
 5. Implement support for fonts, added to this spec on 2026-10-01 - resource loader changes, tests,
    and packager tool updates. **Completed 2026-10-01**
+6. Amendment per spec 08 (Title Screen): rename `get_sprite_resource` to `get_image_resource` and
+   change all "sprite" wording to "image" (docs, `game_constants.py`, `pak.py`, tests); add
+   `get_theme_resource_ids` and `get_font_resource_ids` to the consumer API. **Completed 2026-10-06**
 

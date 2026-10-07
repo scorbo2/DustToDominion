@@ -12,7 +12,7 @@ constructor then sets the channel budget (spec 05: Channel budget).
 from __future__ import annotations
 
 import io
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 
 import pygame
 from loguru import logger
@@ -228,6 +228,27 @@ class AudioManager:
         if not self._config.music_enabled:
             return
         self._stop_current_music()
+
+    def play_music_first_match(self, ids: Sequence[str]) -> None:
+        """Play the first track in ``ids`` that resolves to a music
+        resource (spec 05, as amended by spec 08).
+
+        Lets a screen say "play the first of these candidate ids that
+        exists" (e.g. ``game_title.mp3``, then ``.wav``, then ``.ogg``)
+        without probing the resource loader directly - the whole point of
+        the AudioManager gate. A candidate that does not resolve is
+        skipped WITHOUT touching any currently-playing track; the first
+        one that does resolve replaces the current music via
+        ``play_music``. An exhausted candidate list is a no-op, and a
+        disabled music setting is a silent no-op.
+        """
+        if not self._config.music_enabled:
+            return
+        for resource_id in ids:
+            if self._loader.get_music_resource(resource_id) is None:
+                continue
+            self.play_music(resource_id)
+            return
 
     def _stop_current_music(self) -> None:
         pygame.mixer.music.stop()

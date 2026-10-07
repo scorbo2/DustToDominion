@@ -18,7 +18,7 @@ import pygame
 import pytest
 from loguru import logger
 
-from dtd import resource_loader
+from dtd import game_constants, resource_loader
 from dtd.errors import NoResourcesFoundError, ResourceLoadError
 from dtd.game_config import ResourcesConfig
 from dtd.pak import MANIFEST_ENTRY, create_pak, xor_bytes
@@ -126,7 +126,7 @@ class TestLoadDevMode:
 
         # THEN each getter returns the decoded object under its relative ID:
         assert isinstance(
-            loader.get_sprite_resource("graphics/ships/viper.png"), pygame.Surface
+            loader.get_image_resource("graphics/ships/viper.png"), pygame.Surface
         )
         assert isinstance(loader.get_sfx_resource("audio/sfx/boom.wav"), pygame.mixer.Sound)
         assert loader.get_music_resource("audio/music/theme.wav") == files[
@@ -153,9 +153,9 @@ class TestLoadDevMode:
         loader.load(ResourcesConfig(mode="dev", location=[str(extra_a), str(extra_b)]))
 
         # THEN resources from the default dir AND both extras are loaded:
-        assert loader.get_sprite_resource("graphics/base.png") is not None
-        assert loader.get_sprite_resource("graphics/extra_a.png") is not None
-        assert loader.get_sprite_resource("graphics/extra_b.png") is not None
+        assert loader.get_image_resource("graphics/base.png") is not None
+        assert loader.get_image_resource("graphics/extra_a.png") is not None
+        assert loader.get_image_resource("graphics/extra_b.png") is not None
 
     def test_with_relative_location_should_resolve_against_project_dir(
         self, project: Path
@@ -185,7 +185,7 @@ class TestLoadDevMode:
                 location=[str(project / "does_not_exist"), "also_missing/"],
             )
         )
-        assert loader.get_sprite_resource("graphics/base.png") is not None
+        assert loader.get_image_resource("graphics/base.png") is not None
 
 
 class TestMusicVsSoundEffect:
@@ -274,7 +274,7 @@ class TestFontResource:
         self, project: Path, font_ready: None
     ) -> None:
         # Spec 03: "Return None if the given ID identifies a resource of the
-        # wrong type" - a sprite ID must not yield a font:
+        # wrong type" - an image ID must not yield a font:
         _write_ttf(project / "resources/fonts/ui.ttf")
         _write_png(project / "resources/graphics/ship.png")
         loader = ResourceLoader()
@@ -311,6 +311,91 @@ class TestFontResource:
         assert small is not large
 
 
+class TestThemeAndFontIdListing:
+    """The theme/font id accessors (spec 03: Consumer API, as amended by
+    spec 08: Title Screen)."""
+
+    def test_get_theme_resource_ids_with_no_theme_resources_should_return_only_the_sentinel(
+        self, project: Path
+    ) -> None:
+        # GIVEN a resource tree with no themes/ directory at all:
+        _make_text_file(project / "resources", "note.txt", "no themes here")
+
+        loader = ResourceLoader()
+        loader.load(None)
+
+        # THEN the sentinel alone is returned - the list is never empty
+        # (spec 08), so chooser clients need no "nothing available" case:
+        assert loader.get_theme_resource_ids() == [
+            game_constants.DEFAULT_THEME_DISPLAY_VALUE
+        ]
+
+    def test_get_font_resource_ids_with_no_font_resources_should_return_only_the_sentinel(
+        self, project: Path
+    ) -> None:
+        # GIVEN a resource tree with no fonts/ directory at all:
+        _make_text_file(project / "resources", "note.txt", "no fonts here")
+
+        loader = ResourceLoader()
+        loader.load(None)
+
+        assert loader.get_font_resource_ids() == [
+            game_constants.DEFAULT_FONT_DISPLAY_VALUE
+        ]
+
+    def test_get_theme_resource_ids_with_nested_themes_should_return_all_sorted_sentinel_first(
+        self, project: Path
+    ) -> None:
+        # GIVEN theme jsons at the top of themes/ AND nested several
+        # directories deep (recursive search, spec 08), written out of
+        # order and with mixed case to pin the casefold sort:
+        resources = project / "resources"
+        _make_text_file(resources, "themes/Zulu.json", "{}")
+        _make_text_file(resources, "themes/alpha.json", "{}")
+        _make_text_file(resources, "themes/Beta.json", "{}")
+        _make_text_file(resources, "themes/long/path/matrix.json", "{}")
+        # Decoys: JSON outside themes/ and non-JSON inside themes/ must
+        # NOT be listed (prefix AND suffix filter):
+        _make_text_file(resources, "data/ship_stats.json", '{"hull": 100}')
+        _make_text_file(resources, "themes/notes.txt", "not a theme")
+
+        loader = ResourceLoader()
+        loader.load(None)
+
+        # THEN every themes/*.json id is listed sorted by full id
+        # (casefold), with the sentinel forced to the front:
+        assert loader.get_theme_resource_ids() == [
+            game_constants.DEFAULT_THEME_DISPLAY_VALUE,
+            "themes/alpha.json",
+            "themes/Beta.json",
+            "themes/long/path/matrix.json",
+            "themes/Zulu.json",
+        ]
+
+    def test_get_font_resource_ids_with_nested_fonts_should_return_all_sorted_sentinel_first(
+        self, project: Path
+    ) -> None:
+        # GIVEN fonts at the top of fonts/ AND nested deep, out of order
+        # and mixed case (recursive search, casefold sort - spec 08):
+        resources = project / "resources"
+        _write_ttf(resources / "fonts/Sahara.ttf")
+        _write_ttf(resources / "fonts/iceland.ttf")
+        _write_ttf(resources / "fonts/long/path/sahara.ttf")
+        # Decoy: a valid .ttf OUTSIDE fonts/ is a loadable font resource
+        # but is not offered - the fonts/ prefix is the convention:
+        _write_ttf(resources / "misc/elsewhere.ttf")
+
+        loader = ResourceLoader()
+        loader.load(None)
+
+        assert loader.get_font_resource_ids() == [
+            game_constants.DEFAULT_FONT_DISPLAY_VALUE,
+            "fonts/iceland.ttf",
+            "fonts/long/path/sahara.ttf",
+            "fonts/Sahara.ttf",
+        ]
+
+
 class TestExtensionFiltering:
     def test_with_unsupported_extensions_should_skip_them_silently(
         self, project: Path
@@ -334,7 +419,7 @@ class TestExtensionFiltering:
         # THEN the bad files are skipped with NO log warning (spec 03:
         # "silent skip") and nothing is loaded for them:
         assert loader.get_text_resource("LetterToMyGrandma.doc") is None
-        assert loader.get_sprite_resource("UPPER.PNG") is None
+        assert loader.get_image_resource("UPPER.PNG") is None
         assert not any("LetterToMyGrandma" in record for record in records)
 
 
@@ -486,7 +571,7 @@ class TestDuplicateIds:
         finally:
             logger.remove(sink_id)
 
-        assert loader.get_sprite_resource("graphics/base.png") is not None
+        assert loader.get_image_resource("graphics/base.png") is not None
         assert records == []
 
 
@@ -506,7 +591,7 @@ class TestDistributionMode:
 
         # THEN each getter returns the decoded object under its pak ID:
         assert isinstance(
-            loader.get_sprite_resource("graphics/ships/viper.png"), pygame.Surface
+            loader.get_image_resource("graphics/ships/viper.png"), pygame.Surface
         )
         assert isinstance(loader.get_sfx_resource("audio/sfx/boom.wav"), pygame.mixer.Sound)
         assert loader.get_music_resource("audio/music/theme.wav") == files[
@@ -675,7 +760,7 @@ class TestDevToFallbackDistribution:
 
         # THEN the package's resources are loaded:
         assert isinstance(
-            loader.get_sprite_resource("graphics/ships/viper.png"), pygame.Surface
+            loader.get_image_resource("graphics/ships/viper.png"), pygame.Surface
         )
         assert loader.get_text_resource("data/NPC_dialog/frank.txt") == "Hello, grandma."
 
@@ -695,7 +780,7 @@ class TestDevToFallbackDistribution:
         loader.load(None)
 
         # THEN only the dev-mode resource is loaded - the pak is ignored:
-        assert loader.get_sprite_resource("graphics/base.png") is not None
+        assert loader.get_image_resource("graphics/base.png") is not None
         assert loader.get_text_resource("pak_only.txt") is None
 
     def test_with_explicit_dev_mode_should_ignore_paks(self, project: Path) -> None:
@@ -710,7 +795,7 @@ class TestDevToFallbackDistribution:
         loader = ResourceLoader()
         loader.load(ResourcesConfig(mode="dev"))
 
-        assert loader.get_sprite_resource("graphics/base.png") is not None
+        assert loader.get_image_resource("graphics/base.png") is not None
         assert loader.get_text_resource("pak_only.txt") is None
 
     def test_with_explicit_distribution_should_ignore_dev_files(
@@ -727,7 +812,7 @@ class TestDevToFallbackDistribution:
         loader.load(ResourcesConfig(mode="distribution"))
 
         assert loader.get_text_resource("pak_only.txt") == "from pak"
-        assert loader.get_sprite_resource("graphics/base.png") is None
+        assert loader.get_image_resource("graphics/base.png") is None
 
     def test_with_dev_load_failure_should_not_fall_back_to_distribution(
         self, project: Path

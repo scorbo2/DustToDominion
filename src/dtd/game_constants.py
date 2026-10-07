@@ -38,6 +38,24 @@ VOLUME_MAX_PERCENT = 100
 DESIGN_W = 1920
 DESIGN_H = 1080
 
+# --- Theme and font sentinels (spec 04, as amended by spec 08) ----------
+#: The config value that explicitly means "use the built-in default theme"
+#: (spec 04: Configuration). ``Theme.get_theme_resource_id`` reports this
+#: same value when no theme (or an invalid one) is configured.
+DEFAULT_THEME_VALUE = "default"
+#: The config value that explicitly means "use the fallback font" (spec 04:
+#: Configuration). ``Theme.get_font_resource_id`` reports this same value
+#: when no font (or an invalid one) is configured.
+DEFAULT_FONT_VALUE = "default"
+#: Display value the resource loader's ``get_theme_resource_ids`` always
+#: offers first, standing in for "no theme" in a chooser (spec 08). Chooser
+#: callbacks map this display value back to ``DEFAULT_THEME_VALUE``.
+DEFAULT_THEME_DISPLAY_VALUE = "(Default theme)"
+#: Display value the resource loader's ``get_font_resource_ids`` always
+#: offers first, standing in for "no font" in a chooser (spec 08). Chooser
+#: callbacks map this display value back to ``DEFAULT_FONT_VALUE``.
+DEFAULT_FONT_DISPLAY_VALUE = "(System default)"
+
 # --- Resource packaging (spec 03) ----------------------------------------
 #: The directory name the game always scans first in dev mode (spec 03).
 DEFAULT_RESOURCE_DIRNAME = "resources"
@@ -45,9 +63,10 @@ DEFAULT_RESOURCE_DIRNAME = "resources"
 #: (spec 03: Manifest errors). A pak declaring any other version is rejected
 #: with ``UnsupportedResourceVersionError`` rather than misinterpreted.
 PAK_MANIFEST_VERSION = "1.0"
-#: Sprite image extensions (spec 03). Matching is case-sensitive: a file
-#: named ``.JPG`` is NOT a valid resource.
-SPRITE_RESOURCE_EXTENSIONS = (".png", ".jpg", ".jpeg")
+#: Image extensions (spec 03; renamed from SPRITE_RESOURCE_EXTENSIONS per
+#: spec 08). Matching is case-sensitive: a file named ``.JPG`` is NOT a
+#: valid resource.
+IMAGE_RESOURCE_EXTENSIONS = (".png", ".jpg", ".jpeg")
 #: Audio extensions (spec 03). Which audio is music vs. sound effect is
 #: decided by ID, not extension (see MUSIC_RESOURCE_ID_PREFIX).
 AUDIO_RESOURCE_EXTENSIONS = (".wav", ".ogg", ".mp3")
@@ -60,7 +79,7 @@ JSON_RESOURCE_EXTENSIONS = (".json",)
 FONT_RESOURCE_EXTENSIONS = (".ttf",)
 #: Every extension the resource loader recognizes, in any type (spec 03).
 SUPPORTED_RESOURCE_EXTENSIONS = (
-    SPRITE_RESOURCE_EXTENSIONS
+    IMAGE_RESOURCE_EXTENSIONS
     + AUDIO_RESOURCE_EXTENSIONS
     + TEXT_RESOURCE_EXTENSIONS
     + JSON_RESOURCE_EXTENSIONS
@@ -71,6 +90,15 @@ SUPPORTED_RESOURCE_EXTENSIONS = (
 #: sound effect (cached as a pygame.mixer.Sound). The trailing slash matters:
 #: ``audio/musicbox/...`` is a sound effect.
 MUSIC_RESOURCE_ID_PREFIX = "audio/music/"
+#: By convention (spec 03, as amended by spec 08), a JSON resource whose ID
+#: starts with this prefix is offered by ``get_theme_resource_ids`` as an
+#: available theme. The trailing slash matters: ``themes-archive/...`` is
+#: not a theme.
+THEME_RESOURCE_ID_PREFIX = "themes/"
+#: By convention (spec 03, as amended by spec 08), a font resource whose ID
+#: starts with this prefix is offered by ``get_font_resource_ids`` as an
+#: available font.
+FONT_RESOURCE_ID_PREFIX = "fonts/"
 #: TrueType magic number: the first 4 bytes of every ``.ttf`` file (spec 03:
 #: Notes for font validation). A font that does not begin with these bytes
 #: is rejected. This header check is the ENTIRE font validation - pygame's

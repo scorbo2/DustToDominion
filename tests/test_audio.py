@@ -561,6 +561,89 @@ class TestStopMusic:
         assert not pygame.mixer.music.get_busy()
 
 
+class TestPlayMusicFirstMatch:
+    """``play_music_first_match`` (spec 05, as amended by spec 08: Title
+    Screen)."""
+
+    def test_when_music_disabled_should_be_silent_noop(
+        self, loaded_loader: ResourceLoader
+    ) -> None:
+        # Spec 08: a disabled music setting is a no-op, even when every
+        # candidate id is valid:
+        manager = AudioManager(loaded_loader, AudioConfig(music_enabled=False))
+        manager.play_music_first_match([MUSIC_THEME, MUSIC_AMBIENT])
+        assert not pygame.mixer.music.get_busy()
+
+    def test_with_no_valid_ids_should_be_silent_noop(self, audio_manager: None) -> None:
+        # Spec 08: an exhausted candidate list is a no-op:
+        audio_manager.play_music_first_match(
+            ["audio/music/missing.mp3", "audio/music/missing.ogg"]
+        )
+        assert not pygame.mixer.music.get_busy()
+
+    def test_with_one_valid_id_among_invalid_ones_should_play_that_track(
+        self,
+        audio_manager: None,
+        loaded_loader: ResourceLoader,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        # Spec 08: the first id that resolves is played; the rest are
+        # ignored:
+        loaded_tracks = _spy_music_load(monkeypatch)
+        audio_manager.play_music_first_match(
+            ["audio/music/missing.mp3", MUSIC_THEME, "audio/music/missing.ogg"]
+        )
+        assert loaded_tracks == [loaded_loader.get_music_resource(MUSIC_THEME)]
+        assert pygame.mixer.music.get_busy()
+
+    def test_with_multiple_valid_ids_should_play_the_first_in_sequence(
+        self,
+        audio_manager: None,
+        loaded_loader: ResourceLoader,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        # Spec 08: with two valid candidates, only the FIRST is loaded
+        # and played:
+        loaded_tracks = _spy_music_load(monkeypatch)
+        audio_manager.play_music_first_match([MUSIC_THEME, MUSIC_AMBIENT])
+        assert loaded_tracks == [loaded_loader.get_music_resource(MUSIC_THEME)]
+        assert pygame.mixer.music.get_busy()
+
+    def test_with_valid_id_while_playing_should_replace_current_track(
+        self,
+        audio_manager: None,
+        loaded_loader: ResourceLoader,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        # GIVEN a track already playing:
+        audio_manager.play_music(MUSIC_THEME)
+        assert pygame.mixer.music.get_busy()
+
+        # WHEN first_match resolves a different track:
+        loaded_tracks = _spy_music_load(monkeypatch)
+        audio_manager.play_music_first_match([MUSIC_AMBIENT])
+
+        # THEN the previously-playing music was stopped and replaced
+        # (the second load IS the replacement - mixer.music is
+        # single-track):
+        assert loaded_tracks == [loaded_loader.get_music_resource(MUSIC_AMBIENT)]
+        assert pygame.mixer.music.get_busy()
+
+    def test_with_no_valid_ids_while_playing_should_not_stop_current_music(
+        self, audio_manager: None
+    ) -> None:
+        # GIVEN a track already playing:
+        audio_manager.play_music(MUSIC_THEME)
+        assert pygame.mixer.music.get_busy()
+
+        # WHEN no candidate resolves:
+        audio_manager.play_music_first_match(["audio/music/missing.mp3"])
+
+        # THEN the current track keeps playing - the deliberate contrast
+        # with play_music, which stops on an unresolvable id (spec 08):
+        _assert_music_is_still_playing()
+
+
 class TestConfigurationSetters:
     def test_sfx_volume_change_should_apply_immediately_to_playing_audio(
         self, audio_manager: None, loaded_loader: ResourceLoader

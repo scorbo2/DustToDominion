@@ -66,11 +66,11 @@ The project is structured as follows:
     - subdirectories as needed for code organization
 - `resources`:
   - `audio`: audio files needed by the game (to be defined in later spec docs)
-  - `graphics`: sprites and images used by the game (to be defined in later spec docs)
+  - `graphics`: images used by the game (to be defined in later spec docs)
   - `data`: miscellaneous data files (dialogue scripts, ship data files, etc.)
     Details will be defined in later spec docs.
 - `tests`: all unit tests
-- `tools`: any standalone tools that accompany the game (sprite editor, sound editor, etc.)
+- `tools`: any standalone tools that accompany the game (image editor, sound editor, etc.)
 
 Game specifics:
 - **Framerate:** Locked at 60 FPS via `clock.tick(60)`

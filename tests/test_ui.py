@@ -423,6 +423,76 @@ def _assert_uses_fallback(theme: Theme) -> None:
     assert _render_signature(font) == _render_signature(expected)
 
 
+class TestThemeResourceIdAccessors:
+    """``get_theme_resource_id`` / ``get_font_resource_id`` (spec 04, as
+    amended by spec 08: Title Screen)."""
+
+    def test_get_theme_resource_id_with_configured_valid_theme_should_return_the_resource_id(
+        self, font_ready: None
+    ) -> None:
+        # GIVEN a theme value that resolves to a JSON object:
+        theme = _build_theme("themes/blue.json", json_data={"cornerRadius": 2})
+
+        # THEN the configured id is reported back verbatim, so a chooser
+        # can preselect it:
+        assert theme.get_theme_resource_id() == "themes/blue.json"
+
+    @pytest.mark.parametrize("value", ["", "   ", "default"])
+    def test_get_theme_resource_id_with_no_configured_theme_should_return_default_sentinel(
+        self, font_ready: None, value: str
+    ) -> None:
+        # GIVEN a missing/blank/"default" theme value:
+        theme = _build_theme(value)
+
+        # THEN the "default" sentinel is reported (from game_constants,
+        # never hard-coded in Theme):
+        assert theme.get_theme_resource_id() == game_constants.DEFAULT_THEME_VALUE
+
+    @pytest.mark.parametrize("data", [None, [1, 2, 3], "just a string", 42])
+    def test_get_theme_resource_id_with_invalid_theme_should_return_default_sentinel(
+        self, font_ready: None, data: object
+    ) -> None:
+        # GIVEN a theme value that does not resolve to a JSON object:
+        records, sink_id = _warning_records()
+        theme = _build_theme("themes/broken.json", json_data=data)
+
+        # THEN the sentinel is reported (the fallback warning already
+        # fired at construction):
+        assert theme.get_theme_resource_id() == game_constants.DEFAULT_THEME_VALUE
+        assert any("themes/broken.json" in record for record in records)
+        logger.remove(sink_id)
+
+    def test_get_font_resource_id_with_configured_valid_font_should_return_the_resource_id(
+        self, font_ready: None
+    ) -> None:
+        # GIVEN a font id the loader can resolve:
+        theme = _build_theme(
+            font_value="fonts/ui.ttf", font_resource=pygame.font.Font(None, 7)
+        )
+
+        # THEN the configured id is reported back verbatim:
+        assert theme.get_font_resource_id() == "fonts/ui.ttf"
+
+    @pytest.mark.parametrize("value", ["", "   ", "default"])
+    def test_get_font_resource_id_with_no_configured_font_should_return_default_sentinel(
+        self, font_ready: None, value: str
+    ) -> None:
+        # GIVEN a missing/blank/"default" font value:
+        theme = _build_theme(font_value=value)
+
+        # THEN the "default" sentinel is reported:
+        assert theme.get_font_resource_id() == game_constants.DEFAULT_FONT_VALUE
+
+    def test_get_font_resource_id_with_invalid_font_should_return_default_sentinel(
+        self, font_ready: None
+    ) -> None:
+        # GIVEN a font id the loader cannot resolve:
+        theme = _build_theme(font_value="fonts/missing.ttf")
+
+        # THEN the sentinel is reported, not the invalid id:
+        assert theme.get_font_resource_id() == game_constants.DEFAULT_FONT_VALUE
+
+
 class TestUIManager:
     def _widget_at(self, rect: pygame.Rect, enabled: bool = True) -> Widget:
         widget = Widget(rect)
@@ -557,3 +627,28 @@ class TestUIManager:
 
         # THEN list order is back-to-front (spec 04: UIManager):
         assert draw_order == ["back", "front"]
+
+    def test_set_theme_should_replace_the_theme_handed_to_widgets_on_draw(
+        self, font_ready: None
+    ) -> None:
+        # GIVEN a UIManager built with a first theme, and a widget that
+        # records the theme it is handed on each draw:
+        first_theme = Theme("", "", ResourceLoader())
+        received_themes: list[Theme] = []
+        ui = UIManager(first_theme)
+        widget = self._widget_at(pygame.Rect(0, 0, 10, 10))
+        widget.draw = lambda surf, theme: received_themes.append(theme)
+        ui.widgets.append(widget)
+
+        # WHEN the UIManager draws, a new theme is set, and it draws again:
+        ui.draw(pygame.Surface((32, 32)))
+        second_theme = Theme("", "", ResourceLoader())
+        ui.set_theme(second_theme)
+        ui.draw(pygame.Surface((32, 32)))
+
+        # THEN the widget received the constructor theme first and the
+        # replacement theme second - widgets do not store themes, so the
+        # swap takes effect on the next frame (spec 04, as amended by
+        # spec 08):
+        assert received_themes == [first_theme, second_theme]
+        assert ui.theme is second_theme
