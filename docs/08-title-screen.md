@@ -29,6 +29,7 @@ def get_theme_resource_ids(self) -> list[str]:
     # The returned list is sorted alphabetically by full resource id (casefold()).
     # A sentinel display value "(Default theme)" is always added to the list.
     # The returned list is therefore never empty (always at least size 1).
+    # The sentinel display value is always the first item in the returned list.
     # This sentinel display value should be added to `game_constants.py` and not hard-coded.
 
 def get_font_resource_ids(self) -> list[str]:
@@ -37,14 +38,21 @@ def get_font_resource_ids(self) -> list[str]:
     # The returned list is sorted alphabetically by full resource id (casefold()).
     # A sentinel display value "(System default)" is always added to the list.
     # The returned list is therefore never empty (always at least size 1).
+    # The sentine display value is always the first item in the returned list.
     # This sentinel display value should be added to `game_constants.py` and not hard-coded.
 ```
 
 These accessors will allow all future screens to query for available fonts and themes.
 
-The "(Default theme)" and "(System default)" sentinel values should live in `game_constants.py`.
-They are the display equivalents of the existing "default" constants, and should be mapped
-as such.
+The "(Default theme)" and "(System default)" sentinel display values should live in `game_constants.py`.
+The existing code hard-codes "default". This should be moved to `game_constants.py`:
+
+```python
+DEFAULT_THEME_VALUE = "default"
+DEFAULT_FONT_VALUE = "default"
+DEFAULT_THEME_DISPLAY_VALUE = "(Default theme)"
+DEFAULT_FONT_DISPLAY_VALUE = "(System default)"
+```
 
 ### Terminology change
 
@@ -83,15 +91,22 @@ This specification amends `04-ui-widgets.md` to add accessors in the Theme
 class to retrieve the resource ids for the currently configured font and theme:
 
 ```python
-def get_theme_resource_id(self) : str -> None:
-    # return "default" if no configured theme
+def get_theme_resource_id(self) -> None:
+    # return "default" if no configured theme OR if the configured theme is not valid
 
-def get_font_resource_id(self) : str -> None:
-    # return "default" if no configured theme
+def get_font_resource_id(self) -> None:
+    # return "default" if no configured font OR if the configured font is not valid
 ```
 
-The "default" sentinel value should be moved to `game_constants.py` and
-not hard-coded.
+The "default" sentinel value should exist in `game_constants.py` and
+not be hard-coded.
+
+Additionally, the UIManager class needs a function that accepts a new Theme instance:
+
+```python
+def set_theme(self, theme) -> None:
+    # the given theme replaces the one that was passed to the constructor.
+```
 
 ## Additional dependencies
 
@@ -203,11 +218,18 @@ The `TitleScreen` class, roughly sketched:
 
 ```python
 class TitleScreen:
-    def __init__(self, theme, resource_loader):
+    def __init__(self, theme, resource_loader, rng: random.Random | None):
       # accept the supplied theme as a default, but we will
       # create and use our own local instance using the given
       # resource_loader whenever font or theme are changed.
+      # if the given rng is not null, use it for random starfield generation (unit testing)
 ```
+
+Implementation suggestion: extract the starfield into its own small module `dtd/screens/starfield.py`:
+- `generate(rng) -> list[Star]` to handle generation
+- `advance()` to handle animation.
+
+This would make unit testing the starfield much easier, and also reduces clutter in the `TitleScreen` class.
 
 ### Integration with the main game loop
 
@@ -235,6 +257,17 @@ New tests related to spec doc amendments (move these to spec 03):
 - `get_theme_resource_ids` returns all resources whose ids begin with `themes/` and end in `.json`.
 - `get_font_resource_ids` returns all resources whose ids begin with `fonts/` and end in `.ttf`.
 
+New tests related to spec doc amendments (move these to spec 04):
+
+- `get_theme_resource_id()` returns a valid resource id if one was configured.
+- `get_theme_resource_id()` returns "default" if no theme was configured.
+- `get_theme_resource_id()` returns "default" if an invalid theme was configured.
+- `get_font_resource_id()` returns a valid resource id if one was configured.
+- `get_font_resource_id()` returns "default" if no font was configured.
+- `get_font_resource_id()` returns "default" if an invalid font was configured.
+- UIManager's `set_theme` can be used to change the current theme in a UIManager. All of its widgets
+  receive the new Theme on subsequent calls to `draw()`.
+
 New tests related to spec doc amendments (move these to spec 05):
 
 - `play_music_first_match` with no valid resource ids is a no-op.
@@ -258,7 +291,9 @@ New tests specifically for Title Screen behavior (these stay in this doc):
   - the search order is respected: mp3, then wav, then ogg.
   - if none resolve, no music plays.
 - The game title is centered in the upper half of the screen.
-- ChoiceLists for font and theme appear horizontally centered in the lower half of the screen.
+- ChoiceLists for font and theme appear horizontally and vertically centered in the lower half of the screen.
+- Selecting "(Default theme)" should map to "default" for theme.
+- Selecting "(System default)" should map to "default" for font.
 - The font and theme ChoiceLists can be given an initial selection index via `initial_index`,
   and their selection is initialized accordingly (invalid index -> first item in sorted list,
   valid index -> that item).
@@ -278,6 +313,11 @@ New tests specifically for Title Screen behavior (these stay in this doc):
 - Can the theme be changed with immediate effect?
 - Is ESC wired up as a shortcut for the Exit Game action?
 - Does the game exit cleanly when Exit Game is selected?
+- "Sprite" rename was completed successfully:
+  - `SPRITE_RESOURCE_EXTENSIONS` in `game_constants.py`
+  - `ResourceStore.sprites` in `pak.py`
+  - Spec 03's "sprite images" wording
+  - `tests/test_resource_loader.py`.
 
 ## Dev plan
 
