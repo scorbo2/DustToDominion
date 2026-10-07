@@ -38,7 +38,7 @@ def get_font_resource_ids(self) -> list[str]:
     # The returned list is sorted alphabetically by full resource id (casefold()).
     # A sentinel display value "(System default)" is always added to the list.
     # The returned list is therefore never empty (always at least size 1).
-    # The sentine display value is always the first item in the returned list.
+    # The sentinel display value is always the first item in the returned list.
     # This sentinel display value should be added to `game_constants.py` and not hard-coded.
 ```
 
@@ -91,10 +91,10 @@ This specification amends `04-ui-widgets.md` to add accessors in the Theme
 class to retrieve the resource ids for the currently configured font and theme:
 
 ```python
-def get_theme_resource_id(self) -> None:
+def get_theme_resource_id(self) -> str:
     # return "default" if no configured theme OR if the configured theme is not valid
 
-def get_font_resource_id(self) -> None:
+def get_font_resource_id(self) -> str:
     # return "default" if no configured font OR if the configured font is not valid
 ```
 
@@ -157,10 +157,12 @@ Each widget should be 400px wide by 45px tall with a 4-pixel border (all units i
 There should be 35px of empty space between each option.
 
 The font selector should default to the currently configured font, or the sentinel display
-value "(System default)" if no font is explicitly configured.
+value "(System default)" if no font is explicitly configured, or if the configured font is not
+present in the return of `get_font_resource_ids()`, or if a font is configured but is invalid.
 
 The theme selector should default to the name of the currently configured theme, or the sentinel
-display value "(Default theme)" if no theme is explicitly configured. 
+display value "(Default theme)" if no theme is explicitly configured, or if the configured theme
+is not present in the return of `get_theme_resource_ids()`, or if a theme is configured but invalid.
 
 For both font and theme, the display name should be the full resource id, such as `fonts/Iceland-Regular.ttf`
 or `themes/blue.json`.
@@ -218,7 +220,7 @@ The `TitleScreen` class, roughly sketched:
 
 ```python
 class TitleScreen:
-    def __init__(self, theme, resource_loader, rng: random.Random | None):
+    def __init__(self, theme, resource_loader, rng: random.Random | None = None):
       # accept the supplied theme as a default, but we will
       # create and use our own local instance using the given
       # resource_loader whenever font or theme are changed.
@@ -284,6 +286,7 @@ New tests specifically for Title Screen behavior (these stay in this doc):
   - if the given image doesn't have a 16:9 aspect ratio, it is stretched to fit the entire title screen.
   - if the given image is larger or smaller than our display, it is scaled as needed to fit the entire title screen.
 - If there is no background image resource, a random starfield is generated.
+  - a count of stars between 150 and 300 is generated.
   - all generated stars are grayscale with values ranging from (0,0,0) to (192,192,192).
   - stars change their brightness by (1,1,1) per frame, oscillating between the two limits.
   - if the resolution is changed (we support 3), star positions do not change.
@@ -294,9 +297,10 @@ New tests specifically for Title Screen behavior (these stay in this doc):
 - ChoiceLists for font and theme appear horizontally and vertically centered in the lower half of the screen.
 - Selecting "(Default theme)" should map to "default" for theme.
 - Selecting "(System default)" should map to "default" for font.
-- The font and theme ChoiceLists can be given an initial selection index via `initial_index`,
-  and their selection is initialized accordingly (invalid index -> first item in sorted list,
-  valid index -> that item).
+- The font and theme ChoiceLists are initialized based on the configured font and theme
+  as reported by `get_theme_resource_id()` and `get_font_resource_id()`. If an item
+  is configured, it is preselected. Otherwise, the sentinel is preselected. If an item
+  is configured but is not valid, the sentinel is preselected.
 - Changing the current font takes effect on next frame; no persistence to game config file.
 - Changing the current theme takes effect on next frame; no persistence to game config file.
 - An "Exit Game" button is centered in the lower half of the screen.
