@@ -133,10 +133,10 @@ class ResourceLoader:
     # ------------------------------------------------------------------ #
     # consumer API (spec 03)
     # ------------------------------------------------------------------ #
-    def get_sprite_resource(self, resource_id: str) -> pygame.Surface | None:
-        """The ``pygame.Surface`` for a sprite image ID, or ``None`` if the
-        ID is absent or not a sprite resource."""
-        return self._store.sprites.get(resource_id)
+    def get_image_resource(self, resource_id: str) -> pygame.Surface | None:
+        """The ``pygame.Surface`` for an image ID, or ``None`` if the
+        ID is absent or not an image resource."""
+        return self._store.images.get(resource_id)
 
     def get_sfx_resource(self, resource_id: str) -> pygame.mixer.Sound | None:
         """The ``pygame.mixer.Sound`` for a sound effect ID, or ``None`` if
@@ -187,6 +187,39 @@ class ResourceLoader:
             font = pygame.font.Font(io.BytesIO(raw_bytes), size)
             self._font_cache[cache_key] = font
         return font
+
+    def get_theme_resource_ids(self) -> list[str]:
+        """All available theme resource ids, sentinel first (spec 03, as
+        amended by spec 08).
+
+        Every loaded JSON resource whose ID starts with ``themes/`` is
+        listed, recursively, sorted alphabetically by full ID (casefold) so
+        chooser order is stable regardless of locale or casing. The
+        ``DEFAULT_THEME_DISPLAY_VALUE`` sentinel is always the first item,
+        so the returned list is never empty and chooser clients never need
+        a "nothing available" special case.
+        """
+        return _ids_with_leading_sentinel(
+            self._store.json_resources,
+            game_constants.THEME_RESOURCE_ID_PREFIX,
+            game_constants.JSON_RESOURCE_EXTENSIONS,
+            game_constants.DEFAULT_THEME_DISPLAY_VALUE,
+        )
+
+    def get_font_resource_ids(self) -> list[str]:
+        """All available font resource ids, sentinel first (spec 03, as
+        amended by spec 08).
+
+        Same listing rules as ``get_theme_resource_ids``, applied to the
+        fonts cache under the ``fonts/`` prefix, with the
+        ``DEFAULT_FONT_DISPLAY_VALUE`` sentinel leading the list.
+        """
+        return _ids_with_leading_sentinel(
+            self._store.fonts,
+            game_constants.FONT_RESOURCE_ID_PREFIX,
+            game_constants.FONT_RESOURCE_EXTENSIONS,
+            game_constants.DEFAULT_FONT_DISPLAY_VALUE,
+        )
 
     # ------------------------------------------------------------------ #
     # distribution mode loading (spec 03)
@@ -300,6 +333,28 @@ class ResourceLoader:
             ) from exc
         type_name, value = pak.load_resource_from_bytes(resource_id, data)
         self._store.store(type_name, resource_id, value)
+
+
+# ---------------------------------------------------------------------- #
+# resource id listing helper (spec 03, as amended by spec 08)
+# ---------------------------------------------------------------------- #
+def _ids_with_leading_sentinel(
+    cache_keys, prefix: str, suffixes: tuple[str, ...], sentinel: str
+) -> list[str]:
+    """IDs from ``cache_keys`` under ``prefix`` and ending in any of
+    ``suffixes``, sorted casefolded with ``sentinel`` forced first.
+
+    The suffix check mirrors the spec wording ("whose id ends in ...") and
+    ties the filter to the same extension constants that define the resource
+    type, so the two can never drift apart. Casefold sorting gives a stable,
+    locale-independent chooser order.
+    """
+    matching = [
+        resource_id
+        for resource_id in cache_keys
+        if resource_id.startswith(prefix) and resource_id.endswith(suffixes)
+    ]
+    return [sentinel, *sorted(matching, key=str.casefold)]
 
 
 # ---------------------------------------------------------------------- #

@@ -153,6 +153,7 @@ class Theme:
 
     def __init__(self, theme_value: str, font_value: str, loader: ResourceLoader) -> None:
         self._loader = loader
+        self._theme_resource_id: str | None = None
         self._font_resource_id: str | None = None
         self._fallback_name: str | None = None
         self._apply_theme_json(theme_value)
@@ -167,7 +168,7 @@ class Theme:
         self.cornerRadius = self.DEFAULT_CORNER_RADIUS
 
         value = (theme_value or "").strip()
-        if value in ("", "default"):
+        if value in ("", game_constants.DEFAULT_THEME_VALUE):
             return
         data = self._loader.get_json_resource(value)
         if data is None:
@@ -181,6 +182,11 @@ class Theme:
                 "theme resource {!r} is not a Json object; using the default theme", value
             )
             return
+        # Resolved to a usable theme object: remember the id so
+        # get_theme_resource_id can report it (spec 04, as amended by
+        # spec 08). Invalid individual keys still fall back to defaults per
+        # key - that does not make the theme resource itself invalid.
+        self._theme_resource_id = value
         for key, default in self._DEFAULT_COLORS.items():
             if key not in data:
                 continue  # missing keys are not an error (spec 04)
@@ -235,11 +241,18 @@ class Theme:
         alpha = int(text[6:8], 16) if len(text) == 8 else 255
         return red, green, blue, alpha
 
+    def get_theme_resource_id(self) -> str:
+        """The theme resource id this Theme resolved, or the "default"
+        sentinel when no theme (or an invalid one) was configured
+        (spec 04, as amended by spec 08). Lets chooser widgets preselect
+        the current value."""
+        return self._theme_resource_id or game_constants.DEFAULT_THEME_VALUE
+
     # -- font resolution (spec 04: Theme) ---------------------------------
     def _resolve_font(self, font_value: str) -> None:
         self._font_resource_id = None
         value = (font_value or "").strip()
-        if value and value != "default":
+        if value and value != game_constants.DEFAULT_FONT_VALUE:
             # Probe at size 1: presence is what matters, and the loader
             # caches Font objects per (id, size) (spec 03: Consumer API).
             if self._loader.get_font_resource(value, 1) is None:
@@ -269,6 +282,13 @@ class Theme:
         if self._fallback_name is not None:
             return pygame.font.SysFont(self._fallback_name, size)
         return pygame.font.Font(None, size)
+
+    def get_font_resource_id(self) -> str:
+        """The font resource id this Theme resolved, or the "default"
+        sentinel when no font (or an invalid one) was configured
+        (spec 04, as amended by spec 08). Lets chooser widgets preselect
+        the current value."""
+        return self._font_resource_id or game_constants.DEFAULT_FONT_VALUE
 
 
 class UIManager:
@@ -314,3 +334,9 @@ class UIManager:
     def draw(self, surf: pygame.Surface) -> None:
         for widget in self.widgets:
             widget.draw(surf, self.theme)
+
+    def set_theme(self, theme: Theme) -> None:
+        """Replace the Theme handed to widgets on every draw (spec 04, as
+        amended by spec 08). Widgets do not store themes, so the swap takes
+        effect on the next frame with no per-widget notification needed."""
+        self.theme = theme

@@ -8,17 +8,25 @@ Startup order per spec 03 as amended by specs 04 and 05:
    step 2; fatal if the required display, mixer, or font module fails).
 4. Invoke the resource loader (spec 03 step 3; any ``ResourceError`` is
    fatal).
-5. Initialize the UI: ``Theme`` and ``UIManager`` (spec 04; a
+5. Build the single application ``Theme`` from config (spec 04; a
    theme/font value that cannot be resolved falls back to defaults with
-   a log warning - never fatal).
+   a log warning - never fatal). Each screen creates and owns its own
+   ``UIManager`` (spec 04, as amended by spec 08); the Theme is handed
+   to each screen's constructor.
 6. Initialize the AudioManager (spec 05, amending spec 03 step 5): sets
    the mixer channel budget and applies the persisted audio settings.
-7. Initialize and display the main window (spec 03 step 6 / spec 02).
+7. Initialize and display the main window (spec 03 step 6 / spec 02),
+   then create the startup screen (spec 08) and enter the loop.
 
-The game loop follows spec 04 (Changes to game loop): pump events ->
-``ui.update`` -> clear the screen -> game rendering (arrives with a future
-spec) -> ``ui.draw`` -> ``clock.tick(60)``. F11/QUIT/ESC handling (spec 02)
-stays with the pump step.
+The game loop follows spec 04 as amended by spec 08: pump events ->
+``current_screen.update`` -> ``current_screen.handle`` (a returned
+``ScreenAction`` exits the loop) -> app-level events via
+``_pump_app_events`` (QUIT exits, F11 toggles the mode) -> clear the
+screen -> ``current_screen.draw`` -> ``pygame.display.flip`` ->
+``clock.tick(60)``. ESC is no longer app-level: spec 08 stage 4 moved
+it into ``TitleScreen.handle()``, where it is the Exit Game shortcut.
+Stopping screen music on any transition is the main loop's
+responsibility (spec 08: Integration), so every loop exit stops it.
 """
 from __future__ import annotations
 
@@ -27,11 +35,13 @@ import sys
 import pygame
 from loguru import logger
 
-from dtd import audio, game_config, persistence
+from dtd import audio, game_config, game_constants, persistence
 from dtd.errors import ResourceError
 from dtd.main_window import MainWindow
 from dtd.resource_loader import ResourceLoader
-from dtd.ui import Theme, UIManager
+from dtd.screens.base import Screen, ScreenAction
+from dtd.screens.title import TitleScreen
+from dtd.ui import Theme
 
 
 def run() -> int:
@@ -69,11 +79,12 @@ def run() -> int:
         logger.error("resource loading failed; aborting startup: {}", exc)
         return 1
 
-    # Spec 04 step 4 (amending spec 03): UI initialization after resource
-    # loading, before the window is created. Unresolvable theme/font values
-    # fall back to defaults with a warning (spec 04), never fatal.
+    # Spec 04 step 4 (amending spec 03), as amended by spec 08: the one
+    # application Theme is built here from config and handed to each
+    # screen's constructor; screens own their UIManagers. Unresolvable
+    # theme/font values fall back to defaults with a warning (spec 04),
+    # never fatal.
     theme = Theme(config.theme, config.font, resource_loader)
-    ui = UIManager(theme)
 
     # Spec 05 (amending spec 03 step 5): AudioManager initialization between
     # UI init and window creation. Sets the mixer channel budget and applies
@@ -84,8 +95,17 @@ def run() -> int:
     # Spec 03 step 6: main window initialization and display.
     window = MainWindow()
     window.open(config.mainWindow)
+    # Spec 08: the Title Screen is the startup screen, created once the
+    # window exists and handed to the event loop.
+    title_screen = TitleScreen(theme, resource_loader)
+    # Spec 08 (Title Screen audio): the first game_title track that
+    # resolves plays on loop while the screen is visible; the loop stops
+    # it on any exit. No match is a silent no-op.
+    audio.get_audio_manager().play_music_first_match(
+        game_constants.TITLE_SCREEN_MUSIC_IDS
+    )
     try:
-        _run_event_loop(window, ui)
+        _run_event_loop(window, title_screen)
     finally:
         window.close()
     return 0
@@ -118,32 +138,58 @@ def _init_pygame() -> None:
         raise pygame.error("pygame font failed to initialize")
 
 
-def _run_event_loop(window: MainWindow, ui: UIManager) -> None:
-    """Main game loop (spec 04: Changes to game loop).
+def _run_event_loop(window: MainWindow, current_screen: Screen) -> None:
+    """Main game loop (spec 04: Changes to game loop, as amended by spec 08).
 
-    Per frame: (1) pump events -> ``ui.update(events)``, (2) clear the
-    screen (black default background), (3) game rendering - none yet,
-    it arrives with a future spec, (4) ``ui.draw(screen)``,
-    (5) ``clock.tick(60)``. F11/QUIT/ESC handling (spec 02) stays with the
-    pump step. The display surface is re-fetched each frame because F11
-    mode switches replace it.
+    Per frame: (1) pump events, (2) ``current_screen.update(events)`` -
+    widgets react and their callbacks fire, (3) ``current_screen.handle``
+    - a returned ``ScreenAction`` ends the loop, (4) app-level events via
+    ``_pump_app_events`` - QUIT ends the loop, (5) clear the screen
+    (black default background), (6) game rendering - none yet, it
+    arrives with a future spec, (7) ``current_screen.draw(screen)``,
+    (8) ``pygame.display.flip()`` to present the frame, (9)
+    ``clock.tick(60)``. Stopping screen music is the main loop's job on
+    any transition (spec 08: Integration), hence the ``finally``. The
+    display surface is re-fetched each frame because F11 mode switches
+    replace it.
     """
     clock = pygame.time.Clock()
-    while True:
-        events = pygame.event.get()
-        ui.update(events)
-        for event in events:
-            if event.type == pygame.QUIT:
+    try:
+        while True:
+            events = pygame.event.get()
+            current_screen.update(events)
+            if current_screen.handle(events) is ScreenAction.QUIT:
                 return
-            if event.type == pygame.KEYDOWN:
-                if event.key == pygame.K_ESCAPE:
-                    return
-                if event.key == pygame.K_F11:
-                    window.on_f11()
-        screen = pygame.display.get_surface()
-        screen.fill((0, 0, 0))
-        ui.draw(screen)
-        clock.tick(60)
+            if _pump_app_events(window, events):
+                return
+            screen = pygame.display.get_surface()
+            screen.fill((0, 0, 0))
+            current_screen.draw(screen)
+            # Present the frame. Drawing to the display surface is invisible
+            # until it is flipped - this step was missing since spec 04 and
+            # the Title Screen background is what finally gave it away.
+            pygame.display.flip()
+            clock.tick(60)
+    finally:
+        # Precedent for future screens (spec 08: Integration): leaving a
+        # screen by any means - Exit Game, its ESC shortcut, or the
+        # window close - stops the screen's music.
+        audio.get_audio_manager().stop_music()
+
+
+def _pump_app_events(window: MainWindow, events: list[pygame.event.Event]) -> bool:
+    """Handle app-level events; ``True`` means the loop should exit.
+
+    QUIT (window close) exits and F11 toggles the display mode (spec 02).
+    ESC is deliberately absent: spec 08 stage 4 moved it into
+    ``TitleScreen.handle()``, where it is the Exit Game shortcut.
+    """
+    for event in events:
+        if event.type == pygame.QUIT:
+            return True
+        if event.type == pygame.KEYDOWN and event.key == pygame.K_F11:
+            window.on_f11()
+    return False
 
 
 def main() -> None:

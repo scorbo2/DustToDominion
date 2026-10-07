@@ -83,6 +83,18 @@ class AudioManager:
         # Music tracks automatically loop when finished.
         # If the given id is valid and is already playing, ignore the call. Do NOT restart the track.
 
+    def play_music_first_match(self, ids: Sequence[str]) -> None:
+        # For each resource id in `ids`, probe to see if a track with that id exists.
+        #   Probe: get_music_resource(id) is not None
+        # If so, it is played, and all subsequent ids in the sequence are ignored.
+        # If the sequence is exhausted with no music track found, this is a no-op.
+        # If `music_enabled` is False, this is a no-op.
+        # If a resource is found, any previously-playing music is stopped.
+        # If a resource is not found, any previously-playing music still plays.
+        # (Added 2026-10-06 per spec 08: Title Screen - lets a screen request
+        #  "the first of these candidate tracks that exists" without probing
+        #  the resource loader directly.)
+
     def stop_music(self) -> None:
         # Stop any currently playing music track.
         # It is not an error if no music is currently playing.
@@ -217,6 +229,13 @@ Simple, short, single-tone sounds are sufficient.
   - `play_music` with a sfx-typed resource id stops any currently playing track and returns - the sound effect is not played.
   - setting `music_enabled` to False while any track is playing stops it.
   - `stop_music` when no track is playing is a no-op.
+- `play_music_first_match` (added 2026-10-06 per spec 08: Title Screen):
+  - with no valid resource ids is a no-op.
+  - with at least one valid resource id plays that track.
+  - with at least two valid resource ids plays the first in the sequence.
+  - stops previously-playing music when given a valid resource id.
+  - does NOT stop previously-playing music when given no valid resource ids.
+  - when `music_enabled` is false is a silent no-op.
 - Music and sfx volume can be adjusted independently. Currently playing sfx, loops, and music respect the new setting.
 - Config changes take effect immediately and are persisted via the configuration module.
   - Persistence errors (can't persist new settings) don't stop the new settings from being used.

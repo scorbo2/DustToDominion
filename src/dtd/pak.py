@@ -98,7 +98,7 @@ class ResourceStore:
     demand - spec 03: Consumer API).
     """
 
-    sprites: dict[str, pygame.Surface] = field(default_factory=dict)
+    images: dict[str, pygame.Surface] = field(default_factory=dict)
     sound_effects: dict[str, pygame.mixer.Sound] = field(default_factory=dict)
     music: dict[str, bytes] = field(default_factory=dict)
     texts: dict[str, str] = field(default_factory=dict)
@@ -111,7 +111,7 @@ class ResourceStore:
     #: one field declaration plus one entry here (plus the decoder branch in
     #: ``load_resource_from_bytes``).
     CACHE_FIELDS: ClassVar[tuple[tuple[str, str], ...]] = (
-        ("sprite", "sprites"),
+        ("image", "images"),
         ("sfx", "sound_effects"),
         ("music", "music"),
         ("text", "texts"),
@@ -131,7 +131,7 @@ class ResourceStore:
         """Cache one decoded resource under its ID.
 
         ``type_name`` must be one of the type names in ``CACHE_FIELDS``
-        (currently ``"sprite"``, ``"sfx"``, ``"music"``, ``"text"``,
+        (currently ``"image"``, ``"sfx"``, ``"music"``, ``"text"``,
         ``"json"``, ``"font"`` - the names produced by
         ``load_resource_from_bytes``). An unknown type name raises
         ``ValueError``: silently mis-routing it into the wrong cache would
@@ -181,7 +181,7 @@ def load_resource_from_bytes(resource_id: str, data: bytes) -> tuple[str, Any]:
     """Decode one resource from raw bytes.
 
     Returns ``(type_name, value)`` where ``type_name`` is one of
-    ``"sprite"``, ``"sfx"``, ``"music"``, ``"text"``, ``"json"``, or
+    ``"image"``, ``"sfx"``, ``"music"``, ``"text"``, ``"json"``, or
     ``"font"``.
 
     The ``resource_id`` is used only to determine the extension and the
@@ -195,14 +195,14 @@ def load_resource_from_bytes(resource_id: str, data: bytes) -> tuple[str, Any]:
     """
     ext = PurePosixPath(resource_id).suffix
 
-    if ext in game_constants.SPRITE_RESOURCE_EXTENSIONS:
+    if ext in game_constants.IMAGE_RESOURCE_EXTENSIONS:
         try:
             surface = pygame.image.load(io.BytesIO(data), resource_id)
         except pygame.error as exc:
             raise ResourceLoadError(
-                f"could not load sprite resource {resource_id!r}: {exc}"
+                f"could not load image resource {resource_id!r}: {exc}"
             ) from exc
-        return "sprite", surface
+        return "image", surface
 
     if ext in game_constants.AUDIO_RESOURCE_EXTENSIONS:
         # Validate by attempting a full decode into a Sound object.

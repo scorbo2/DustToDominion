@@ -7,6 +7,8 @@ import pygame
 import pytest
 from loguru import logger
 
+from dtd import audio
+from dtd import game_constants
 from dtd import main as app_main
 from dtd import resource_loader
 from dtd.errors import (
@@ -69,6 +71,163 @@ class TestRun:
         assert exit_code == 0
         # The window was created with the default (windowed) config.
         assert observed["size"] == (1280, 720)
+
+    def test_should_exitCleanly_onEscapeKeydown_viaTitleScreenHandle(
+        self,
+        bootstrapped_persistence: Path,
+        synthesized_project: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        # Spec 08 stage 4: ESC is no longer handled by the main loop -
+        # TitleScreen.handle() turns it into ScreenAction.QUIT, which the
+        # loop honors by exiting.
+        first_pump = True
+        real_event_get = pygame.event.get
+
+        def event_get(*args, **kwargs):
+            nonlocal first_pump
+            if first_pump:
+                first_pump = False
+                pygame.event.post(
+                    pygame.event.Event(pygame.KEYDOWN, key=pygame.K_ESCAPE)
+                )
+            return real_event_get(*args, **kwargs)
+
+        monkeypatch.setattr(pygame.event, "get", event_get)
+
+        assert app_main.run() == 0
+
+    def test_should_invoke_updateAndDraw_on_the_currentScreen_eachFrame(
+        self,
+        bootstrapped_persistence: Path,
+        synthesized_project: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        # GIVEN a TitleScreen replacement that records the loop's calls
+        # (spec 08: Integration with the main game loop):
+        calls: list[str] = []
+        real_title_screen = app_main.TitleScreen
+
+        class RecordingTitleScreen(real_title_screen):
+            def update(self, events):
+                calls.append("update")
+                super().update(events)
+
+            def draw(self, surface):
+                calls.append("draw")
+                super().draw(surface)
+
+        monkeypatch.setattr(app_main, "TitleScreen", RecordingTitleScreen)
+
+        # AND a QUIT event posted on the SECOND pump, so at least one
+        # complete frame (update + draw) runs before the loop exits:
+        pump_count = 0
+        real_event_get = pygame.event.get
+
+        def event_get(*args, **kwargs):
+            nonlocal pump_count
+            pump_count += 1
+            if pump_count == 2:
+                pygame.event.post(pygame.event.Event(pygame.QUIT))
+            return real_event_get(*args, **kwargs)
+
+        monkeypatch.setattr(pygame.event, "get", event_get)
+
+        # WHEN run() executes,
+        exit_code = app_main.run()
+
+        # THEN the loop drove the current screen's update() and draw():
+        assert exit_code == 0
+        assert calls == ["update", "draw", "update"]
+
+    def test_should_flipDisplay_afterDrawingEachCompleteFrame(
+        self,
+        bootstrapped_persistence: Path,
+        synthesized_project: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        # GIVEN a spy on pygame.display.flip - drawing to the display
+        # surface is invisible until it is presented (spec 04, as amended
+        # during spec 08 stage 3):
+        flip_count = 0
+        real_flip = pygame.display.flip
+
+        def flip_spy(*args, **kwargs):
+            nonlocal flip_count
+            flip_count += 1
+            return real_flip(*args, **kwargs)
+
+        monkeypatch.setattr(pygame.display, "flip", flip_spy)
+
+        # AND a QUIT event posted on the SECOND pump, so exactly one
+        # complete frame runs:
+        pump_count = 0
+        real_event_get = pygame.event.get
+
+        def event_get(*args, **kwargs):
+            nonlocal pump_count
+            pump_count += 1
+            if pump_count == 2:
+                pygame.event.post(pygame.event.Event(pygame.QUIT))
+            return real_event_get(*args, **kwargs)
+
+        monkeypatch.setattr(pygame.event, "get", event_get)
+
+        # WHEN run() executes,
+        exit_code = app_main.run()
+
+        # THEN the one complete frame was presented exactly once:
+        assert exit_code == 0
+        assert flip_count == 1
+
+    def test_should_startTitleMusicOnStartupAndStopMusicOnLoopExit(
+        self,
+        bootstrapped_persistence: Path,
+        synthesized_project: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        # GIVEN spies on the AudioManager methods startup and the loop are
+        # supposed to call (spec 08: Title Screen audio / Integration):
+        calls: list[str] = []
+        real_play = audio.AudioManager.play_music_first_match
+        real_stop = audio.AudioManager.stop_music
+
+        def spy_play(self, ids):
+            calls.append(f"play:{tuple(ids)}")
+            return real_play(self, ids)
+
+        def spy_stop(self):
+            calls.append("stop")
+            return real_stop(self)
+
+        monkeypatch.setattr(audio.AudioManager, "play_music_first_match", spy_play)
+        monkeypatch.setattr(audio.AudioManager, "stop_music", spy_stop)
+
+        # AND a QUIT event posted on the first pump:
+        first_pump = True
+        real_event_get = pygame.event.get
+
+        def event_get(*args, **kwargs):
+            nonlocal first_pump
+            if first_pump:
+                first_pump = False
+                pygame.event.post(pygame.event.Event(pygame.QUIT))
+            return real_event_get(*args, **kwargs)
+
+        monkeypatch.setattr(pygame.event, "get", event_get)
+
+        # WHEN run() executes,
+        exit_code = app_main.run()
+
+        # THEN the title music candidates were offered in spec order at
+        # startup, and the loop stopped the music on exit. (No track
+        # resolves in this hermetic project, so the play is a no-op -
+        # what is pinned here is the wiring, not the sound.)
+        assert exit_code == 0
+        assert calls == [
+            f"play:{tuple(game_constants.TITLE_SCREEN_MUSIC_IDS)}",
+            "stop",
+        ]
 
     def test_when_unrelated_pygame_modules_fail_should_open_window_and_exit_cleanly(
         self,
@@ -174,9 +333,14 @@ class TestStartupOrder:
 
         monkeypatch.setattr(app_main, "Theme", spy_theme)
 
+        real_init_audio = app_main.audio.init_audio_manager
+
         def spy_init_audio(loader, config):
             order.append("audio")
-            return None
+            # Really initialize: the loop's music stop (spec 08) needs
+            # the singleton, and this test records order without
+            # replacing the real work.
+            return real_init_audio(loader, config)
 
         monkeypatch.setattr(app_main.audio, "init_audio_manager", spy_init_audio)
 

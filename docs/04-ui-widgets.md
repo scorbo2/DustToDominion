@@ -31,7 +31,11 @@ For each frame:
 2. `screen.fill()` with black
 3. game rendering
 4. `ui.draw(screen)`
-5. `clock.tick(60)`
+5. `pygame.display.flip()` - present the frame. Drawing to the display
+   surface is invisible until it is flipped; this step was missing from the
+   loop until the spec 08 Title Screen work made the never-presented display
+   obvious (a blank window despite a drawn background and title).
+6. `clock.tick(60)`
 
 ## Additional dependencies
 
@@ -146,7 +150,14 @@ class UIManager:
     def draw(self, surf):
         for w in self.widgets:
             w.draw(surf, self.theme)
+
+    def set_theme(self, theme) -> None:
+        # the given theme replaces the one that was passed to the constructor.
 ```
+
+*`set_theme` added 2026-10-06 per spec 08 (Title Screen). Widgets do not store themes -
+the UIManager hands the current theme to every widget on each call to `draw()` - so a theme
+swap takes effect on the next frame.*
 
 A layout engine is not needed. Rects can be specified in design resolution and converted
 to actual pixels as needed, based on current window resolution (see Widget coordinates).
@@ -164,9 +175,13 @@ A `Theme` class can be used to hold the currently-selected theme's properties
 and offer them to client code. This Theme class can also track the currently-configured
 font. An instance of this class should be created and populated on game startup, based
 on the game configuration. Its constructor accepts the game config's `theme`/`font`
-values and a reference to the resource loader. A single global instance of UIManager
-should be created, and should store a reference to this Theme instance.
-This way, all widgets have access to the current theme and font.
+values and a reference to the resource loader.
+
+*Amended 2026-10-06 per spec 08 (Title Screen): the previous requirement of a single global
+UIManager instance is removed. `Theme` remains application state - one instance, resolved from
+config at startup, same rationale as the `AudioManager` singleton - but `UIManager`'s only real
+state is the widget list, which is inherently screen-scoped. Each Screen implementation creates
+its own `UIManager` and passes the application `Theme` to it (see spec 08: Code layout).*
 
 If no font was configured (or if the configured font does not resolve), the
 Theme class should automatically determine a safe fallback font to use.
@@ -177,6 +192,20 @@ as a safe default that always works, even headless. This should be transparent
 to callers: the Theme class's `get_font(size)` function should always return
 a valid Font at the requested size, either from the resource loader's cache,
 or from the fallback described above.
+
+The Theme class also exposes the resource ids it resolved, so client code (for example a
+font/theme chooser) can preselect the current values:
+
+```python
+def get_theme_resource_id(self) -> str:
+    # return "default" if no configured theme OR if the configured theme is not valid
+
+def get_font_resource_id(self) -> str:
+    # return "default" if no configured font OR if the configured font is not valid
+```
+
+The "default" sentinel value lives in `game_constants.py` and must not be hard-coded.
+(Added 2026-10-06 per spec 08: Title Screen.)
 
 ### Disabling widgets
 
@@ -303,6 +332,15 @@ button inside the Button's rect. The left mouse button is the click button.
 - an enabled button should respond to mouse clicks (ONLY when mouse press+up happens within the button's rect).
   The Button tests must synthesize mouse events against a dummy display in our hermetic test environment.
 - button click hit detection must work consistently across supported resolutions.
+- Theme resource-id accessors (added 2026-10-06 per spec 08: Title Screen):
+  - `get_theme_resource_id()` returns a valid resource id if one was configured.
+  - `get_theme_resource_id()` returns "default" if no theme was configured.
+  - `get_theme_resource_id()` returns "default" if an invalid theme was configured.
+  - `get_font_resource_id()` returns a valid resource id if one was configured.
+  - `get_font_resource_id()` returns "default" if no font was configured.
+  - `get_font_resource_id()` returns "default" if an invalid font was configured.
+  - UIManager's `set_theme` can be used to change the current theme in a UIManager. All of its
+    widgets receive the new Theme on subsequent calls to `draw()`.
 
 ## Acceptance criteria
 
@@ -343,6 +381,13 @@ The spec can be implemented in stages:
    document the disabled-over-selected precedence. **Completed 2026-10-04**
 6. Amendment per spec 07 (ChoiceList): document the selected-over-hover rendering precedence.
    Wording-only amendment; no code or test changes required. **Completed 2026-10-05**
+7. Amendment per spec 08 (Title Screen): remove the single-global-UIManager requirement from
+   this doc (per-screen UIManagers are wired up by spec 08 itself), add
+   `Theme.get_theme_resource_id()` / `Theme.get_font_resource_id()`, add `UIManager.set_theme()`,
+   and move the hard-coded "default" sentinel to `game_constants.py`. **Completed 2026-10-06**
+8. Amendment found during spec 08 stage 3: add the missing `pygame.display.flip()` presentation
+   step to the game loop. The loop had never presented the display surface - latent while
+   nothing rendered, obvious once the Title Screen drew a background. **Completed 2026-10-06**
 
 Upon completion, if all tests pass, mark this document as "active". (Done 2026-10-01;
 full suite green at 280 tests.)
