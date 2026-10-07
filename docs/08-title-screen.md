@@ -332,9 +332,14 @@ staged implementation plan is suggested (each stage should include tests):
 2. Implement the Screen base class and a completely stubbed TitleScreen implementation.
    Make changes to the game loop to invoke `update()` and `draw()` on the current screen.
    Keep ESC handling in the main loop so that the main window can still exit. **Completed 2026-10-06**
-3. Implement the background handling and title display. No widgets at this point.
+3. Implement the background handling and title display. No widgets at this point. **Completed 2026-10-06**
 4. Implement the Exit Game button and wire it up. Move ESC handling into TitleScreen at this stage.
    The Exit Game button should indicate intent to quit via ScreenAction.QUIT.
+   - Refactoring suggestion (from stage 2 review): extract a small
+     `_pump_app_events(window, events) -> bool` helper out of `_run_event_loop`, so the
+     loop function does exactly one thing (pace frames and delegate), and app-level key
+     handling plus `ScreenAction` dispatch stay one explicit branch instead of a growing
+     `if` ladder.
 5. Implement the font and theme choosers and wire them up.
 6. Final code check - are we fully in compliance with the spec? Do all tests pass?
    Have all references to "sprites" and "sprite images" in spec docs and code been changed to "images"?

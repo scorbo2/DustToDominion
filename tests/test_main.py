@@ -138,6 +138,46 @@ class TestRun:
         assert exit_code == 0
         assert calls == ["update", "draw", "update"]
 
+    def test_should_flipDisplay_afterDrawingEachCompleteFrame(
+        self,
+        bootstrapped_persistence: Path,
+        synthesized_project: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        # GIVEN a spy on pygame.display.flip - drawing to the display
+        # surface is invisible until it is presented (spec 04, as amended
+        # during spec 08 stage 3):
+        flip_count = 0
+        real_flip = pygame.display.flip
+
+        def flip_spy(*args, **kwargs):
+            nonlocal flip_count
+            flip_count += 1
+            return real_flip(*args, **kwargs)
+
+        monkeypatch.setattr(pygame.display, "flip", flip_spy)
+
+        # AND a QUIT event posted on the SECOND pump, so exactly one
+        # complete frame runs:
+        pump_count = 0
+        real_event_get = pygame.event.get
+
+        def event_get(*args, **kwargs):
+            nonlocal pump_count
+            pump_count += 1
+            if pump_count == 2:
+                pygame.event.post(pygame.event.Event(pygame.QUIT))
+            return real_event_get(*args, **kwargs)
+
+        monkeypatch.setattr(pygame.event, "get", event_get)
+
+        # WHEN run() executes,
+        exit_code = app_main.run()
+
+        # THEN the one complete frame was presented exactly once:
+        assert exit_code == 0
+        assert flip_count == 1
+
     def test_when_unrelated_pygame_modules_fail_should_open_window_and_exit_cleanly(
         self,
         bootstrapped_persistence: Path,

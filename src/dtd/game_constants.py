@@ -38,6 +38,29 @@ VOLUME_MAX_PERCENT = 100
 DESIGN_W = 1920
 DESIGN_H = 1080
 
+# --- Title screen (spec 08) -----------------------------------------------
+#: Background image resource ids probed in order (spec 08: Background).
+#: The first one that resolves is stretched to fill the Title Screen; if
+#: none resolve, a starfield is generated instead.
+TITLE_SCREEN_BACKGROUND_IMAGE_IDS = (
+    "graphics/screens/title_screen.png",
+    "graphics/screens/title_screen.jpg",
+    "graphics/screens/title_screen.jpeg",
+)
+#: The game title shown on the Title Screen (spec 08: Title).
+TITLE_SCREEN_TITLE_TEXT = "Dust to Dominion"
+#: Title font size in points, in design space (spec 08: Title) - like every
+#: other design-space value, it scales with the window scale factor.
+TITLE_SCREEN_TITLE_FONT_PT = 80
+#: Starfield bounds (spec 08: Background). The star count is inclusive at
+#: both ends; star brightness is grayscale and oscillates one step at a
+#: time between the two limits.
+STARFIELD_MIN_STARS = 150
+STARFIELD_MAX_STARS = 300
+STARFIELD_MIN_BRIGHTNESS = 0
+STARFIELD_MAX_BRIGHTNESS = 192
+STARFIELD_BRIGHTNESS_STEP = 1
+
 # --- Theme and font sentinels (spec 04, as amended by spec 08) ----------
 #: The config value that explicitly means "use the built-in default theme"
 #: (spec 04: Configuration). ``Theme.get_theme_resource_id`` reports this

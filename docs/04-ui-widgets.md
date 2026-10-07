@@ -31,7 +31,11 @@ For each frame:
 2. `screen.fill()` with black
 3. game rendering
 4. `ui.draw(screen)`
-5. `clock.tick(60)`
+5. `pygame.display.flip()` - present the frame. Drawing to the display
+   surface is invisible until it is flipped; this step was missing from the
+   loop until the spec 08 Title Screen work made the never-presented display
+   obvious (a blank window despite a drawn background and title).
+6. `clock.tick(60)`
 
 ## Additional dependencies
 
@@ -381,6 +385,9 @@ The spec can be implemented in stages:
    this doc (per-screen UIManagers are wired up by spec 08 itself), add
    `Theme.get_theme_resource_id()` / `Theme.get_font_resource_id()`, add `UIManager.set_theme()`,
    and move the hard-coded "default" sentinel to `game_constants.py`. **Completed 2026-10-06**
+8. Amendment found during spec 08 stage 3: add the missing `pygame.display.flip()` presentation
+   step to the game loop. The loop had never presented the display surface - latent while
+   nothing rendered, obvious once the Title Screen drew a background. **Completed 2026-10-06**
 
 Upon completion, if all tests pass, mark this document as "active". (Done 2026-10-01;
 full suite green at 280 tests.)

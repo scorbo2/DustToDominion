@@ -20,9 +20,9 @@ Startup order per spec 03 as amended by specs 04 and 05:
 
 The game loop follows spec 04 as amended by spec 08: pump events ->
 ``current_screen.update`` -> clear the screen -> ``current_screen.draw``
--> ``clock.tick(60)``. App-level events (QUIT, F11) stay with the pump
-step. ESC deliberately stays in the main loop until spec 08 stage 4
-moves it into ``TitleScreen.handle()``.
+-> ``pygame.display.flip`` -> ``clock.tick(60)``. App-level events
+(QUIT, F11) stay with the pump step. ESC deliberately stays in the main
+loop until spec 08 stage 4 moves it into ``TitleScreen.handle()``.
 """
 from __future__ import annotations
 
@@ -134,7 +134,8 @@ def _run_event_loop(window: MainWindow, current_screen: Screen) -> None:
     Per frame: (1) pump events -> ``current_screen.update(events)``,
     (2) clear the screen (black default background), (3) game rendering -
     none yet, it arrives with a future spec, (4)
-    ``current_screen.draw(screen)``, (5) ``clock.tick(60)``. App-level
+    ``current_screen.draw(screen)``, (5) ``pygame.display.flip()`` to
+    present the frame, (6) ``clock.tick(60)``. App-level
     events (QUIT, F11) stay here; ESC stays here too until spec 08
     stage 4 moves it into ``TitleScreen.handle()``. The display surface
     is re-fetched each frame because F11 mode switches replace it.
@@ -154,6 +155,10 @@ def _run_event_loop(window: MainWindow, current_screen: Screen) -> None:
         screen = pygame.display.get_surface()
         screen.fill((0, 0, 0))
         current_screen.draw(screen)
+        # Present the frame. Drawing to the display surface is invisible
+        # until it is flipped - this step was missing since spec 04 and
+        # the Title Screen background is what finally gave it away.
+        pygame.display.flip()
         clock.tick(60)
 
 
