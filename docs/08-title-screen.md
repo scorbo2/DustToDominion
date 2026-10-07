@@ -328,10 +328,10 @@ New tests specifically for Title Screen behavior (these stay in this doc):
 The specification is too large to implement in a single pass. The following
 staged implementation plan is suggested (each stage should include tests):
 
-1. Amendments to previous spec docs come first!
+1. Amendments to previous spec docs come first! **Completed 2026-10-06**
 2. Implement the Screen base class and a completely stubbed TitleScreen implementation.
    Make changes to the game loop to invoke `update()` and `draw()` on the current screen.
-   Keep ESC handling in the main loop so that the main window can still exit.
+   Keep ESC handling in the main loop so that the main window can still exit. **Completed 2026-10-06**
 3. Implement the background handling and title display. No widgets at this point.
 4. Implement the Exit Game button and wire it up. Move ESC handling into TitleScreen at this stage.
    The Exit Game button should indicate intent to quit via ScreenAction.QUIT.

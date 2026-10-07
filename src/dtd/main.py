@@ -8,17 +8,21 @@ Startup order per spec 03 as amended by specs 04 and 05:
    step 2; fatal if the required display, mixer, or font module fails).
 4. Invoke the resource loader (spec 03 step 3; any ``ResourceError`` is
    fatal).
-5. Initialize the UI: ``Theme`` and ``UIManager`` (spec 04; a
+5. Build the single application ``Theme`` from config (spec 04; a
    theme/font value that cannot be resolved falls back to defaults with
-   a log warning - never fatal).
+   a log warning - never fatal). Each screen creates and owns its own
+   ``UIManager`` (spec 04, as amended by spec 08); the Theme is handed
+   to each screen's constructor.
 6. Initialize the AudioManager (spec 05, amending spec 03 step 5): sets
    the mixer channel budget and applies the persisted audio settings.
-7. Initialize and display the main window (spec 03 step 6 / spec 02).
+7. Initialize and display the main window (spec 03 step 6 / spec 02),
+   then create the startup screen (spec 08) and enter the loop.
 
-The game loop follows spec 04 (Changes to game loop): pump events ->
-``ui.update`` -> clear the screen -> game rendering (arrives with a future
-spec) -> ``ui.draw`` -> ``clock.tick(60)``. F11/QUIT/ESC handling (spec 02)
-stays with the pump step.
+The game loop follows spec 04 as amended by spec 08: pump events ->
+``current_screen.update`` -> clear the screen -> ``current_screen.draw``
+-> ``clock.tick(60)``. App-level events (QUIT, F11) stay with the pump
+step. ESC deliberately stays in the main loop until spec 08 stage 4
+moves it into ``TitleScreen.handle()``.
 """
 from __future__ import annotations
 
@@ -31,7 +35,9 @@ from dtd import audio, game_config, persistence
 from dtd.errors import ResourceError
 from dtd.main_window import MainWindow
 from dtd.resource_loader import ResourceLoader
-from dtd.ui import Theme, UIManager
+from dtd.screens.base import Screen
+from dtd.screens.title import TitleScreen
+from dtd.ui import Theme
 
 
 def run() -> int:
@@ -69,11 +75,12 @@ def run() -> int:
         logger.error("resource loading failed; aborting startup: {}", exc)
         return 1
 
-    # Spec 04 step 4 (amending spec 03): UI initialization after resource
-    # loading, before the window is created. Unresolvable theme/font values
-    # fall back to defaults with a warning (spec 04), never fatal.
+    # Spec 04 step 4 (amending spec 03), as amended by spec 08: the one
+    # application Theme is built here from config and handed to each
+    # screen's constructor; screens own their UIManagers. Unresolvable
+    # theme/font values fall back to defaults with a warning (spec 04),
+    # never fatal.
     theme = Theme(config.theme, config.font, resource_loader)
-    ui = UIManager(theme)
 
     # Spec 05 (amending spec 03 step 5): AudioManager initialization between
     # UI init and window creation. Sets the mixer channel budget and applies
@@ -84,8 +91,11 @@ def run() -> int:
     # Spec 03 step 6: main window initialization and display.
     window = MainWindow()
     window.open(config.mainWindow)
+    # Spec 08: the Title Screen is the startup screen, created once the
+    # window exists and handed to the event loop.
+    title_screen = TitleScreen(theme, resource_loader)
     try:
-        _run_event_loop(window, ui)
+        _run_event_loop(window, title_screen)
     finally:
         window.close()
     return 0
@@ -118,20 +128,21 @@ def _init_pygame() -> None:
         raise pygame.error("pygame font failed to initialize")
 
 
-def _run_event_loop(window: MainWindow, ui: UIManager) -> None:
-    """Main game loop (spec 04: Changes to game loop).
+def _run_event_loop(window: MainWindow, current_screen: Screen) -> None:
+    """Main game loop (spec 04: Changes to game loop, as amended by spec 08).
 
-    Per frame: (1) pump events -> ``ui.update(events)``, (2) clear the
-    screen (black default background), (3) game rendering - none yet,
-    it arrives with a future spec, (4) ``ui.draw(screen)``,
-    (5) ``clock.tick(60)``. F11/QUIT/ESC handling (spec 02) stays with the
-    pump step. The display surface is re-fetched each frame because F11
-    mode switches replace it.
+    Per frame: (1) pump events -> ``current_screen.update(events)``,
+    (2) clear the screen (black default background), (3) game rendering -
+    none yet, it arrives with a future spec, (4)
+    ``current_screen.draw(screen)``, (5) ``clock.tick(60)``. App-level
+    events (QUIT, F11) stay here; ESC stays here too until spec 08
+    stage 4 moves it into ``TitleScreen.handle()``. The display surface
+    is re-fetched each frame because F11 mode switches replace it.
     """
     clock = pygame.time.Clock()
     while True:
         events = pygame.event.get()
-        ui.update(events)
+        current_screen.update(events)
         for event in events:
             if event.type == pygame.QUIT:
                 return
@@ -142,7 +153,7 @@ def _run_event_loop(window: MainWindow, ui: UIManager) -> None:
                     window.on_f11()
         screen = pygame.display.get_surface()
         screen.fill((0, 0, 0))
-        ui.draw(screen)
+        current_screen.draw(screen)
         clock.tick(60)
 
 

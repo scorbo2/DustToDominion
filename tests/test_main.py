@@ -70,6 +70,74 @@ class TestRun:
         # The window was created with the default (windowed) config.
         assert observed["size"] == (1280, 720)
 
+    def test_should_exit_cleanly_on_escapeKeydown_because_loopStillOwnsEscape(
+        self,
+        bootstrapped_persistence: Path,
+        synthesized_project: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        # Spec 08 dev plan stage 2: ESC handling deliberately stays in the
+        # main loop (it moves into TitleScreen.handle in stage 4), so the
+        # window must still exit on ESC.
+        first_pump = True
+        real_event_get = pygame.event.get
+
+        def event_get(*args, **kwargs):
+            nonlocal first_pump
+            if first_pump:
+                first_pump = False
+                pygame.event.post(
+                    pygame.event.Event(pygame.KEYDOWN, key=pygame.K_ESCAPE)
+                )
+            return real_event_get(*args, **kwargs)
+
+        monkeypatch.setattr(pygame.event, "get", event_get)
+
+        assert app_main.run() == 0
+
+    def test_should_invoke_updateAndDraw_on_the_currentScreen_eachFrame(
+        self,
+        bootstrapped_persistence: Path,
+        synthesized_project: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        # GIVEN a TitleScreen replacement that records the loop's calls
+        # (spec 08: Integration with the main game loop):
+        calls: list[str] = []
+        real_title_screen = app_main.TitleScreen
+
+        class RecordingTitleScreen(real_title_screen):
+            def update(self, events):
+                calls.append("update")
+                super().update(events)
+
+            def draw(self, surface):
+                calls.append("draw")
+                super().draw(surface)
+
+        monkeypatch.setattr(app_main, "TitleScreen", RecordingTitleScreen)
+
+        # AND a QUIT event posted on the SECOND pump, so at least one
+        # complete frame (update + draw) runs before the loop exits:
+        pump_count = 0
+        real_event_get = pygame.event.get
+
+        def event_get(*args, **kwargs):
+            nonlocal pump_count
+            pump_count += 1
+            if pump_count == 2:
+                pygame.event.post(pygame.event.Event(pygame.QUIT))
+            return real_event_get(*args, **kwargs)
+
+        monkeypatch.setattr(pygame.event, "get", event_get)
+
+        # WHEN run() executes,
+        exit_code = app_main.run()
+
+        # THEN the loop drove the current screen's update() and draw():
+        assert exit_code == 0
+        assert calls == ["update", "draw", "update"]
+
     def test_when_unrelated_pygame_modules_fail_should_open_window_and_exit_cleanly(
         self,
         bootstrapped_persistence: Path,
