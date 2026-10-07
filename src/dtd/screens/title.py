@@ -1,10 +1,10 @@
 """The Title Screen (spec 08: Title Screen).
 
-Stage 4 of the spec 08 dev plan: background handling (background image
+Stage 5 of the spec 08 dev plan: background handling (background image
 if one resolves, random starfield otherwise), the title display, and the
-Exit Game button - whose click, and whose ESC shortcut, both surface to
-the main loop as ``ScreenAction.QUIT``. The font/theme choosers join the
-menu column in stage 5.
+full menu column - font selector, theme selector, and the Exit Game
+button. Font/theme changes are adopted immediately at this screen only
+and are never persisted.
 """
 from __future__ import annotations
 
@@ -18,16 +18,16 @@ from dtd.screens import starfield
 from dtd.screens.base import Screen, ScreenAction
 from dtd.ui import Scale, Theme, UIManager, Widget
 from dtd.widgets.button import Button
+from dtd.widgets.choice_list import ChoiceList
 
 
 class TitleScreen(Screen):
     """The screen shown after a successful startup (spec 08).
 
-    The supplied ``Theme`` is only a starting point: once the font/theme
-    choosers exist (spec 08 stage 5), this class will build a new local
-    Theme from the same ``resource_loader`` on each change and hand it to
-    its own UIManager - the change affects this screen only and is never
-    persisted.
+    The supplied ``Theme`` is only a starting point: the font/theme
+    choosers build a new local Theme from the same ``resource_loader``
+    on each change and hand it to this screen's UIManager - the change
+    affects this screen only and is never persisted.
 
     ``rng`` is injected by tests for deterministic starfield generation
     (spec 08: Testing); production code passes nothing.
@@ -42,6 +42,11 @@ class TitleScreen(Screen):
         self._theme = theme
         self._resource_loader = resource_loader
         self._rng = rng if rng is not None else random.Random()
+        # The screen-local current values (spec 08: Buttons and options).
+        # They start as whatever the supplied Theme resolved and change
+        # only through the choosers - never persisted, never propagated.
+        self._current_theme_value = theme.get_theme_resource_id()
+        self._current_font_value = theme.get_font_resource_id()
         # Per-screen UIManager (spec 04, as amended by spec 08): the
         # widget list is screen-scoped state, so it is created here and
         # dies with this object.
@@ -133,26 +138,65 @@ class TitleScreen(Screen):
     # -- menu (spec 08: Buttons and options) --------------------------------
 
     def _build_menu(self) -> None:
-        """Create and register the menu options.
-
-        Stage 4 adds only the Exit Game button; the font/theme choosers
-        join this same column in stage 5, and the column layout below
-        re-centers automatically as the list grows.
+        """Create and register the menu options (spec 08: Buttons and
+        options): font selector, theme selector, then Exit Game, in one
+        centered vertical column.
         """
-        exit_game = Button(
-            pygame.Rect(
-                0,
-                0,
-                game_constants.MENU_OPTION_WIDTH,
-                game_constants.MENU_OPTION_HEIGHT,
+        font_ids = self._resource_loader.get_font_resource_ids()
+        theme_ids = self._resource_loader.get_theme_resource_ids()
+        option_rect = pygame.Rect(
+            0,
+            0,
+            game_constants.MENU_OPTION_WIDTH,
+            game_constants.MENU_OPTION_HEIGHT,
+        )
+        font_selector = ChoiceList(
+            option_rect.copy(),
+            items=font_ids,
+            initial_index=self._initial_choice_index(
+                font_ids,
+                self._current_font_value,
+                game_constants.DEFAULT_FONT_DISPLAY_VALUE,
+                game_constants.DEFAULT_FONT_VALUE,
             ),
+            border_width=game_constants.MENU_OPTION_BORDER_WIDTH,
+            selection_callback=self._on_font_choice,
+        )
+        theme_selector = ChoiceList(
+            option_rect.copy(),
+            items=theme_ids,
+            initial_index=self._initial_choice_index(
+                theme_ids,
+                self._current_theme_value,
+                game_constants.DEFAULT_THEME_DISPLAY_VALUE,
+                game_constants.DEFAULT_THEME_VALUE,
+            ),
+            border_width=game_constants.MENU_OPTION_BORDER_WIDTH,
+            selection_callback=self._on_theme_choice,
+        )
+        exit_game = Button(
+            option_rect.copy(),
             text=game_constants.EXIT_GAME_LABEL,
             border_width=game_constants.MENU_OPTION_BORDER_WIDTH,
             on_click=self._request_quit,
         )
-        options = [exit_game]
+        options = [font_selector, theme_selector, exit_game]
         self._layout_as_centered_column(options)
         self._ui.widgets.extend(options)
+
+    @staticmethod
+    def _initial_choice_index(
+        items: list[str], current_value: str, sentinel: str, default_value: str
+    ) -> int:
+        """Which chooser item to preselect (spec 08: Testing).
+
+        The "default" value - meaning nothing configured, or an invalid
+        configuration - maps to the sentinel display value. A configured
+        value that is absent from the list falls back to the sentinel
+        too, which the loader always places first.
+        """
+        wanted = sentinel if current_value == default_value else current_value
+        return items.index(wanted) if wanted in items else 0
 
     def _layout_as_centered_column(self, options: list[Widget]) -> None:
         """Stack options into one vertical column, centered horizontally
@@ -173,3 +217,47 @@ class TitleScreen(Screen):
     def _request_quit(self) -> None:
         """Remember an Exit Game click until handle() reports it."""
         self._quit_requested = True
+
+    # -- font/theme choices (spec 08: Buttons and options) ------------------
+
+    def _on_font_choice(self, display_value: str) -> None:
+        """Adopt the chosen font immediately, without persisting."""
+        self._current_font_value = self._map_choice(
+            display_value,
+            game_constants.DEFAULT_FONT_DISPLAY_VALUE,
+            game_constants.DEFAULT_FONT_VALUE,
+        )
+        self._apply_choices()
+
+    def _on_theme_choice(self, display_value: str) -> None:
+        """Adopt the chosen theme immediately, without persisting."""
+        self._current_theme_value = self._map_choice(
+            display_value,
+            game_constants.DEFAULT_THEME_DISPLAY_VALUE,
+            game_constants.DEFAULT_THEME_VALUE,
+        )
+        self._apply_choices()
+
+    @staticmethod
+    def _map_choice(display_value: str, sentinel: str, default_value: str) -> str:
+        """Map a chooser display value back to a config-style value.
+
+        Display names are full resource ids and need no translation;
+        only the sentinel maps back to the "default" sentinel value.
+        """
+        return default_value if display_value == sentinel else display_value
+
+    def _apply_choices(self) -> None:
+        """Rebuild the screen-local Theme and hand it to the UIManager.
+
+        Never persisted, never propagated (spec 08): a future
+        OptionsScreen will publish changes to other screens. The change
+        takes effect on the next frame - widgets receive the theme from
+        the UIManager on every draw, and the title reads ``self._theme``.
+        """
+        self._theme = Theme(
+            self._current_theme_value,
+            self._current_font_value,
+            self._resource_loader,
+        )
+        self._ui.set_theme(self._theme)

@@ -340,7 +340,7 @@ staged implementation plan is suggested (each stage should include tests):
      loop function does exactly one thing (pace frames and delegate), and app-level key
      handling plus `ScreenAction` dispatch stay one explicit branch instead of a growing
      `if` ladder. **Done as part of stage 4, 2026-10-06**
-5. Implement the font and theme choosers and wire them up.
+5. Implement the font and theme choosers and wire them up. **Completed 2026-10-06**
 6. Final code check - are we fully in compliance with the spec? Do all tests pass?
    Have all references to "sprites" and "sprite images" in spec docs and code been changed to "images"?
    If it looks good, flip this document from "proposed" to "active" and modify wording in this

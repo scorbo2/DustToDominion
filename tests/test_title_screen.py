@@ -1,18 +1,21 @@
-"""Unit tests for the TitleScreen (spec 08 dev plan stages 2-3).
+"""Unit tests for the TitleScreen (spec 08 dev plan stages 2-5).
 
-Stage 2 established the per-screen pattern: the screen owns its own
-UIManager and the main loop drives it through update/draw. Stage 3 adds
-background handling (image or starfield) and the title display. Widgets
-(Exit Game button, font/theme choosers) arrive in later stages and are
-deliberately not tested here.
+Stage 2 established the per-screen pattern (own UIManager, driven via
+update/draw). Stage 3 added background handling and the title display.
+Stage 4 added the Exit Game button and ESC-as-quit. Stage 5 added the
+font/theme choosers and their screen-local, never-persisted Theme
+rebuilds.
 """
 from __future__ import annotations
 
 import random
+from pathlib import Path
 
 import pygame
+import pytest
 
 from dtd import game_constants
+from dtd import game_config
 from dtd.resource_loader import ResourceLoader
 from dtd.screens import starfield
 from dtd.screens.base import Screen, ScreenAction
@@ -20,6 +23,7 @@ from dtd.screens.starfield import Star
 from dtd.screens.title import TitleScreen
 from dtd.ui import Theme, UIManager, Widget
 from dtd.widgets.button import Button
+from dtd.widgets.choice_list import ChoiceList
 
 
 def _default_theme() -> Theme:
@@ -39,6 +43,18 @@ class _StubImageLoader(ResourceLoader):
     def get_image_resource(self, resource_id: str) -> pygame.Surface | None:
         self.requested_ids.append(resource_id)
         return self._images.get(resource_id)
+
+
+def _expected_option_rect(index: int, option_count: int = 3) -> pygame.Rect:
+    """The design-space rect of option ``index`` in a centered column of
+    ``option_count`` options (spec 08: Buttons and options geometry)."""
+    width = game_constants.MENU_OPTION_WIDTH
+    height = game_constants.MENU_OPTION_HEIGHT
+    spacing = game_constants.MENU_OPTION_SPACING
+    column_height = option_count * height + (option_count - 1) * spacing
+    left = (game_constants.DESIGN_W - width) // 2
+    top = game_constants.DESIGN_H * 3 // 4 - column_height // 2
+    return pygame.Rect(left, top + index * (height + spacing), width, height)
 
 
 class TestTitleScreenConstruction:
@@ -288,7 +304,7 @@ class TestTitleScreenTitle:
 
 
 class TestTitleScreenExitGame:
-    def test_constructor_shouldAddExitGameButton_centeredInLowerHalfOfDesignSpace(
+    def test_constructor_shouldAddExitGameButton_asThirdOptionInCenteredColumn(
         self, font_ready: None
     ) -> None:
         # GIVEN the screen,
@@ -301,31 +317,22 @@ class TestTitleScreenExitGame:
         # ...labelled per spec, with the spec'd 4-pixel design-space border,
         assert button.text == game_constants.EXIT_GAME_LABEL
         assert button.border_width == game_constants.MENU_OPTION_BORDER_WIDTH
-        # ...and sized and centered in the lower half of design space:
-        expected_rect = pygame.Rect(
-            (game_constants.DESIGN_W - game_constants.MENU_OPTION_WIDTH) // 2,
-            game_constants.DESIGN_H * 3 // 4
-            - game_constants.MENU_OPTION_HEIGHT // 2,
-            game_constants.MENU_OPTION_WIDTH,
-            game_constants.MENU_OPTION_HEIGHT,
-        )
-        assert button.rect == expected_rect
+        # ...and sized per spec, as the last option of the column that is
+        # centered in the lower half of design space:
+        assert button.rect == _expected_option_rect(2)
 
     def test_update_withClickOnExitGameButton_shouldMakeHandleReturnQuitAction(
         self, font_ready: None
     ) -> None:
         # GIVEN the screen (no display surface, so scales are identity),
         screen = TitleScreen(_default_theme(), _StubImageLoader({}), rng=random.Random(1))
-        center = (
-            game_constants.DESIGN_W // 2,
-            game_constants.DESIGN_H * 3 // 4,
-        )
+        button_center = _expected_option_rect(2).center
 
         # WHEN a full left-button click lands on the Exit Game button,
         screen.update(
             [
-                pygame.event.Event(pygame.MOUSEBUTTONDOWN, pos=center, button=1),
-                pygame.event.Event(pygame.MOUSEBUTTONUP, pos=center, button=1),
+                pygame.event.Event(pygame.MOUSEBUTTONDOWN, pos=button_center, button=1),
+                pygame.event.Event(pygame.MOUSEBUTTONUP, pos=button_center, button=1),
             ]
         )
 
@@ -348,3 +355,206 @@ class TestTitleScreenExitGame:
 
         # THEN no action is requested:
         assert screen.handle([]) is None
+
+
+class _StubChooserLoader(ResourceLoader):
+    """A loader offering exactly one font and one theme (sentinels first,
+    as the real accessors guarantee), and resolving both (spec 08 stage 5
+    chooser wiring)."""
+
+    FONT_ID = "fonts/Iceland-Regular.ttf"
+    THEME_ID = "themes/blue.json"
+
+    def get_font_resource_ids(self) -> list[str]:
+        return [game_constants.DEFAULT_FONT_DISPLAY_VALUE, self.FONT_ID]
+
+    def get_theme_resource_ids(self) -> list[str]:
+        return [game_constants.DEFAULT_THEME_DISPLAY_VALUE, self.THEME_ID]
+
+    def get_json_resource(self, resource_id: str):
+        if resource_id == self.THEME_ID:
+            # A theme that is impossible to miss: red selected foreground.
+            return {"foregroundSelected": "FF0000"}
+        return None
+
+    def get_font_resource(self, resource_id: str, size: int):
+        if resource_id == self.FONT_ID:
+            return pygame.font.Font(None, size)
+        return None
+
+
+class TestTitleScreenChoosers:
+    def test_constructor_shouldAddFontThenThemeChoiceLists_aboveTheExitGameButton(
+        self, font_ready: None
+    ) -> None:
+        # GIVEN a loader offering one font and one theme,
+        loader = _StubChooserLoader()
+
+        # WHEN the screen is built with nothing configured,
+        screen = TitleScreen(_default_theme(), loader, rng=random.Random(1))
+        widgets = screen._ui.widgets
+
+        # THEN the column is font selector, theme selector, Exit Game,
+        assert len(widgets) == 3
+        assert isinstance(widgets[0], ChoiceList)
+        assert isinstance(widgets[1], ChoiceList)
+        assert isinstance(widgets[2], Button)
+        # ...identifiable by their sentinel preselections,
+        assert widgets[0].get_current_item() == game_constants.DEFAULT_FONT_DISPLAY_VALUE
+        assert widgets[1].get_current_item() == game_constants.DEFAULT_THEME_DISPLAY_VALUE
+        # ...each sized per spec and stacked in the centered column:
+        for index, widget in enumerate(widgets):
+            assert widget.rect == _expected_option_rect(index)
+            assert widget.border_width == game_constants.MENU_OPTION_BORDER_WIDTH
+
+    def test_constructor_withNoFontOrThemeConfigured_shouldPreselectBothSentinels(
+        self, font_ready: None
+    ) -> None:
+        # GIVEN a default Theme (nothing configured),
+        screen = TitleScreen(
+            _default_theme(), _StubChooserLoader(), rng=random.Random(1)
+        )
+
+        # THEN both choosers sit on their sentinel display values:
+        assert (
+            screen._ui.widgets[0].get_current_item()
+            == game_constants.DEFAULT_FONT_DISPLAY_VALUE
+        )
+        assert (
+            screen._ui.widgets[1].get_current_item()
+            == game_constants.DEFAULT_THEME_DISPLAY_VALUE
+        )
+
+    def test_constructor_withConfiguredValidFontAndTheme_shouldPreselectBoth(
+        self, font_ready: None
+    ) -> None:
+        # GIVEN a Theme configured with resolvable font and theme ids,
+        loader = _StubChooserLoader()
+        theme = Theme(loader.THEME_ID, loader.FONT_ID, loader)
+
+        # WHEN the screen is built,
+        screen = TitleScreen(theme, loader, rng=random.Random(1))
+
+        # THEN both configured values are preselected:
+        assert screen._ui.widgets[0].get_current_item() == loader.FONT_ID
+        assert screen._ui.widgets[1].get_current_item() == loader.THEME_ID
+
+    def test_constructor_withConfiguredButUnresolvableValues_shouldPreselectSentinels(
+        self, font_ready: None
+    ) -> None:
+        # GIVEN a Theme configured with ids that resolve to nothing,
+        loader = _StubChooserLoader()
+        theme = Theme("themes/missing.json", "fonts/missing.ttf", loader)
+
+        # WHEN the screen is built,
+        screen = TitleScreen(theme, loader, rng=random.Random(1))
+
+        # THEN the sentinels are preselected (invalid means default):
+        assert (
+            screen._ui.widgets[0].get_current_item()
+            == game_constants.DEFAULT_FONT_DISPLAY_VALUE
+        )
+        assert (
+            screen._ui.widgets[1].get_current_item()
+            == game_constants.DEFAULT_THEME_DISPLAY_VALUE
+        )
+
+    def test_fontChoice_withFontResourceId_shouldRebuildThemeWithThatFont(
+        self, font_ready: None
+    ) -> None:
+        # GIVEN a screen with nothing configured,
+        loader = _StubChooserLoader()
+        screen = TitleScreen(_default_theme(), loader, rng=random.Random(1))
+
+        # WHEN the font chooser selects the available font,
+        screen._ui.widgets[0].set_current_item(loader.FONT_ID)
+
+        # THEN the screen's current Theme resolves that font, and the
+        # UIManager hands it to every widget from here on:
+        assert screen._theme.get_font_resource_id() == loader.FONT_ID
+        assert screen._ui.theme is screen._theme
+
+    def test_fontChoice_withSystemDefaultSentinel_shouldMapToDefaultFont(
+        self, font_ready: None
+    ) -> None:
+        # GIVEN a screen currently using the available font,
+        loader = _StubChooserLoader()
+        theme = Theme(game_constants.DEFAULT_THEME_VALUE, loader.FONT_ID, loader)
+        screen = TitleScreen(theme, loader, rng=random.Random(1))
+
+        # WHEN the chooser goes back to the sentinel,
+        screen._ui.widgets[0].set_current_item(
+            game_constants.DEFAULT_FONT_DISPLAY_VALUE
+        )
+
+        # THEN the font maps to the "default" sentinel value:
+        assert screen._theme.get_font_resource_id() == game_constants.DEFAULT_FONT_VALUE
+
+    def test_themeChoice_withThemeId_shouldApplyNewColorsOnNextDraw(
+        self, font_ready: None
+    ) -> None:
+        # GIVEN a screen with no background noise and nothing configured,
+        loader = _StubChooserLoader()
+        screen = TitleScreen(_default_theme(), loader, rng=random.Random(1))
+        screen._stars = []
+
+        # WHEN the theme chooser selects the red-foreground theme,
+        screen._ui.widgets[1].set_current_item(loader.THEME_ID)
+
+        # THEN the next frame's title is drawn in the new theme's color:
+        surface = pygame.Surface((1280, 720))
+        screen.draw(surface)
+        center = (surface.get_width() // 2, surface.get_height() // 4)
+        red_pixels = sum(
+            1
+            for y in range(center[1] - 100, center[1] + 100)
+            for x in range(center[0] - 500, center[0] + 500)
+            if surface.get_at((x, y))[:3] == (255, 0, 0)
+        )
+        assert red_pixels > 0
+
+    def test_themeChoice_withDefaultSentinel_shouldMapToDefaultTheme(
+        self, font_ready: None
+    ) -> None:
+        # GIVEN a screen currently using the available theme,
+        loader = _StubChooserLoader()
+        theme = Theme(loader.THEME_ID, game_constants.DEFAULT_FONT_VALUE, loader)
+        screen = TitleScreen(theme, loader, rng=random.Random(1))
+
+        # WHEN the chooser goes back to the sentinel,
+        screen._ui.widgets[1].set_current_item(
+            game_constants.DEFAULT_THEME_DISPLAY_VALUE
+        )
+
+        # THEN the theme maps to the "default" sentinel value:
+        assert screen._theme.get_theme_resource_id() == game_constants.DEFAULT_THEME_VALUE
+
+    def test_fontAndThemeChoices_shouldNeverPersistToGameConfig(
+        self,
+        font_ready: None,
+        bootstrapped_persistence: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        # GIVEN a spy on the only path to the game config file (spec 08:
+        # changes affect the Title Screen only),
+        save_calls: list[str] = []
+        monkeypatch.setattr(
+            game_config,
+            "save_game_config_section",
+            lambda section_name, section_data: save_calls.append(section_name),
+        )
+
+        # WHEN both choosers change twice,
+        loader = _StubChooserLoader()
+        screen = TitleScreen(_default_theme(), loader, rng=random.Random(1))
+        screen._ui.widgets[0].set_current_item(loader.FONT_ID)
+        screen._ui.widgets[1].set_current_item(loader.THEME_ID)
+        screen._ui.widgets[0].set_current_item(
+            game_constants.DEFAULT_FONT_DISPLAY_VALUE
+        )
+        screen._ui.widgets[1].set_current_item(
+            game_constants.DEFAULT_THEME_DISPLAY_VALUE
+        )
+
+        # THEN nothing was written to the game config:
+        assert save_calls == []
