@@ -1,5 +1,5 @@
 ---
-description: Describes the game's title screen.
+description: Describes the game's title screen and the game's screen-handling in general.
 status: proposed
 ---
 
@@ -29,6 +29,7 @@ def get_theme_resource_ids(self) -> list[str]:
     # The returned list is sorted alphabetically by full resource id (casefold()).
     # A sentinel display value "(Default theme)" is always added to the list.
     # The returned list is therefore never empty (always at least size 1).
+    # This sentinel display value should be added to `game_constants.py` and not hard-coded.
 
 def get_font_resource_ids(self) -> list[str]:
     # Returns all resources with the prefix `fonts/` whose id ends in `.ttf`.
@@ -36,6 +37,7 @@ def get_font_resource_ids(self) -> list[str]:
     # The returned list is sorted alphabetically by full resource id (casefold()).
     # A sentinel display value "(System default)" is always added to the list.
     # The returned list is therefore never empty (always at least size 1).
+    # This sentinel display value should be added to `game_constants.py` and not hard-coded.
 ```
 
 These accessors will allow all future screens to query for available fonts and themes.
@@ -61,6 +63,7 @@ a music track by matching the first in a given list of candidate track ids:
 ```python
 play_music_first_match(self, ids: Sequence[str]) -> None:
     # For each resource id in `ids`, probe to see if a track with that id exists.
+    #   Probe: get_music_resource(id) is not None
     # If so, it is played, and all subsequent ids in the sequence are ignored.
     # If the sequence is exhausted with no music track found, this is a no-op.
     # If `music_enabled` is False, this is a no-op.
@@ -73,6 +76,22 @@ play_music_first_match(self, ids: Sequence[str]) -> None:
 This specification amends `04-ui-widgets.md`, which currently mandates a single global
 instance of `UIManager`. We will instead move to a per-screen UIManager system - see
 the Code Layout section for more details. 
+
+### Theme and font accessors
+
+This specification amends `04-ui-widgets.md` to add accessors in the Theme
+class to retrieve the resource ids for the currently configured font and theme:
+
+```python
+def get_theme_resource_id(self) : str -> None:
+    # return "default" if no configured theme
+
+def get_font_resource_id(self) : str -> None:
+    # return "default" if no configured theme
+```
+
+The "default" sentinel value should be moved to `game_constants.py` and
+not hard-coded.
 
 ## Additional dependencies
 
@@ -97,6 +116,7 @@ displayed in grayscale colors ranging randomly from (0,0,0) to (192,192,192). Th
 but they do slowly shift color by increasing their RGB values at a rate of (1,1,1) until they
 reach maximum brightness of (192,192,192), then decrease at the same rate
 per frame until they reach minimum brightness of (0,0,0), and then repeat the cycle.
+Each star starts with a random oscillation direction: positive or negative.
 Locations for stars are computed in design space, so regenerating the starfield when
 the display mode or resolution changes is unnecessary. Note that stars are drawn as single
 physical pixels, not rects - do not scale down 1x1 stars to 0.67x0.67 when switching to
@@ -104,14 +124,15 @@ a lower resolution.
 
 ### Title
 
-The game title "Dust to Dominion" should be displayed in 80pt font (design space), centered
-both horizontally and vertically in the upper half of the screen. Use the resolved font from
-game configuration. Use the `foregroundSelected` color from the current theme.
+The game title "Dust to Dominion" should be displayed in 80pt font (in design space - this
+point value scales by the window scale factor), centered both horizontally and vertically
+in the upper half of the screen. Use the resolved font from game configuration.
+Use the `foregroundSelected` color from the current theme.
 
 ### Buttons and options
 
 The following Title Screen menu options should be displayed in a single vertical column,
-horizontally centered in the lower half of the screen:
+both horizontally and vertically centered in the lower half of the screen:
 
 - Font selector (ChoiceList widget)
 - Theme selector (ChoiceList widget)
@@ -126,9 +147,8 @@ value "(System default)" if no font is explicitly configured.
 The theme selector should default to the name of the currently configured theme, or the sentinel
 display value "(Default theme)" if no theme is explicitly configured. 
 
-For both font and theme, the display name should be the full resource id, such as `fonts/Iceland-regular.ttf`
-or `themes/blue.json`. This allows us to make use of Theme's `set_font` and `set_theme` functions
-when the selection changes.
+For both font and theme, the display name should be the full resource id, such as `fonts/Iceland-Regular.ttf`
+or `themes/blue.json`.
 
 Note: ChoiceList offers an `initial_index` option which can be used to easily set the initially-selected item.
 
@@ -145,11 +165,11 @@ values should be mapped to "default".
 
 The Exit Game button should have a callback that triggers a screen transition to exit the game.
 
-All widgets should use the same resolved font from game config.
+All widgets should use the Title Screen's currently-configured font.
 
 ## Title Screen audio
 
-If a music track with an id of `audio/music/game_title.mp3` or `audio/music/game_title.wav` or
+If a music track with an id of `audio/music/game_title.mp3`, `audio/music/game_title.wav`, or
 `audio/music/game_title.ogg` exists, it is played on loop while the title screen is visible.
 Leaving the title screen by any means (currently Exit Game is the only means) stops the track.
 The first resource found is used (search order: mp3, wav, then ogg). These resource ids should
@@ -178,6 +198,16 @@ One instance, same rationale as the `AudioManager` singleton. But `UIManager`'s 
 state is the widget list, which is inherently screen-scoped. Per-screen UIManagers therefore
 can be used to manage the list of widgets for each Screen implementation. Future screens
 can follow the pattern that we create here with TitleScreen.
+
+The `TitleScreen` class, roughly sketched:
+
+```python
+class TitleScreen:
+    def __init__(self, theme, resource_loader):
+      # accept the supplied theme as a default, but we will
+      # create and use our own local instance using the given
+      # resource_loader whenever font or theme are changed.
+```
 
 ### Integration with the main game loop
 
@@ -229,6 +259,9 @@ New tests specifically for Title Screen behavior (these stay in this doc):
   - if none resolve, no music plays.
 - The game title is centered in the upper half of the screen.
 - ChoiceLists for font and theme appear horizontally centered in the lower half of the screen.
+- The font and theme ChoiceLists can be given an initial selection index via `initial_index`,
+  and their selection is initialized accordingly (invalid index -> first item in sorted list,
+  valid index -> that item).
 - Changing the current font takes effect on next frame; no persistence to game config file.
 - Changing the current theme takes effect on next frame; no persistence to game config file.
 - An "Exit Game" button is centered in the lower half of the screen.
@@ -260,7 +293,8 @@ staged implementation plan is suggested (each stage should include tests):
    The Exit Game button should indicate intent to quit via ScreenAction.QUIT.
 5. Implement the font and theme choosers and wire them up.
 6. Final code check - are we fully in compliance with the spec? Do all tests pass?
+   Have all references to "sprites" and "sprite images" in spec docs and code been changed to "images"?
    If it looks good, flip this document from "proposed" to "active" and modify wording in this
    doc from "proposes" to "describes" to reflect reality. (Example: change all instances
-   of "this document proposes..." to "this document describes..."
+   of "this document proposes..." to "this document describes...")
 
