@@ -125,6 +125,11 @@ If an image resource with an id of `graphics/screens/title_screen.png`,
 exists, it is drawn (scaled and stretched as needed) to fill the background
 of the Title Screen. These resource ids should live in `game_constants.py`.
 
+*Implementation note (2026-10-07, performance follow-up from the merge review): the scaled
+background is cached per surface size and re-scaled only when the target size changes.
+Not observable behavior - it just keeps the per-frame cost flat. Future screens that scale
+assets should follow this pattern.*
+
 If no such image resource exists, a random starfield will be generated. The starfield consists
 of a random number between 150 and 300 (inclusive) of single pixel "stars" in random locations,
 displayed in grayscale colors ranging randomly from (0,0,0) to (192,192,192). These stars do not move,
@@ -143,6 +148,9 @@ The game title "Dust to Dominion" should be displayed in 80pt font (in design sp
 point value scales by the window scale factor), centered both horizontally and vertically
 in the upper half of the screen. Use the Title Screen's currently-configured font.
 Use the `foregroundSelected` color from the current theme.
+
+*Implementation note (2026-10-07): the rendered title text is cached per font size and
+invalidated whenever the screen-local Theme is rebuilt. Not observable behavior.*
 
 ### Buttons and options
 
@@ -294,6 +302,10 @@ New tests specifically for Title Screen behavior (these stay in this doc):
   - the search order is respected: mp3, then wav, then ogg.
   - if none resolve, no music plays.
 - The game title is centered in the upper half of the screen.
+- Draw caching (added 2026-10-07, performance follow-up):
+  - a background image is scaled exactly once per surface size, and re-scaled when the size changes.
+  - the title text is rendered exactly once per font size, and re-rendered when the screen-local
+    Theme is rebuilt (the new colors appear on the next frame).
 - ChoiceLists for font and theme appear horizontally and vertically centered in the lower half of the screen.
 - Selecting "(Default theme)" should map to "default" for theme.
 - Selecting "(System default)" should map to "default" for font.
@@ -352,4 +364,7 @@ staged implementation plan is suggested (each stage should include tests):
    closed during the sweep: the literal spec order of `TITLE_SCREEN_BACKGROUND_IMAGE_IDS` and
    `TITLE_SCREEN_MUSIC_IDS` is now pinned by tests, and the oversized-background-image scaling
    case is covered.
+7. Performance follow-up from the merge review: cache the scaled background per surface size
+   and the rendered title per font size (invalidated on Theme rebuild), with tests pinning
+   "exactly once per unchanged input". **Completed 2026-10-07**
 

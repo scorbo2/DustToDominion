@@ -55,6 +55,13 @@ class TitleScreen(Screen):
         # first image resource that resolves, or a generated starfield.
         self._background_image = self._find_background_image()
         self._stars = None if self._background_image else starfield.generate(self._rng)
+        # Scaling a full-screen image and re-rendering the title text on
+        # every single frame is pure waste: neither input changes except
+        # on a surface resize (F11) or a Theme rebuild. Each cache is a
+        # single (key, surface) entry - resolution switches are rare,
+        # and one entry covers every frame in between.
+        self._scaled_background: tuple[tuple[int, int], pygame.Surface] | None = None
+        self._rendered_title: tuple[int, pygame.Surface] | None = None
         # A button click is remembered here and reported by handle() on
         # the same frame (the click itself fires inside update()).
         self._quit_requested = False
@@ -100,11 +107,18 @@ class TitleScreen(Screen):
         if self._background_image is not None:
             # "Scaled and stretched as needed to fill" (spec 08): the
             # image is forced to the exact surface size, aspect ratio
-            # included.
-            stretched = pygame.transform.scale(
-                self._background_image, surface.get_size()
-            )
-            surface.blit(stretched, (0, 0))
+            # included. The scaled copy is cached per size; only a
+            # surface resize invalidates it.
+            target_size = surface.get_size()
+            if (
+                self._scaled_background is None
+                or self._scaled_background[0] != target_size
+            ):
+                self._scaled_background = (
+                    target_size,
+                    pygame.transform.scale(self._background_image, target_size),
+                )
+            surface.blit(self._scaled_background[1], (0, 0))
         elif self._stars is not None:
             # Scale comes from the target surface, not the current display,
             # so drawing stays correct on any surface (and in tests).
@@ -116,18 +130,22 @@ class TitleScreen(Screen):
         """The game title, centered in the upper half of the screen.
 
         The 80pt design-space size scales with the window scale factor,
-        and the font/color come from this screen's current Theme - so
-        once the choosers exist (stage 5), the title follows changes
-        automatically.
+        and the font/color come from this screen's current Theme. The
+        rendered text is cached per font size; the only other input is
+        the Theme, and ``_apply_choices()`` invalidates the cache for
+        exactly that case.
         """
         scale = Scale(*surface.get_size())
         font_size = int(game_constants.TITLE_SCREEN_TITLE_FONT_PT * scale.scale)
-        font = self._theme.get_font(font_size)
-        text_surface = font.render(
-            game_constants.TITLE_SCREEN_TITLE_TEXT,
-            True,
-            self._theme.foregroundSelected,
-        )
+        if self._rendered_title is None or self._rendered_title[0] != font_size:
+            font = self._theme.get_font(font_size)
+            text_surface = font.render(
+                game_constants.TITLE_SCREEN_TITLE_TEXT,
+                True,
+                self._theme.foregroundSelected,
+            )
+            self._rendered_title = (font_size, text_surface)
+        text_surface = self._rendered_title[1]
         # Centered horizontally, and vertically in the middle of the
         # upper half - i.e. at a quarter of the screen height.
         text_rect = text_surface.get_rect(
@@ -261,3 +279,7 @@ class TitleScreen(Screen):
             self._resource_loader,
         )
         self._ui.set_theme(self._theme)
+        # The cached title was rendered with the previous font and
+        # colors, so drop it; the next draw rebuilds it. The background
+        # cache is Theme-independent and stays valid.
+        self._rendered_title = None

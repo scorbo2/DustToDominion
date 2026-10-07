@@ -595,3 +595,155 @@ class TestTitleScreenConstants:
             "audio/music/game_title.wav",
             "audio/music/game_title.ogg",
         )
+
+
+class TestTitleScreenDrawCaching:
+    """Performance follow-up from the spec 08 merge review: the scaled
+    background and the rendered title are cached, and redone only when
+    their inputs (surface size, screen-local Theme) actually change."""
+
+    def _spy_transform_scale(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> list[tuple[int, int]]:
+        """Replace ``pygame.transform.scale`` with a call-counting passthrough."""
+        requested_sizes: list[tuple[int, int]] = []
+        real_scale = pygame.transform.scale
+
+        def counting_scale(source_surface, size, *args, **kwargs):
+            requested_sizes.append(size)
+            return real_scale(source_surface, size, *args, **kwargs)
+
+        monkeypatch.setattr(pygame.transform, "scale", counting_scale)
+        return requested_sizes
+
+    def _spy_title_font_render(self, monkeypatch: pytest.MonkeyPatch) -> list[str]:
+        """Count ``Font.render`` calls for the title text only (the menu
+        widgets legitimately render their own labels).
+
+        ``pygame.font.Font`` is an immutable C type and cannot be
+        patched, so the spy wraps the fonts every Theme hands out via
+        ``Theme.get_font`` and delegates everything else unchanged.
+        """
+        rendered_texts: list[str] = []
+        real_get_font = Theme.get_font
+
+        class CountingFont:
+            def __init__(self, font: pygame.font.Font) -> None:
+                self._font = font
+
+            def __getattr__(self, name: str):
+                return getattr(self._font, name)
+
+            def render(self, text, *args, **kwargs):
+                if text == game_constants.TITLE_SCREEN_TITLE_TEXT:
+                    rendered_texts.append(text)
+                return self._font.render(text, *args, **kwargs)
+
+        def counting_get_font(theme: Theme, size: int) -> CountingFont:
+            return CountingFont(real_get_font(theme, size))
+
+        monkeypatch.setattr(Theme, "get_font", counting_get_font)
+        return rendered_texts
+
+    def _redBackgroundScreen(self) -> TitleScreen:
+        """A screen whose background is an unmistakable solid red image."""
+        image = pygame.Surface((10, 10))
+        image.fill((255, 0, 0))
+        loader = _StubImageLoader({"graphics/screens/title_screen.png": image})
+        return TitleScreen(_default_theme(), loader, rng=random.Random(1))
+
+    def test_draw_withBackgroundImage_atUnchangedSize_shouldScaleTheImageOnlyOnce(
+        self, font_ready: None, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # GIVEN a screen with a background image and a spy on
+        # pygame.transform.scale,
+        screen = self._redBackgroundScreen()
+        scaled_sizes = self._spy_transform_scale(monkeypatch)
+
+        # WHEN the same screen renders two frames at the same size,
+        target = pygame.Surface((300, 200))
+        screen.draw(target)
+        screen.draw(target)
+
+        # THEN the image was scaled exactly once, and the second frame
+        # still shows the cached scaled copy:
+        assert scaled_sizes == [(300, 200)]
+        for corner in [(0, 0), (299, 0), (0, 199), (299, 199)]:
+            assert target.get_at(corner)[:3] == (255, 0, 0)
+
+    def test_draw_withBackgroundImage_atChangedSize_shouldScaleAgainForTheNewSize(
+        self, font_ready: None, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # GIVEN the same screen and spy (an F11 mode switch replaces the
+        # display surface with a different size),
+        screen = self._redBackgroundScreen()
+        scaled_sizes = self._spy_transform_scale(monkeypatch)
+
+        # WHEN it renders at one size and then at another,
+        screen.draw(pygame.Surface((300, 200)))
+        resized = pygame.Surface((640, 360))
+        screen.draw(resized)
+
+        # THEN the image was re-scaled for the new size and fills it:
+        assert scaled_sizes == [(300, 200), (640, 360)]
+        for corner in [(0, 0), (639, 0), (0, 359), (639, 359)]:
+            assert resized.get_at(corner)[:3] == (255, 0, 0)
+
+    def test_draw_atUnchangedSize_shouldRenderTheTitleTextOnlyOnce(
+        self, font_ready: None, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # GIVEN a screen with no background noise and a spy counting
+        # renders of the title text,
+        screen = TitleScreen(
+            _default_theme(), _StubImageLoader({}), rng=random.Random(1)
+        )
+        screen._stars = []
+        title_renders = self._spy_title_font_render(monkeypatch)
+
+        # WHEN the same screen renders two frames at the same size,
+        target = pygame.Surface((1280, 720))
+        screen.draw(target)
+        screen.draw(target)
+
+        # THEN the title text was rendered exactly once, and both frames
+        # show it:
+        assert len(title_renders) == 1
+        color = tuple(screen._theme.foregroundSelected)[:3]
+        center = (target.get_width() // 2, target.get_height() // 4)
+        painted = sum(
+            1
+            for y in range(center[1] - 100, center[1] + 100)
+            for x in range(center[0] - 500, center[0] + 500)
+            if target.get_at((x, y))[:3] == color
+        )
+        assert painted > 0
+
+    def test_themeChoice_afterFirstDraw_shouldReRenderTheTitleExactlyOnceWithTheNewColors(
+        self, font_ready: None, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # GIVEN a screen that has already rendered one frame, with a spy
+        # counting title-text renders,
+        loader = _StubChooserLoader()
+        screen = TitleScreen(_default_theme(), loader, rng=random.Random(1))
+        screen._stars = []
+        title_renders = self._spy_title_font_render(monkeypatch)
+        screen.draw(pygame.Surface((1280, 720)))
+        assert len(title_renders) == 1
+
+        # WHEN the theme chooser rebuilds the screen-local Theme and a
+        # second frame draws,
+        screen._ui.widgets[1].set_current_item(loader.THEME_ID)
+        second_frame = pygame.Surface((1280, 720))
+        screen.draw(second_frame)
+
+        # THEN the cache was invalidated: the title was rendered exactly
+        # once more, in the new theme's color:
+        assert len(title_renders) == 2
+        center = (second_frame.get_width() // 2, second_frame.get_height() // 4)
+        red_pixels = sum(
+            1
+            for y in range(center[1] - 100, center[1] + 100)
+            for x in range(center[0] - 500, center[0] + 500)
+            if second_frame.get_at((x, y))[:3] == (255, 0, 0)
+        )
+        assert red_pixels > 0
