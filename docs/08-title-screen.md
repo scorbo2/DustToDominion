@@ -141,7 +141,7 @@ a lower resolution.
 
 The game title "Dust to Dominion" should be displayed in 80pt font (in design space - this
 point value scales by the window scale factor), centered both horizontally and vertically
-in the upper half of the screen. Use the resolved font from game configuration.
+in the upper half of the screen. Use the Title Screen's currently-configured font.
 Use the `foregroundSelected` color from the current theme.
 
 ### Buttons and options
@@ -300,7 +300,7 @@ New tests specifically for Title Screen behavior (these stay in this doc):
 - The font and theme ChoiceLists are initialized based on the configured font and theme
   as reported by `get_theme_resource_id()` and `get_font_resource_id()`. If an item
   is configured, it is preselected. Otherwise, the sentinel is preselected. If an item
-  is configured but is not valid, the sentinel is preselected.
+  is configured but is not valid (or is not present in the list), the sentinel is preselected.
 - Changing the current font takes effect on next frame; no persistence to game config file.
 - Changing the current theme takes effect on next frame; no persistence to game config file.
 - An "Exit Game" button is centered in the lower half of the screen.
