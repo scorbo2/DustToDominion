@@ -52,6 +52,24 @@ TITLE_SCREEN_TITLE_TEXT = "Dust to Dominion"
 #: Title font size in points, in design space (spec 08: Title) - like every
 #: other design-space value, it scales with the window scale factor.
 TITLE_SCREEN_TITLE_FONT_PT = 80
+#: Title Screen music track ids probed in order (spec 08: Title Screen
+#: audio). Handed to ``AudioManager.play_music_first_match``; the first
+#: one that resolves plays on loop while the Title Screen is visible.
+TITLE_SCREEN_MUSIC_IDS = (
+    "audio/music/game_title.mp3",
+    "audio/music/game_title.wav",
+    "audio/music/game_title.ogg",
+)
+#: Label of the Title Screen's Exit Game button (spec 08: Buttons and
+#: options). ESC on the Title Screen is equivalent to clicking it.
+EXIT_GAME_LABEL = "Exit Game"
+#: Menu option geometry in design space (spec 08: Buttons and options):
+#: each option's size, its border width, and the empty space between
+#: options in the single centered vertical column.
+MENU_OPTION_WIDTH = 400
+MENU_OPTION_HEIGHT = 45
+MENU_OPTION_BORDER_WIDTH = 4
+MENU_OPTION_SPACING = 35
 #: Starfield bounds (spec 08: Background). The star count is inclusive at
 #: both ends; star brightness is grayscale and oscillates one step at a
 #: time between the two limits.

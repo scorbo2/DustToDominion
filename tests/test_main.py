@@ -7,6 +7,8 @@ import pygame
 import pytest
 from loguru import logger
 
+from dtd import audio
+from dtd import game_constants
 from dtd import main as app_main
 from dtd import resource_loader
 from dtd.errors import (
@@ -70,15 +72,15 @@ class TestRun:
         # The window was created with the default (windowed) config.
         assert observed["size"] == (1280, 720)
 
-    def test_should_exit_cleanly_on_escapeKeydown_because_loopStillOwnsEscape(
+    def test_should_exitCleanly_onEscapeKeydown_viaTitleScreenHandle(
         self,
         bootstrapped_persistence: Path,
         synthesized_project: Path,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        # Spec 08 dev plan stage 2: ESC handling deliberately stays in the
-        # main loop (it moves into TitleScreen.handle in stage 4), so the
-        # window must still exit on ESC.
+        # Spec 08 stage 4: ESC is no longer handled by the main loop -
+        # TitleScreen.handle() turns it into ScreenAction.QUIT, which the
+        # loop honors by exiting.
         first_pump = True
         real_event_get = pygame.event.get
 
@@ -177,6 +179,55 @@ class TestRun:
         # THEN the one complete frame was presented exactly once:
         assert exit_code == 0
         assert flip_count == 1
+
+    def test_should_startTitleMusicOnStartupAndStopMusicOnLoopExit(
+        self,
+        bootstrapped_persistence: Path,
+        synthesized_project: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        # GIVEN spies on the AudioManager methods startup and the loop are
+        # supposed to call (spec 08: Title Screen audio / Integration):
+        calls: list[str] = []
+        real_play = audio.AudioManager.play_music_first_match
+        real_stop = audio.AudioManager.stop_music
+
+        def spy_play(self, ids):
+            calls.append(f"play:{tuple(ids)}")
+            return real_play(self, ids)
+
+        def spy_stop(self):
+            calls.append("stop")
+            return real_stop(self)
+
+        monkeypatch.setattr(audio.AudioManager, "play_music_first_match", spy_play)
+        monkeypatch.setattr(audio.AudioManager, "stop_music", spy_stop)
+
+        # AND a QUIT event posted on the first pump:
+        first_pump = True
+        real_event_get = pygame.event.get
+
+        def event_get(*args, **kwargs):
+            nonlocal first_pump
+            if first_pump:
+                first_pump = False
+                pygame.event.post(pygame.event.Event(pygame.QUIT))
+            return real_event_get(*args, **kwargs)
+
+        monkeypatch.setattr(pygame.event, "get", event_get)
+
+        # WHEN run() executes,
+        exit_code = app_main.run()
+
+        # THEN the title music candidates were offered in spec order at
+        # startup, and the loop stopped the music on exit. (No track
+        # resolves in this hermetic project, so the play is a no-op -
+        # what is pinned here is the wiring, not the sound.)
+        assert exit_code == 0
+        assert calls == [
+            f"play:{tuple(game_constants.TITLE_SCREEN_MUSIC_IDS)}",
+            "stop",
+        ]
 
     def test_when_unrelated_pygame_modules_fail_should_open_window_and_exit_cleanly(
         self,
@@ -282,9 +333,14 @@ class TestStartupOrder:
 
         monkeypatch.setattr(app_main, "Theme", spy_theme)
 
+        real_init_audio = app_main.audio.init_audio_manager
+
         def spy_init_audio(loader, config):
             order.append("audio")
-            return None
+            # Really initialize: the loop's music stop (spec 08) needs
+            # the singleton, and this test records order without
+            # replacing the real work.
+            return real_init_audio(loader, config)
 
         monkeypatch.setattr(app_main.audio, "init_audio_manager", spy_init_audio)
 

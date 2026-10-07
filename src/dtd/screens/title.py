@@ -1,8 +1,10 @@
 """The Title Screen (spec 08: Title Screen).
 
-Stage 3 of the spec 08 dev plan: background handling (background image
-if one resolves, random starfield otherwise) and the title display.
-Widgets (Exit Game button, font/theme choosers) arrive in later stages.
+Stage 4 of the spec 08 dev plan: background handling (background image
+if one resolves, random starfield otherwise), the title display, and the
+Exit Game button - whose click, and whose ESC shortcut, both surface to
+the main loop as ``ScreenAction.QUIT``. The font/theme choosers join the
+menu column in stage 5.
 """
 from __future__ import annotations
 
@@ -14,7 +16,8 @@ from dtd import game_constants
 from dtd.resource_loader import ResourceLoader
 from dtd.screens import starfield
 from dtd.screens.base import Screen, ScreenAction
-from dtd.ui import Scale, Theme, UIManager
+from dtd.ui import Scale, Theme, UIManager, Widget
+from dtd.widgets.button import Button
 
 
 class TitleScreen(Screen):
@@ -47,11 +50,21 @@ class TitleScreen(Screen):
         # first image resource that resolves, or a generated starfield.
         self._background_image = self._find_background_image()
         self._stars = None if self._background_image else starfield.generate(self._rng)
+        # A button click is remembered here and reported by handle() on
+        # the same frame (the click itself fires inside update()).
+        self._quit_requested = False
+        self._build_menu()
 
     def handle(self, events: list[pygame.event.Event]) -> ScreenAction | None:
-        # Stage 2: ESC deliberately stays in the main loop for now, so
-        # the window can still exit. Screen-level handling (ESC, and the
-        # Exit Game button's ScreenAction.QUIT) moves here in stage 4.
+        """Screen-level input (spec 08 stage 4): ESC on the Title Screen
+        is equivalent to clicking the Exit Game button, and a click
+        recorded during update() is reported here as the same action.
+        """
+        if self._quit_requested:
+            return ScreenAction.QUIT
+        for event in events:
+            if event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
+                return ScreenAction.QUIT
         return None
 
     def update(self, events: list[pygame.event.Event]) -> None:
@@ -116,3 +129,47 @@ class TitleScreen(Screen):
             center=(surface.get_width() // 2, surface.get_height() // 4)
         )
         surface.blit(text_surface, text_rect)
+
+    # -- menu (spec 08: Buttons and options) --------------------------------
+
+    def _build_menu(self) -> None:
+        """Create and register the menu options.
+
+        Stage 4 adds only the Exit Game button; the font/theme choosers
+        join this same column in stage 5, and the column layout below
+        re-centers automatically as the list grows.
+        """
+        exit_game = Button(
+            pygame.Rect(
+                0,
+                0,
+                game_constants.MENU_OPTION_WIDTH,
+                game_constants.MENU_OPTION_HEIGHT,
+            ),
+            text=game_constants.EXIT_GAME_LABEL,
+            border_width=game_constants.MENU_OPTION_BORDER_WIDTH,
+            on_click=self._request_quit,
+        )
+        options = [exit_game]
+        self._layout_as_centered_column(options)
+        self._ui.widgets.extend(options)
+
+    def _layout_as_centered_column(self, options: list[Widget]) -> None:
+        """Stack options into one vertical column, centered horizontally
+        and vertically in the lower half of the screen (spec 08).
+        """
+        width = game_constants.MENU_OPTION_WIDTH
+        height = game_constants.MENU_OPTION_HEIGHT
+        spacing = game_constants.MENU_OPTION_SPACING
+        column_height = len(options) * height + (len(options) - 1) * spacing
+        left = (game_constants.DESIGN_W - width) // 2
+        # Middle of the lower half: three quarters of the design height.
+        top = game_constants.DESIGN_H * 3 // 4 - column_height // 2
+        for index, option in enumerate(options):
+            option.rect = pygame.Rect(
+                left, top + index * (height + spacing), width, height
+            )
+
+    def _request_quit(self) -> None:
+        """Remember an Exit Game click until handle() reports it."""
+        self._quit_requested = True

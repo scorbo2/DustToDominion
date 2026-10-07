@@ -19,6 +19,7 @@ from dtd.screens.base import Screen, ScreenAction
 from dtd.screens.starfield import Star
 from dtd.screens.title import TitleScreen
 from dtd.ui import Theme, UIManager, Widget
+from dtd.widgets.button import Button
 
 
 def _default_theme() -> Theme:
@@ -65,17 +66,29 @@ class TestTitleScreenConstruction:
 
 
 class TestTitleScreenStub:
-    def test_handle_with_escapeKeydown_should_return_none_until_stageFour(
+    def test_handle_withEscapeKeydown_shouldReturnQuitAction(
         self, font_ready: None
     ) -> None:
-        # GIVEN the stage-2 stub,
-        screen = TitleScreen(_default_theme(), ResourceLoader())
+        # GIVEN the screen,
+        screen = TitleScreen(_default_theme(), _StubImageLoader({}), rng=random.Random(1))
 
-        # WHEN ESC arrives (spec 08 dev plan stage 2 keeps ESC handling in
-        # the main loop; it moves into handle() in stage 4),
+        # WHEN ESC arrives (spec 08 stage 4: ESC on the Title Screen is
+        # equivalent to clicking the Exit Game button),
         events = [pygame.event.Event(pygame.KEYDOWN, key=pygame.K_ESCAPE)]
 
-        # THEN the screen takes no action:
+        # THEN the screen requests the quit action:
+        assert screen.handle(events) is ScreenAction.QUIT
+
+    def test_handle_withUnrelatedKeydownAndNoClick_shouldReturnNone(
+        self, font_ready: None
+    ) -> None:
+        # GIVEN the screen with no pending intent,
+        screen = TitleScreen(_default_theme(), _StubImageLoader({}), rng=random.Random(1))
+
+        # WHEN an unrelated key arrives,
+        events = [pygame.event.Event(pygame.KEYDOWN, key=pygame.K_a)]
+
+        # THEN no action is requested:
         assert screen.handle(events) is None
 
     def test_update_with_mouseMotionOverWidget_should_hoverThrough_itsOwnUiManager(
@@ -272,3 +285,66 @@ class TestTitleScreenTitle:
         assert abs((min_y + max_y) // 2 - expected_center[1]) <= 5
         # ...and the whole title stays inside the upper half:
         assert max_y < surface.get_height() // 2
+
+
+class TestTitleScreenExitGame:
+    def test_constructor_shouldAddExitGameButton_centeredInLowerHalfOfDesignSpace(
+        self, font_ready: None
+    ) -> None:
+        # GIVEN the screen,
+        screen = TitleScreen(_default_theme(), _StubImageLoader({}), rng=random.Random(1))
+
+        # THEN exactly one button sits on the screen's own UIManager,
+        buttons = [w for w in screen._ui.widgets if isinstance(w, Button)]
+        assert len(buttons) == 1
+        button = buttons[0]
+        # ...labelled per spec, with the spec'd 4-pixel design-space border,
+        assert button.text == game_constants.EXIT_GAME_LABEL
+        assert button.border_width == game_constants.MENU_OPTION_BORDER_WIDTH
+        # ...and sized and centered in the lower half of design space:
+        expected_rect = pygame.Rect(
+            (game_constants.DESIGN_W - game_constants.MENU_OPTION_WIDTH) // 2,
+            game_constants.DESIGN_H * 3 // 4
+            - game_constants.MENU_OPTION_HEIGHT // 2,
+            game_constants.MENU_OPTION_WIDTH,
+            game_constants.MENU_OPTION_HEIGHT,
+        )
+        assert button.rect == expected_rect
+
+    def test_update_withClickOnExitGameButton_shouldMakeHandleReturnQuitAction(
+        self, font_ready: None
+    ) -> None:
+        # GIVEN the screen (no display surface, so scales are identity),
+        screen = TitleScreen(_default_theme(), _StubImageLoader({}), rng=random.Random(1))
+        center = (
+            game_constants.DESIGN_W // 2,
+            game_constants.DESIGN_H * 3 // 4,
+        )
+
+        # WHEN a full left-button click lands on the Exit Game button,
+        screen.update(
+            [
+                pygame.event.Event(pygame.MOUSEBUTTONDOWN, pos=center, button=1),
+                pygame.event.Event(pygame.MOUSEBUTTONUP, pos=center, button=1),
+            ]
+        )
+
+        # THEN the screen reports the quit intent on the same frame:
+        assert screen.handle([]) is ScreenAction.QUIT
+
+    def test_update_withClickOutsideExitGameButton_shouldNotRequestQuit(
+        self, font_ready: None
+    ) -> None:
+        # GIVEN the screen,
+        screen = TitleScreen(_default_theme(), _StubImageLoader({}), rng=random.Random(1))
+
+        # WHEN a click lands far from the button,
+        screen.update(
+            [
+                pygame.event.Event(pygame.MOUSEBUTTONDOWN, pos=(50, 50), button=1),
+                pygame.event.Event(pygame.MOUSEBUTTONUP, pos=(50, 50), button=1),
+            ]
+        )
+
+        # THEN no action is requested:
+        assert screen.handle([]) is None
