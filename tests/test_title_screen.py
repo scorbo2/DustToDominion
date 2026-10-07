@@ -218,6 +218,23 @@ class TestTitleScreenBackground:
         for corner in [(0, 0), (299, 0), (0, 199), (299, 199)]:
             assert surface.get_at(corner)[:3] == (255, 0, 0)
 
+    def test_draw_withOversizedBackgroundImage_shouldScaleItDownToFillSurface(
+        self, font_ready: None
+    ) -> None:
+        # GIVEN a solid-red image far larger than the target surface,
+        image = pygame.Surface((2000, 1200))
+        image.fill((255, 0, 0))
+        loader = _StubImageLoader({"graphics/screens/title_screen.png": image})
+        screen = TitleScreen(_default_theme(), loader, rng=random.Random(1))
+        surface = pygame.Surface((300, 200))
+
+        # WHEN the screen renders,
+        screen.draw(surface)
+
+        # THEN the image was scaled down over the whole surface:
+        for corner in [(0, 0), (299, 0), (0, 199), (299, 199)]:
+            assert surface.get_at(corner)[:3] == (255, 0, 0)
+
     def test_update_withStarfieldActive_shouldAdvanceEveryStarOneBrightnessStep(
         self, font_ready: None
     ) -> None:
@@ -558,3 +575,23 @@ class TestTitleScreenChoosers:
 
         # THEN nothing was written to the game config:
         assert save_calls == []
+
+
+class TestTitleScreenConstants:
+    def test_backgroundImageIds_shouldFollowSpecOrderPngThenJpgThenJpeg(self) -> None:
+        # The probe-order tests compare against the constant itself, so
+        # the literal spec order must be pinned here (spec 08: Background).
+        assert game_constants.TITLE_SCREEN_BACKGROUND_IMAGE_IDS == (
+            "graphics/screens/title_screen.png",
+            "graphics/screens/title_screen.jpg",
+            "graphics/screens/title_screen.jpeg",
+        )
+
+    def test_musicIds_shouldFollowSpecOrderMp3ThenWavThenOgg(self) -> None:
+        # Same reasoning for the music candidates (spec 08: Title Screen
+        # audio: search order mp3, then wav, then ogg).
+        assert game_constants.TITLE_SCREEN_MUSIC_IDS == (
+            "audio/music/game_title.mp3",
+            "audio/music/game_title.wav",
+            "audio/music/game_title.ogg",
+        )

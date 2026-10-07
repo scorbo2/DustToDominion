@@ -1,6 +1,6 @@
 ---
 description: Describes the game's title screen and the game's screen-handling in general.
-status: proposed
+status: active
 ---
 
 # Title Screen
@@ -11,7 +11,7 @@ and provides the user with a list of menu options.
 This spec currently only defines a single menu option: Exit Game. The intention is for
 this spec to be amended as future screens and game modes are introduced.
 
-A new `dtd/screens/title.py` module is proposed. The `screens/` subdirectory is introduced
+The Title Screen lives in the `dtd/screens/title.py` module. The `screens/` subdirectory was introduced
 with the anticipation that there will be several additional screens, and it will help
 with organization to keep them grouped.
 
@@ -346,4 +346,10 @@ staged implementation plan is suggested (each stage should include tests):
    If it looks good, flip this document from "proposed" to "active" and modify wording in this
    doc from "proposes" to "describes" to reflect reality. (Example: change all instances
    of "this document proposes..." to "this document describes...")
+   **Completed 2026-10-06.** Full suite green at 589 tests; the only remaining "sprite" mentions
+   are historical amendment records (spec 03's rename note, this doc's amendment section).
+   Status flipped to `active` and proposal wording updated to match reality. Two test gaps were
+   closed during the sweep: the literal spec order of `TITLE_SCREEN_BACKGROUND_IMAGE_IDS` and
+   `TITLE_SCREEN_MUSIC_IDS` is now pinned by tests, and the oversized-background-image scaling
+   case is covered.
 
