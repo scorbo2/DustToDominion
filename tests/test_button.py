@@ -195,20 +195,25 @@ class TestButtonRendering:
         assert icon_visible
         assert _pixel(screen, 150, 150) == (0, 0, 0, 255)
 
-    def test_text_button_should_render_visible_text(self, font_ready: None) -> None:
+    def test_text_button_should_render_visible_text(
+        self, font_ready: None, low_coverage_rasterizer: None
+    ) -> None:
         # GIVEN a text-only button at the design resolution:
         pygame.display.set_mode((1920, 1080))
         button, ui, _ = _button_ui(pygame.Rect(0, 0, 400, 100), _theme(TEST_THEME_JSON), text="OK")
         ui.draw(pygame.display.get_surface())
 
-        # THEN some pixel inside the rect is the foreground (the text) and
+        # THEN some pixel inside the rect deviates from the button fill
+        # (the text - exact-color matching is unsafe per issue #37) and
         # nothing renders outside the rect:
         screen = pygame.display.get_surface()
-        text_visible = any(_pixel(screen, x, y) == (255, 0, 0, 255) for x in range(0, 400) for y in range(0, 100))
+        text_visible = any(_pixel(screen, x, y) != (0, 255, 0, 255) for x in range(0, 400) for y in range(0, 100))
         assert text_visible
         assert _pixel(screen, 450, 50) == (0, 0, 0, 255)
 
-    def test_icon_and_text_should_both_render(self, font_ready: None) -> None:
+    def test_icon_and_text_should_both_render(
+        self, font_ready: None, low_coverage_rasterizer: None
+    ) -> None:
         # GIVEN a button with both an icon and text:
         icon = pygame.Surface((16, 16))
         icon.fill((255, 255, 255))
@@ -218,11 +223,13 @@ class TestButtonRendering:
         )
         ui.draw(pygame.display.get_surface())
 
-        # THEN both the icon (white pixels) and the text (red pixels) are
-        # visible inside the rect:
+        # THEN both the icon (white pixels) and the text (red-dominant
+        # ink) are visible inside the rect. Exact-color matching is
+        # unsafe per issue #37; the red-dominant thresholds still tell
+        # the red text apart from the white icon and green fill:
         screen = pygame.display.get_surface()
         pixels = [_pixel(screen, x, y) for x in range(0, 400, 2) for y in range(0, 100, 2)]
-        assert any(p == (255, 0, 0, 255) for p in pixels)  # text
+        assert any(p[0] > 150 and p[1] < 100 and p[2] < 100 for p in pixels)  # text
         assert any(p[0] > 200 and p[1] > 200 and p[2] > 200 for p in pixels)  # icon
 
     def test_unreasonably_long_label_should_clip_at_rect_boundary(
@@ -245,7 +252,9 @@ class TestButtonRendering:
         outside = [_pixel(screen, x, y) for x in range(50, 60) for y in range(0, 30)]
         assert all(p == (0, 0, 0, 255) for p in outside)
 
-    def test_button_rect_change_should_refit_contents(self, font_ready: None) -> None:
+    def test_button_rect_change_should_refit_contents(
+        self, font_ready: None, low_coverage_rasterizer: None
+    ) -> None:
         # GIVEN a text button rendered in a large rect:
         pygame.display.set_mode((1920, 1080))
         button, ui, _ = _button_ui(pygame.Rect(0, 0, 400, 100), _theme(TEST_THEME_JSON), text="OK")
@@ -254,9 +263,10 @@ class TestButtonRendering:
         button.rect = pygame.Rect(0, 0, 100, 100)
         ui.draw(pygame.display.get_surface())
 
-        # THEN the text refits (still visible, still inside the new rect):
+        # THEN the text refits (still visible - deviating from the fill,
+        # per issue #37 - and still inside the new rect):
         screen = pygame.display.get_surface()
-        text_visible = any(_pixel(screen, x, y) == (255, 0, 0, 255) for x in range(0, 100) for y in range(0, 100))
+        text_visible = any(_pixel(screen, x, y) != (0, 255, 0, 255) for x in range(0, 100) for y in range(0, 100))
         assert text_visible
         assert _pixel(screen, 120, 50) == (0, 0, 0, 255)
 

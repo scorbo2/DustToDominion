@@ -45,8 +45,10 @@ DISABLED_FG = (17, 17, 17, 255)
 DISABLED_BG = (34, 34, 34, 255)
 ICON_COLOR = (255, 0, 255, 255)
 
-#: Larger than the 14pt default so glyph strokes fully cover pixels and
-#: exact-color assertions are reliable at any point size.
+#: Comfortably above the 14pt default so measured text extents leave the
+#: assertions real margin. (Exact-color glyph matching used to be listed
+#: as a reason for the larger size - that premise is gone per issue #37:
+#: full-coverage glyph cores are platform-dependent at any point size.)
 TEXT_FONT_SIZE = 28
 
 #: Synthesized sfx resource ids (spec 05 Testing pattern: short single-tone
@@ -109,8 +111,28 @@ def _pixel(surf: pygame.Surface, x: int, y: int) -> tuple[int, int, int, int]:
 
 
 def _contains_pixel(surf: pygame.Surface, area: pygame.Rect, color) -> bool:
+    """Whether any pixel in ``area`` equals ``color`` exactly.
+
+    Only safe for solid fills (icons, panel chrome): anti-aliased text
+    never matches an exact color on every platform (issue #34). Use
+    ``_contains_ink`` for text presence.
+    """
     return any(
         surf.get_at((x, y)) == color
+        for x in range(area.x, area.right)
+        for y in range(area.y, area.bottom)
+    )
+
+
+def _contains_ink(surf: pygame.Surface, area: pygame.Rect, background) -> bool:
+    """Whether any pixel in ``area`` differs from ``background``.
+
+    The rasterizer-safe text-presence check (issue #37): anti-aliased
+    glyph pixels deviate from the pure background even when no pixel
+    reaches full coverage, which is platform-dependent behavior.
+    """
+    return any(
+        surf.get_at((x, y)) != background
         for x in range(area.x, area.right)
         for y in range(area.y, area.bottom)
     )
@@ -203,31 +225,16 @@ def _clear_and_draw(ui: UIManager) -> pygame.Surface:
     return screen
 
 
-def _rightmost_fg_column(
-    surf: pygame.Surface, area: pygame.Rect, color
-) -> int | None:
-    """The rightmost x within ``area`` painted in ``color``, or None.
-
-    Used to measure how far typed text (and its block cursor) has
-    reached without assuming anything about glyph widths. Only valid
-    while the panel is fully opaque - mid-fade pixels are blended and
-    match no exact color.
-    """
-    for x in range(area.right - 1, area.x - 1, -1):
-        for y in range(area.y, area.bottom):
-            if surf.get_at((x, y)) == color:
-                return x
-    return None
-
-
 def _rightmost_nonbackground_column(
     surf: pygame.Surface, area: pygame.Rect, background
 ) -> int | None:
     """The rightmost x within ``area`` NOT painted in ``background``.
 
-    The mid-fade sibling of ``_rightmost_fg_column``: blended text
-    pixels match no exact color, but they do differ from the (also
-    blended, but uniform) panel background.
+    Measures how far text (and its block cursor) has reached without
+    assuming anything about glyph widths or full-coverage glyph cores -
+    anti-aliased text pixels deviate from the pure background on every
+    platform (issue #37). Only valid while the panel is fully opaque:
+    mid-fade pixels are blended, and so is the panel background itself.
     """
     for x in range(area.right - 1, area.x - 1, -1):
         for y in range(area.y, area.bottom):
@@ -241,7 +248,7 @@ def _reference_rightmost(text: str, panel_rect: pygame.Rect) -> int | None:
     animation - the "fully revealed" reference for typing assertions."""
     panel = TextPanel(panel_rect, text=text, font_size=TEXT_FONT_SIZE)
     screen = _appear_and_draw(panel, _theme(TEST_THEME_JSON))
-    return _rightmost_fg_column(screen, panel_rect, NORMAL_FG)
+    return _rightmost_nonbackground_column(screen, panel_rect, NORMAL_BG)
 
 
 @pytest.fixture
@@ -638,13 +645,25 @@ class TestIconRendering:
         # THEN the icon is clipped at the inner edge (the panel edge here)
         # and no text renders at all (client's responsibility, spec 06):
         assert _pixel(screen, 99, 40) == ICON_COLOR
-        assert not _contains_pixel(screen, pygame.Rect(0, 0, 100, 80), NORMAL_FG)
+        # No text renders at all. A plain background-diff scan would be
+        # wrong here (the clipped icon legitimately fills the region),
+        # so scan for red-dominant ink instead: magenta icon pixels
+        # always carry a blue channel as high as the red, and exact
+        # fg matching is unsafe per issue #37.
+        assert not any(
+            pixel[0] > 150 and pixel[1] < 100 and pixel[2] < 100
+            for pixel in (
+                screen.get_at((x, y))
+                for x in range(0, 100)
+                for y in range(0, 80)
+            )
+        )
         assert _pixel(screen, 101, 40) == BLACK
 
 
 class TestTextRendering:
     def test_text_only_should_render_inside_the_fixed_margins(
-        self, font_ready: None
+        self, font_ready: None, low_coverage_rasterizer: None
     ) -> None:
         # GIVEN a text-only panel:
         theme = _theme(TEST_THEME_JSON)
@@ -658,10 +677,10 @@ class TestTextRendering:
 
         # THEN text pixels appear inside the text area...
         text_area = pygame.Rect(margin, margin, 300 - 2 * margin, 200 - 2 * margin)
-        assert _contains_pixel(screen, text_area, NORMAL_FG)
+        assert _contains_ink(screen, text_area, NORMAL_BG)
         # ...top-aligned at the top of the text area (spec 06):
-        assert _contains_pixel(
-            screen, pygame.Rect(margin, margin, 300 - 2 * margin, line_height), NORMAL_FG
+        assert _contains_ink(
+            screen, pygame.Rect(margin, margin, 300 - 2 * margin, line_height), NORMAL_BG
         )
         # ...and every margin band is pure background on all four sides:
         assert _all_pixels_equal(screen, pygame.Rect(0, 0, margin, 200), NORMAL_BG)
@@ -674,7 +693,7 @@ class TestTextRendering:
         )
 
     def test_icon_and_text_should_place_text_after_icon_plus_margin(
-        self, font_ready: None
+        self, font_ready: None, low_coverage_rasterizer: None
     ) -> None:
         # GIVEN a panel with a 10x10 icon (scaled to the full 100px
         # interior height, so 100px wide) and text:
@@ -696,11 +715,13 @@ class TestTextRendering:
         # background (spec 06: margin between text and icon)...
         assert _all_pixels_equal(screen, pygame.Rect(100, 0, margin, 100), NORMAL_BG)
         # ...and the text lives to the right of that gap:
-        assert _contains_pixel(
-            screen, pygame.Rect(100 + margin, 0, 200 - 2 * margin, 100), NORMAL_FG
+        assert _contains_ink(
+            screen, pygame.Rect(100 + margin, 0, 200 - 2 * margin, 100), NORMAL_BG
         )
 
-    def test_text_should_wrap_at_word_boundaries(self, font_ready: None) -> None:
+    def test_text_should_wrap_at_word_boundaries(
+        self, font_ready: None, low_coverage_rasterizer: None
+    ) -> None:
         # GIVEN a panel one pixel too narrow for "aaaa bbbb" on one line:
         theme = _theme(TEST_THEME_JSON)
         font, margin, line_height = _font_metrics(theme, TEXT_FONT_SIZE)
@@ -716,21 +737,23 @@ class TestTextRendering:
 
         # THEN both words render, one per line band (spec 06: wrap at
         # word boundaries):
-        assert _contains_pixel(
+        assert _contains_ink(
             screen, pygame.Rect(margin, margin, width - 2 * margin, line_height),
-            NORMAL_FG,
+            NORMAL_BG,
         )
-        assert _contains_pixel(
+        assert _contains_ink(
             screen,
             pygame.Rect(margin, margin + line_height, width - 2 * margin, line_height),
-            NORMAL_FG,
+            NORMAL_BG,
         )
         # ...and the right margin band stays pure background:
         assert _all_pixels_equal(
             screen, pygame.Rect(width - margin, 0, margin, height), NORMAL_BG
         )
 
-    def test_explicit_newline_should_break_lines(self, font_ready: None) -> None:
+    def test_explicit_newline_should_break_lines(
+        self, font_ready: None, low_coverage_rasterizer: None
+    ) -> None:
         # GIVEN a panel wide enough for either word, with an explicit \n:
         theme = _theme(TEST_THEME_JSON)
         font, margin, line_height = _font_metrics(theme, TEXT_FONT_SIZE)
@@ -747,18 +770,18 @@ class TestTextRendering:
 
         # THEN each word occupies its own line band (spec 06: explicit
         # newlines are line breaks):
-        assert _contains_pixel(
+        assert _contains_ink(
             screen, pygame.Rect(margin, margin, width - 2 * margin, line_height),
-            NORMAL_FG,
+            NORMAL_BG,
         )
-        assert _contains_pixel(
+        assert _contains_ink(
             screen,
             pygame.Rect(margin, margin + line_height, width - 2 * margin, line_height),
-            NORMAL_FG,
+            NORMAL_BG,
         )
 
     def test_whitespace_runs_should_be_preserved_not_collapsed(
-        self, font_ready: None
+        self, font_ready: None, low_coverage_rasterizer: None
     ) -> None:
         # GIVEN text with a double space between two words:
         theme = _theme(TEST_THEME_JSON)
@@ -775,14 +798,14 @@ class TestTextRendering:
         # single-space layout (spec 06: runs are kept as-is):
         collapsed_end = margin + font.size("a b")[0]
         preserved_end = margin + font.size("a  b")[0]
-        assert _contains_pixel(
+        assert _contains_ink(
             screen,
             pygame.Rect(collapsed_end, 0, preserved_end - collapsed_end, 100),
-            NORMAL_FG,
+            NORMAL_BG,
         )
 
     def test_unwrappable_long_word_should_clip_inside_the_panel(
-        self, font_ready: None
+        self, font_ready: None, low_coverage_rasterizer: None
     ) -> None:
         # GIVEN one word far wider than the panel:
         panel = TextPanel(
@@ -794,11 +817,11 @@ class TestTextRendering:
 
         # THEN text renders but clips at the inner border edge - nothing
         # appears outside the panel (spec 06: no scrolling):
-        assert _contains_pixel(screen, pygame.Rect(0, 0, 120, 60), NORMAL_FG)
+        assert _contains_ink(screen, pygame.Rect(0, 0, 120, 60), NORMAL_BG)
         assert _all_pixels_equal(screen, pygame.Rect(120, 0, 40, 60), BLACK)
 
     def test_unwrappable_word_followed_by_whitespace_should_still_draw_clipped(
-        self, font_ready: None
+        self, font_ready: None, low_coverage_rasterizer: None
     ) -> None:
         # GIVEN the same far-too-wide word, but followed by a space and
         # a second word - the case the bare-word test misses, and the
@@ -815,7 +838,7 @@ class TestTextRendering:
         # THEN the draw survives (it used to raise ValueError from the
         # wrap) and still clips at the inner border edge, with nothing
         # outside the panel (spec 06: no scrolling):
-        assert _contains_pixel(screen, pygame.Rect(0, 0, 120, 60), NORMAL_FG)
+        assert _contains_ink(screen, pygame.Rect(0, 0, 120, 60), NORMAL_BG)
         assert _all_pixels_equal(screen, pygame.Rect(120, 0, 40, 60), BLACK)
 
     @pytest.mark.parametrize("text", [None, "", "   ", "\t"])
@@ -831,7 +854,7 @@ class TestTextRendering:
         screen = _appear_and_draw(panel, _theme(TEST_THEME_JSON))
 
         # THEN only the empty panel renders (spec 06: Displaying text):
-        assert not _contains_pixel(screen, pygame.Rect(0, 0, 300, 100), NORMAL_FG)
+        assert not _contains_ink(screen, pygame.Rect(0, 0, 300, 100), NORMAL_BG)
         assert _pixel(screen, 150, 50) == NORMAL_BG
 
 
@@ -1382,12 +1405,12 @@ class TestPanelAnimation:
         # piece, identical to a panel that never had typing options
         # (spec 06: calls after the first update() are ignored):
         assert (
-            _rightmost_fg_column(_draw(ui), panel.rect, NORMAL_FG)
+            _rightmost_nonbackground_column(_draw(ui), panel.rect, NORMAL_BG)
             == _reference_rightmost("Hello World", panel.rect)
         )
 
     def test_last_typing_options_call_before_update_should_win(
-        self, font_ready: None
+        self, font_ready: None, low_coverage_rasterizer: None
     ) -> None:
         # GIVEN a panel whose first typing call enables typing and
         # whose second disables it (speed <= 0):
@@ -1407,7 +1430,7 @@ class TestPanelAnimation:
         # animation at all, full text immediately (spec 06: the most
         # recent invocation's parameters for each animation type win):
         assert (
-            _rightmost_fg_column(_draw(disabled_ui), disabled.rect, NORMAL_FG)
+            _rightmost_nonbackground_column(_draw(disabled_ui), disabled.rect, NORMAL_BG)
             == _reference_rightmost("Hello World", disabled.rect)
         )
 
@@ -1427,8 +1450,8 @@ class TestPanelAnimation:
 
         # THEN typing runs at the most recent call's speed - 5 of the
         # 11 characters revealed, well short of the full text:
-        partial = _rightmost_fg_column(
-            _draw(enabled_ui), enabled.rect, NORMAL_FG
+        partial = _rightmost_nonbackground_column(
+            _draw(enabled_ui), enabled.rect, NORMAL_BG
         )
         assert partial is not None
         assert partial < _reference_rightmost("Hello World", enabled.rect)
@@ -1605,7 +1628,7 @@ class TestPanelTyping:
     PANEL_AREA = pygame.Rect(0, 0, 300, 100)
 
     def test_typing_should_reveal_the_text_progressively(
-        self, font_ready: None
+        self, font_ready: None, low_coverage_rasterizer: None
     ) -> None:
         # GIVEN a panel typing "Hello World" at 60 chars/sec (1 per
         # frame) with no cursor:
@@ -1619,17 +1642,17 @@ class TestPanelTyping:
         ui.update([])
 
         # THEN nothing of the text is revealed yet:
-        assert _rightmost_fg_column(_draw(ui), self.PANEL_AREA, NORMAL_FG) is None
+        assert _rightmost_nonbackground_column(_draw(ui), self.PANEL_AREA, NORMAL_BG) is None
 
         # AND WHEN 5 more frames pass, 5 characters are on screen:
         _run_frames(ui, 5)
-        partial = _rightmost_fg_column(_draw(ui), self.PANEL_AREA, NORMAL_FG)
+        partial = _rightmost_nonbackground_column(_draw(ui), self.PANEL_AREA, NORMAL_BG)
         assert partial is not None
 
         # AND WHEN the animation completes, the full text matches a
         # panel that never had typing options at all:
         _run_frames(ui, 6)
-        full = _rightmost_fg_column(_draw(ui), self.PANEL_AREA, NORMAL_FG)
+        full = _rightmost_nonbackground_column(_draw(ui), self.PANEL_AREA, NORMAL_BG)
         assert full == _reference_rightmost("Hello World", self.PANEL_AREA)
         assert partial < full
 
@@ -1654,7 +1677,7 @@ class TestPanelTyping:
         # exactly font.size("0") wide (spec 06):
         screen = _draw(ui)
         assert (
-            _rightmost_fg_column(screen, self.PANEL_AREA, NORMAL_FG)
+            _rightmost_nonbackground_column(screen, self.PANEL_AREA, NORMAL_BG)
             == margin + cursor_width - 1
         )
 
@@ -1664,7 +1687,7 @@ class TestPanelTyping:
         screen = _draw(ui)
         prefix_width = font.size("Hello")[0]
         assert (
-            _rightmost_fg_column(screen, self.PANEL_AREA, NORMAL_FG)
+            _rightmost_nonbackground_column(screen, self.PANEL_AREA, NORMAL_BG)
             == margin + prefix_width + cursor_width - 1
         )
 
@@ -1672,8 +1695,8 @@ class TestPanelTyping:
         # rightmost text column matches the cursor-less reference:
         _run_frames(ui, 6)
         screen = _draw(ui)
-        assert _rightmost_fg_column(
-            screen, self.PANEL_AREA, NORMAL_FG
+        assert _rightmost_nonbackground_column(
+            screen, self.PANEL_AREA, NORMAL_BG
         ) == _reference_rightmost("Hello World", self.PANEL_AREA)
 
     def test_typing_should_continue_during_a_fade_out_until_invisible(
@@ -1712,7 +1735,7 @@ class TestPanelTyping:
         assert panel.is_visible() is False
 
     def test_typing_should_run_concurrently_with_a_slide_in(
-        self, font_ready: None
+        self, font_ready: None, low_coverage_rasterizer: None
     ) -> None:
         # GIVEN a panel that slides in over 10 frames and types at 1
         # char/frame at the same time:
@@ -1729,7 +1752,7 @@ class TestPanelTyping:
         current = panel.current_rect()
         assert current.x == 441
         assert (
-            _rightmost_fg_column(_draw(ui), current, NORMAL_FG) is not None
+            _rightmost_nonbackground_column(_draw(ui), current, NORMAL_BG) is not None
         )
 
     @pytest.mark.parametrize("speed", [0, -10])
@@ -1748,8 +1771,8 @@ class TestPanelTyping:
 
         # THEN typing is disabled entirely - full text, no cursor
         # (spec 06: speed <= 0 disables the animation):
-        assert _rightmost_fg_column(
-            _draw(ui), self.PANEL_AREA, NORMAL_FG
+        assert _rightmost_nonbackground_column(
+            _draw(ui), self.PANEL_AREA, NORMAL_BG
         ) == _reference_rightmost("Hello World", self.PANEL_AREA)
 
     @pytest.mark.parametrize("text", [None, ""])
@@ -1766,7 +1789,7 @@ class TestPanelTyping:
 
         # THEN no text and no cursor ever render (spec 06: no-op):
         screen = _draw(ui)
-        assert _rightmost_fg_column(screen, self.PANEL_AREA, NORMAL_FG) is None
+        assert _rightmost_nonbackground_column(screen, self.PANEL_AREA, NORMAL_BG) is None
 
 
 class TestWrapText:

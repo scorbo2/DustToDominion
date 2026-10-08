@@ -288,7 +288,7 @@ class TestTitleScreenBackground:
 
 class TestTitleScreenTitle:
     def test_draw_shouldRenderTitleCenteredHorizontallyAndInUpperHalf(
-        self, font_ready: None
+        self, font_ready: None, low_coverage_rasterizer: None
     ) -> None:
         # GIVEN a screen with no background noise at all,
         screen = TitleScreen(
@@ -301,16 +301,16 @@ class TestTitleScreenTitle:
         # WHEN the screen renders,
         screen.draw(surface)
 
-        # THEN the foregroundSelected title pixels form a bounding box
-        # centered on the middle of the upper half (scan a generous
+        # THEN the title ink (anything deviating from the black surface -
+        # exact-color matching is unsafe per issue #37) forms a bounding
+        # box centered on the middle of the upper half (scan a generous
         # window around the expected center; an empty scan fails the
         # test, which also catches gross misplacement):
-        color = tuple(screen._theme.foregroundSelected)[:3]
         min_x = min_y = 10**6
         max_x = max_y = -1
         for y in range(expected_center[1] - 100, expected_center[1] + 100):
             for x in range(expected_center[0] - 500, expected_center[0] + 500):
-                if surface.get_at((x, y))[:3] == color:
+                if surface.get_at((x, y))[:3] != (0, 0, 0):
                     min_x, max_x = min(min_x, x), max(max_x, x)
                     min_y, max_y = min(min_y, y), max(max_y, y)
         assert max_x >= 0, "no title pixels found near the expected center"
@@ -508,7 +508,7 @@ class TestTitleScreenChoosers:
         assert screen._theme.get_font_resource_id() == game_constants.DEFAULT_FONT_VALUE
 
     def test_themeChoice_withThemeId_shouldApplyNewColorsOnNextDraw(
-        self, font_ready: None
+        self, font_ready: None, low_coverage_rasterizer: None
     ) -> None:
         # GIVEN a screen with no background noise and nothing configured,
         loader = _StubChooserLoader()
@@ -518,7 +518,10 @@ class TestTitleScreenChoosers:
         # WHEN the theme chooser selects the red-foreground theme,
         screen._ui.widgets[1].set_current_item(loader.THEME_ID)
 
-        # THEN the next frame's title is drawn in the new theme's color:
+        # THEN the next frame's title is drawn in the new theme's color
+        # (red-dominant ink; exact-color matching is unsafe per issue
+        # #37, and the default theme's white title would never pass a
+        # red-dominant test):
         surface = pygame.Surface((1280, 720))
         screen.draw(surface)
         center = (surface.get_width() // 2, surface.get_height() // 4)
@@ -526,7 +529,9 @@ class TestTitleScreenChoosers:
             1
             for y in range(center[1] - 100, center[1] + 100)
             for x in range(center[0] - 500, center[0] + 500)
-            if surface.get_at((x, y))[:3] == (255, 0, 0)
+            if surface.get_at((x, y))[0] > 150
+            and surface.get_at((x, y))[1] < 100
+            and surface.get_at((x, y))[2] < 100
         )
         assert red_pixels > 0
 
@@ -690,7 +695,10 @@ class TestTitleScreenDrawCaching:
             assert resized.get_at(corner)[:3] == (255, 0, 0)
 
     def test_draw_atUnchangedSize_shouldRenderTheTitleTextOnlyOnce(
-        self, font_ready: None, monkeypatch: pytest.MonkeyPatch
+        self,
+        font_ready: None,
+        low_coverage_rasterizer: None,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         # GIVEN a screen with no background noise and a spy counting
         # renders of the title text,
@@ -706,20 +714,22 @@ class TestTitleScreenDrawCaching:
         screen.draw(target)
 
         # THEN the title text was rendered exactly once, and both frames
-        # show it:
+        # show it (ink deviating from the black surface, per issue #37):
         assert len(title_renders) == 1
-        color = tuple(screen._theme.foregroundSelected)[:3]
         center = (target.get_width() // 2, target.get_height() // 4)
         painted = sum(
             1
             for y in range(center[1] - 100, center[1] + 100)
             for x in range(center[0] - 500, center[0] + 500)
-            if target.get_at((x, y))[:3] == color
+            if target.get_at((x, y))[:3] != (0, 0, 0)
         )
         assert painted > 0
 
     def test_themeChoice_afterFirstDraw_shouldReRenderTheTitleExactlyOnceWithTheNewColors(
-        self, font_ready: None, monkeypatch: pytest.MonkeyPatch
+        self,
+        font_ready: None,
+        low_coverage_rasterizer: None,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         # GIVEN a screen that has already rendered one frame, with a spy
         # counting title-text renders,
@@ -737,13 +747,16 @@ class TestTitleScreenDrawCaching:
         screen.draw(second_frame)
 
         # THEN the cache was invalidated: the title was rendered exactly
-        # once more, in the new theme's color:
+        # once more, in the new theme's color (red-dominant ink, per the
+        # issue #37 note above):
         assert len(title_renders) == 2
         center = (second_frame.get_width() // 2, second_frame.get_height() // 4)
         red_pixels = sum(
             1
             for y in range(center[1] - 100, center[1] + 100)
             for x in range(center[0] - 500, center[0] + 500)
-            if second_frame.get_at((x, y))[:3] == (255, 0, 0)
+            if second_frame.get_at((x, y))[0] > 150
+            and second_frame.get_at((x, y))[1] < 100
+            and second_frame.get_at((x, y))[2] < 100
         )
         assert red_pixels > 0

@@ -155,3 +155,60 @@ def font_ready() -> None:
     """
     if not pygame.font.get_init():
         pygame.font.init()
+
+
+#: Brightest glyph coverage the ``low_coverage_rasterizer`` fixture allows.
+#: On the issue #34 Windows machine the brightest anti-aliased title pixel
+#: was (222, 33, 0) over a pure background - a coverage of 222/255 - so no
+#: glyph pixel there ever matched the requested foreground exactly.
+_LOW_COVERAGE_CAP = 222
+
+
+@pytest.fixture
+def low_coverage_rasterizer(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Make every rendered glyph fall short of full pixel coverage (issue #37).
+
+    Simulates the platform-dependent FreeType behavior behind issue #34:
+    on some platforms no anti-aliased glyph pixel ever rasterizes to the
+    exact foreground color, whatever the point size. Rendering tests that
+    request this fixture alongside their background-diff assertions form a
+    permanent portability canary inside the hermetic suite.
+
+    Implementation notes:
+
+    - ``pygame.font.Font`` cannot be patched at class level (immutable C
+      type), so the fixture swaps the *module attribute* ``pygame.font.Font``
+      for a subclass. ``Theme.get_font`` and ``ResourceLoader.get_font_resource``
+      look the name up at call time, and ``isinstance(font, pygame.font.Font)``
+      keeps passing because the replacement is a real subclass.
+    - ``pygame.sysfont`` bound ``Font`` by value at import time, so the
+      ``SysFont`` path is covered separately via SysFont's documented
+      ``constructor=`` hook.
+    """
+    original_sysfont = pygame.font.SysFont
+
+    class _CappedCoverageFont(pygame.font.Font):
+        def render(self, text, antialias, color, background=None):
+            surface = super().render(text, antialias, color, background)
+            surface.lock()
+            try:
+                for x in range(surface.get_width()):
+                    for y in range(surface.get_height()):
+                        r, g, b, a = surface.get_at((x, y))
+                        if a > _LOW_COVERAGE_CAP:
+                            surface.set_at((x, y), (r, g, b, _LOW_COVERAGE_CAP))
+            finally:
+                surface.unlock()
+            return surface
+
+    def _capped_sysfont(name, size, bold=False, italic=False):
+        def constructor(fontpath, font_size, want_bold, want_italic):
+            font = _CappedCoverageFont(fontpath, font_size)
+            font.set_bold(want_bold)
+            font.set_italic(want_italic)
+            return font
+
+        return original_sysfont(name, size, bold, italic, constructor=constructor)
+
+    monkeypatch.setattr(pygame.font, "Font", _CappedCoverageFont)
+    monkeypatch.setattr(pygame.font, "SysFont", _capped_sysfont)
