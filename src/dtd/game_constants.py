@@ -37,6 +37,10 @@ VOLUME_MAX_PERCENT = 100
 #: (spec 02) is 16:9, so one uniform scale factor covers both axes.
 DESIGN_W = 1920
 DESIGN_H = 1080
+#: Fraction of the Button inner-rect height reserved as margin around the
+#: icon - top and bottom always, plus the left edge when a label is
+#: present (spec 04: Icon scaling, as amended 2026-10-08).
+BUTTON_ICON_MARGIN_FRACTION = 0.05
 
 # --- Title screen (spec 08) -----------------------------------------------
 #: Background image resource ids probed in order (spec 08: Background).
