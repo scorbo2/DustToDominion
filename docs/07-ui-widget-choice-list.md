@@ -12,15 +12,6 @@ to the existing Button widget, but with `<` and `>` pager controls on the left a
 of the widget to cycle through the available list options one at a time, with list-wrapping
 at both ends of the list. The currently-selected list item is displayed in the center of the widget.
 
-## Amendments to previous spec docs
-
-Spec `04-ui-widgets.md` should be amended to clarify that if a Widget is both
-"selected" and in a mouse-hover state, the "selected" state takes precedence for rendering
-purposes. Widgets that support "selection" and mouse hover are responsible for rendering
-accordingly. (Terminology note for this document: a Widget's "selection" state is unrelated
-to the ChoiceList's selected item - widget selection is a cosmetic feature offered by
-the UI framework to visually highlight certain widgets).
-
 ## ChoiceList details
 
 There is no keyboard interaction for this widget - the user must use the mouse to click the
@@ -297,5 +288,4 @@ implementation plan is suggested (each stage after 1 should include tests):
 Upon completion, if all tests pass, mark this document as "active". (Done 2026-10-05;
 full suite green at 495 tests. The two implementation judgment calls - two-axis glyph
 fitting and the floored 33% pager-width cap - were reviewed and accepted.)
-
 

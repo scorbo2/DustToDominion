@@ -97,36 +97,6 @@ class TextPanel(Widget):
         # Changes the audio id to play on disappearance (None unsets it).
 ```
 
-## Amendments to previous specs
-
-As part of this implementation, spec `04-ui-widgets.md` should be amended to add
-a `selected` property to the Widget base class, alongside `enabled`.
-The new property defaults to False. Spec 04 currently says "Disabled widgets
-cannot be selected/highlighted," which reads as "the state cannot be set."
-This should be relaxed to say that disabled widgets that are also selected
-should display as disabled (that is, the `*Selected` theme colors are not used).
-A widget can be both selected and disabled, but visually, "disabled" takes precedence.
-
-Additionally, a note should be added to spec 04 indicating that a Widget that is
-both selected and disabled is considered disabled (disabled has higher precedence than selected).
-Each Widget implementation class is responsible for managing their appearance accordingly.
-Setting a widget to both selected and disabled does not cancel the selected status - it merely
-effectively hides it from the user until the widget is re-enabled. The precedence order described here
-is for cosmetic purposes (determining which theme colors to use when rendering the widget).
-A disabled widget's "selected" status can still hold whatever meaning the game assigns to that
-state, even if the selection state is not visible to the user.
-
-Spec `05-audio-manager.md` should be amended to add `stop_sfx(id)` to request that the
-given sound effect id should be stopped if it is currently playing. This is needed because our 
-TextPanel animation can be interrupted, causing associated audio to be stopped if in progress.
-
-Implementation notes for the 05 spec amendment (as implemented):
-- if `loader.get_sfx_resource(id)` resolves to a `mixer.Sound` instance, invoke `stop()` on it.
-- if the id has an entry in the loop registry (`AudioManager._loops`, a `_LoopRegistry`), drop its
-  bookkeeping via `_loops.deregister(id)` (the `stop()` invocation above has already stopped it anyway).
-- invoking `stop()` on the Sound object will stop it playing on ALL channels. This may
-  cause it to stop even if some other TextPanel instance was also playing the same sound. Acceptable.
-
 ## TextPanel options
 
 Most options are immutable after construction. Only the audio ids and animation options may be
@@ -382,5 +352,4 @@ The spec was too large to implement in one pass. The following staged dev plan w
 5. Final checks: all tests should be green, all code and docstrings should align with the spec.
    No stale TODO or "will be done in stage N" style comments or docstrings.
    **Completed 2026-10-04**
-
 

@@ -69,6 +69,8 @@ The project is structured as follows:
   - `graphics`: images used by the game (to be defined in later spec docs)
   - `data`: miscellaneous data files (dialogue scripts, ship data files, etc.)
     Details will be defined in later spec docs.
+  - `fonts`: fonts to be included with the game.
+  - `themes`: Json files containing themes for use with our UI framework.
 - `tests`: all unit tests
 - `tools`: any standalone tools that accompany the game (image editor, sound editor, etc.)
 
@@ -81,6 +83,8 @@ Game specifics:
 - Unless otherwise noted in future spec docs, all non-configurable game properties
   should by default be stored in a central `game_constants.py` module,
   to make them easy to adjust without hunting through code.
+- The `.gitignore` file currently contains `resources/**`. This is not an error.
+  Bundling of core game resources is not yet fully defined. A future spec doc will amend this.
 
 ## Persistence
 

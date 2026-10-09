@@ -479,7 +479,7 @@ Unit tests should cover both modes thoroughly:
    schema details for all supported resource types? **Resolved**: defer specific properties to a future
    specification. The resource loader does not know or care about them - we simply load raw resources here.
 
-## Implementation plan
+## Dev plan
 
 The spec is too large to implement all at once. The following staged dev plan is suggested:
 
