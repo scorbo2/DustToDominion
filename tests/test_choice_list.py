@@ -538,7 +538,7 @@ class TestPagerClicks:
         widget, ui, recorded = _choice_ui(pygame.Rect(0, 0, 400, 60), ["alpha", "beta", "gamma"])
 
         # WHEN the press is inside the right pager but the release outside it,
-        # THEN no click occurred (the Button click rule, spec 04/07):
+        # THEN no click occurred (the Button click rule, spec 09/07):
         ui.update([_down(self.RIGHT), _up(self.TEXT)])
         assert widget.get_current_item() == "alpha"
         assert recorded == []

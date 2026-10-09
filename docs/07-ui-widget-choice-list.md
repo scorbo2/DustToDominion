@@ -129,7 +129,7 @@ must respect the current theme's corner radius when drawing borders and
 filling the rect!
 
 Text for the selected item is scaled to fit on a best-effort basis, very
-similar to the existing Button widget (see the 04 spec doc). Text that
+similar to the existing Button widget (see the 09 spec doc). Text that
 cannot fit is clipped. Item text never wraps. The control is single-line only.
 The item text has a margin on all sides equal to half the
 height of the `0` character in the widget's font at the text's effective
@@ -158,7 +158,8 @@ clickable even when its glyph is too small to draw.
 Each pager glyph has a margin equal to half the height of the `0` character in the pager control's
 effective font size. This margin is applied on all four sides of the glyph.
 The hit area for mouse clicks is the region of the pager control inclusive of its margin.
-Rules for determining a mouse click are the same as for the Button widget - if both
+Rules for determining a mouse click are the same as for the Button widget
+(spec 09: Button events) - if both
 the mouse press event AND the mouse up event occur inside the hit area
 for the pager control, it counts as a mouse click on that control.
 

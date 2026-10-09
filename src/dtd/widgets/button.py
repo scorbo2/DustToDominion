@@ -1,10 +1,10 @@
-"""The ``Button`` widget (spec 04: Supplied widget - Button).
+"""The ``Button`` widget (spec 09: Button options).
 
 A clickable rectangle with an optional icon, optional text, and an
 optional border, rendered entirely with ``pygame`` (spec 04: Additional
 dependencies).
 
-Rendering contract (spec 04, as amended 2026-10-08):
+Rendering contract (spec 09, as amended 2026-10-08):
 
 - The rect is filled with ``backgroundNormal``/``backgroundHover`` (or the
   disabled colors when disabled), honoring the theme's ``cornerRadius``.
@@ -16,20 +16,20 @@ Rendering contract (spec 04, as amended 2026-10-08):
 - Icon and text live inside the "inner rect" (the button rect inset by
   the border width). A zero or negative inner rect draws neither icon
   nor text. Content clips at the inner rect boundary - rectangular
-  clipping only, even when the theme rounds the corners (spec 04: inner
+  clipping only, even when the theme rounds the corners (spec 09: inner
   rect).
 - Icons scale proportionally to the inner rect height minus a 5% margin,
   never depending on the label; they center horizontally when no label
-  is present and left-align (with the margin) when one is (spec 04:
+  is present and left-align (with the margin) when one is (spec 09:
   Icon scaling / Button layout).
 - Label text auto-scales to fit its available space by default, or
   renders at an exact design-space point size when
   ``set_font_point_size`` pins one; text never line-wraps and clips at
-  the inner rect boundary when too large (spec 04: Text scaling).
+  the inner rect boundary when too large (spec 09: Text scaling).
 - Buttons are never selected/highlighted, so the ``*Selected`` theme
-  colors are never used (spec 04: Supplied widget - Button).
+  colors are never used (spec 09: Button options).
 
-Click contract (spec 04: Widgets / Supplied widget - Button): a click is
+Click contract (spec 04: Widgets / spec 09: Button events): a click is
 a left-mouse press *and* release both inside the rect; drag-off and
 drag-in do not fire ``on_click``.
 """
@@ -49,7 +49,7 @@ _IconLayout = tuple[pygame.Surface, int, int]
 
 
 class Button(Widget):
-    """A clickable icon/text button (spec 04: Supplied widget - Button).
+    """A clickable icon/text button (spec 09: Button options).
 
     ``rect`` is in design space (inherited from ``Widget``); ``border_width``
     is a width in *design* pixels (0 = no border). ``on_click`` is invoked
@@ -71,7 +71,7 @@ class Button(Widget):
         self.on_click = on_click
         self._pressed = False  # left button pressed inside this rect?
         # Design-space point size for the label, or None for auto-scale
-        # (spec 04: set_font_point_size). No constructor argument:
+        # (spec 09: set_font_point_size). No constructor argument:
         # auto-scale is the default.
         self._font_point_size: int | None = None
 
@@ -79,7 +79,8 @@ class Button(Widget):
     def update(self, events: list[pygame.event.Event]) -> None:
         """Track press-to-release for click detection.
 
-        Only the left mouse button counts as a "button click" (spec 04);
+        Only the left mouse button counts as a "button click" (spec 09:
+        Button events);
         the UIManager only ever calls this on enabled widgets, but the
         guard below keeps the contract safe if called directly.
         """
@@ -95,7 +96,7 @@ class Button(Widget):
                 if clicked and self.on_click is not None:
                     self.on_click()
 
-    # -- label point size (spec 04: set_font_point_size) -------------------
+    # -- label point size (spec 09: set_font_point_size) -------------------
     def set_font_point_size(self, size: int | None) -> None:
         """Pin the label to a design-space point size, or auto-scale.
 
@@ -103,7 +104,7 @@ class Button(Widget):
         space; a positive integer renders it at exactly that point size,
         converted to pixels with the current window scale (floored).
         Non-integer and non-positive values are treated as ``None`` with
-        a log warning (spec 04: Supplied widget - Button).
+        a log warning (spec 09: Button options).
         """
         if size is None:
             self._font_point_size = None
@@ -119,7 +120,7 @@ class Button(Widget):
             return
         self._font_point_size = size
 
-    # -- rendering (spec 04: Supplied widget - Button) ---------------------
+    # -- rendering (spec 09: Button options) --------------------------------
     def draw(self, surf: pygame.Surface, theme: Theme) -> None:
         scale = current_scale()
         rect = scale.rect(self.rect.x, self.rect.y, self.rect.w, self.rect.h)
@@ -143,7 +144,7 @@ class Button(Widget):
         )
         if inner.w > 0 and inner.h > 0:
             # A sub-surface shares the overlay's pixels, so blits onto it
-            # clip exactly at the inner rect boundary (spec 04: inner
+            # clip exactly at the inner rect boundary (spec 09: inner
             # rect). Rectangular clipping only - rounded corners may let
             # content overdraw the border, which the spec accepts.
             self._draw_content(overlay.subsurface(inner), theme, fg, scale)
@@ -153,7 +154,7 @@ class Button(Widget):
         """(foreground, background) for the widget's current state.
 
         Buttons are never selected, so ``selected`` is never passed
-        (spec 04: Supplied widget - Button); precedence lives in
+        (spec 09: Button options); precedence lives in
         ``ui.state_colors``.
         """
         return state_colors(theme, enabled=self.enabled, hovered=self.hovered)
@@ -168,7 +169,7 @@ class Button(Widget):
         """Draw icon and/or text inside the inner sub-surface.
 
         The icon is laid out first (its size never depends on the label,
-        spec 04: Icon scaling); the label then gets whatever horizontal
+        spec 09: Icon scaling); the label then gets whatever horizontal
         space remains.
         """
         text = self._text_to_draw()
@@ -181,7 +182,7 @@ class Button(Widget):
             scaled, x, y = icon_layout
             inner.blit(scaled, (x, y))
 
-    # -- icon layout (spec 04: Icon scaling / Button layout) ---------------
+    # -- icon layout (spec 09: Icon scaling / Button layout) ---------------
     def _layout_icon(self, inner: pygame.Surface) -> _IconLayout | None:
         """The scaled icon and its blit position, or ``None`` if too small.
 
@@ -205,7 +206,7 @@ class Button(Widget):
             x = margin
         return scaled, x, margin
 
-    # -- text layout (spec 04: Text scaling / Button layout) ---------------
+    # -- text layout (spec 09: Text scaling / Button layout) ---------------
     def _draw_text(
         self,
         inner: pygame.Surface,
@@ -219,7 +220,7 @@ class Button(Widget):
 
         With no icon the available space is the whole inner width; with
         one it starts past the icon's right-edge margin. Less than 1px of
-        remaining space means no label at all (spec 04: Button layout -
+        remaining space means no label at all (spec 09: Button layout -
         both icon and text).
         """
         left = 0
@@ -234,7 +235,7 @@ class Button(Widget):
                 theme, text, available_width, inner.get_height()
             )
         else:
-            # Design-space point size -> pixels, floored (spec 04).
+            # Design-space point size -> pixels, floored (spec 09).
             size = max(1, int(self._font_point_size * scale.scale))
         font = theme.get_font(size)
         surface = font.render(text, True, fg)
@@ -245,7 +246,7 @@ class Button(Widget):
     def _largest_fitting_size(
         self, theme: Theme, text: str, available_width: int, available_height: int
     ) -> int:
-        """The largest point size whose rendered label fits the box (spec 04).
+        """The largest point size whose rendered label fits the box (spec 09).
 
         Content width grows monotonically with font size, so a binary
         search over [1, min(available dimensions)] is sound. The size is
