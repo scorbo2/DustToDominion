@@ -18,13 +18,15 @@ suitability before implementation is very important.
 - Does the Yaml frontmatter exist at the top of the document?
   - It is not an error if this frontmatter is missing (default to "proposed" state), but flag it as a concern.
 - Does it have a valid "status" tag? (proposed/active/superseded)
-  - If "superseded" and a "replacement" document is named, does that document exist?
+  - If the doc is "superseded" and "replacement" documents are named, do those documents exist?
 - Does the frontmatter include a "description" field?
   - A required field for all spec docs: a one-sentence summary of what the document covers. Flag a missing description as a concern.
 - Does the document have an "Open questions" section with unanswered questions?
-  - This is acceptable in the "proposed" state. For any other state, flag this as suspicious.
-- If the document is in "active" state, does it match the actual code behavior?
+  - This is acceptable in the "proposed" state. For any other state, flag this as suspicious, unless all
+    questions are clearly marked as resolved/answered.
 - If the document specifically supersedes another document, is that document marked as "superseded" with this document as the replacement?
+- If the document has an "Additional dependencies" section, are the new dependencies clearly listed, with specific versions?
+- If the document has a "Dependency changes" section, are the changes clearly specified?
 
 ## Advanced checks
 
@@ -41,9 +43,13 @@ suitability before implementation is very important.
   - Are the expected value(s) clearly defined?
   - Does the document specify a sensible default value to be used if the game config file is missing?
 - Does the document describe specific test cases ("Testing" section)?
-- Does the document have sensible acceptance criteria ("Acceptance criteria" section)?
+- Does the document have sensible acceptance criteria ("Acceptance criteria" section)? Are they clear and achievable? The section is optional per `docs/README.md`: if missing, criteria are inferred from the Testing section — verify the Testing section is strong enough to carry that weight.
 - Does the document contradict itself?
-- Does the document contradict other existing spec docs (that aren't marked as "superseded")?
+- Does the document contradict other existing spec docs (that aren't marked as "superseded")? A documented 'Amendments to previous spec docs' section is expected drift, not a contradiction, until stage 1 of the dev plan is complete.
+- If the document has an "Amendments to previous spec docs" section, does it also have a "Dev plan" section?
+  Does the Dev plan explicitly mention carrying out the amendments as stage 1?
+- Does the document have a "Dev plan" section? Fine if missing for small docs, but more than 250 lines of specification requires a staged implementation plan, unless the document is already in `active` state.
+- Does the document introduce or alter third-party dependencies? If so, does it carry the corresponding 'Additional dependencies'/'Dependency changes' section, consistent with the exact pins in requirements.txt?
 
 ## The most important question to answer
 

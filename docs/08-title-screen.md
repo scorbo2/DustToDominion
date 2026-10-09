@@ -15,99 +15,6 @@ The Title Screen lives in the `dtd/screens/title.py` module. The `screens/` subd
 with the anticipation that there will be several additional screens, and it will help
 with organization to keep them grouped.
 
-## Amendments to previous spec docs
-
-### New accessors for themes and fonts
-
-This specification amends `03-resource-packaging.md` to add new accessor methods
-to the game's `ResourceLoader` class:
-
-```python
-def get_theme_resource_ids(self) -> list[str]:
-    # Returns all resources with the prefix `themes/` whose id ends in `.json`.
-    # Recursive! Example: both `themes/blue.json` and `themes/long/path/matrix.json` are found.
-    # The returned list is sorted alphabetically by full resource id (casefold()).
-    # A sentinel display value "(Default theme)" is always added to the list.
-    # The returned list is therefore never empty (always at least size 1).
-    # The sentinel display value is always the first item in the returned list.
-    # This sentinel display value should be added to `game_constants.py` and not hard-coded.
-
-def get_font_resource_ids(self) -> list[str]:
-    # Returns all resources with the prefix `fonts/` whose id ends in `.ttf`.
-    # Recursive! Example: both `fonts/iceland.ttf` and `fonts/long/path/sahara.ttf` are found.
-    # The returned list is sorted alphabetically by full resource id (casefold()).
-    # A sentinel display value "(System default)" is always added to the list.
-    # The returned list is therefore never empty (always at least size 1).
-    # The sentinel display value is always the first item in the returned list.
-    # This sentinel display value should be added to `game_constants.py` and not hard-coded.
-```
-
-These accessors will allow all future screens to query for available fonts and themes.
-
-The "(Default theme)" and "(System default)" sentinel display values should live in `game_constants.py`.
-The existing code hard-codes "default". This should be moved to `game_constants.py`:
-
-```python
-DEFAULT_THEME_VALUE = "default"
-DEFAULT_FONT_VALUE = "default"
-DEFAULT_THEME_DISPLAY_VALUE = "(Default theme)"
-DEFAULT_FONT_DISPLAY_VALUE = "(System default)"
-```
-
-### Terminology change
-
-This specification amends `03-resource-packaging.md` to rename `get_sprite_resource()` to
-`get_image_resource()`. All references to "sprites" or "sprite images" in the spec docs and
-in code should be changed to just "images".
-
-Because this rename touches other spec docs AND existing code, that work must be done
-BEFORE the work described by this spec doc.
-
-### Music helper
-
-This specification amends `05-audio-manager.md` to add a new helper function for playing
-a music track by matching the first in a given list of candidate track ids:
-
-```python
-play_music_first_match(self, ids: Sequence[str]) -> None:
-    # For each resource id in `ids`, probe to see if a track with that id exists.
-    #   Probe: get_music_resource(id) is not None
-    # If so, it is played, and all subsequent ids in the sequence are ignored.
-    # If the sequence is exhausted with no music track found, this is a no-op.
-    # If `music_enabled` is False, this is a no-op.
-    # If a resource is found, any previously-playing music is stopped.
-    # If a resource is not found, any previously-playing music still plays.
-```
-
-### No more single global UIManager
-
-This specification amends `04-ui-widgets.md`, which currently mandates a single global
-instance of `UIManager`. We will instead move to a per-screen UIManager system - see
-the Code Layout section for more details. 
-
-### Theme and font accessors
-
-This specification amends `04-ui-widgets.md` to add accessors in the Theme
-class to retrieve the resource ids for the currently configured font and theme:
-
-```python
-def get_theme_resource_id(self) -> str:
-    # return "default" if no configured theme OR if the configured theme is not valid
-
-def get_font_resource_id(self) -> str:
-    # return "default" if no configured font OR if the configured font is not valid
-```
-
-The "default" sentinel value should exist in `game_constants.py` and
-not be hard-coded.
-
-Additionally, the UIManager class needs a function that accepts a new Theme instance:
-
-```python
-def set_theme(self, theme) -> None:
-    # the given theme replaces the one that was passed to the constructor.
-```
-
 ## Additional dependencies
 
 None.
@@ -259,32 +166,6 @@ the only transition possible is Exit Game, but a precedent should be established
 screens that stopping screen music is the main loop's responsibility.
 
 ## Testing
-
-New tests related to spec doc amendments (move these to spec 03):
-
-- `get_theme_resource_ids` with no resources in `themes/` returns a list of size 1 with item "(Default theme)"
-- `get_font_resource_ids` with no resources in `fonts/` returns a list of size 1 with item "(System default)"
-- `get_theme_resource_ids` returns all resources whose ids begin with `themes/` and end in `.json`.
-- `get_font_resource_ids` returns all resources whose ids begin with `fonts/` and end in `.ttf`.
-
-New tests related to spec doc amendments (move these to spec 04):
-
-- `get_theme_resource_id()` returns a valid resource id if one was configured.
-- `get_theme_resource_id()` returns "default" if no theme was configured.
-- `get_theme_resource_id()` returns "default" if an invalid theme was configured.
-- `get_font_resource_id()` returns a valid resource id if one was configured.
-- `get_font_resource_id()` returns "default" if no font was configured.
-- `get_font_resource_id()` returns "default" if an invalid font was configured.
-- UIManager's `set_theme` can be used to change the current theme in a UIManager. All of its widgets
-  receive the new Theme on subsequent calls to `draw()`.
-
-New tests related to spec doc amendments (move these to spec 05):
-
-- `play_music_first_match` with no valid resource ids is a no-op.
-- `play_music_first_match` with at least one valid resource id plays that track.
-- `play_music_first_match` with at least two valid resource ids plays the first in the sequence.
-- `play_music_first_match` stops previously-playing music when given a valid resource id.
-- `play_music_first_match` does NOT stop previously-playing music when given no valid resource ids.
 
 New tests specifically for Title Screen behavior (these stay in this doc):
 
