@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import pygame
 import pytest
+from loguru import logger
 
 from dtd.resource_loader import ResourceLoader
 from dtd.ui import Theme, UIManager
@@ -73,6 +74,58 @@ def _up(pos: tuple[int, int], button: int = 1) -> pygame.event.Event:
 
 def _pixel(surf: pygame.Surface, x: int, y: int) -> tuple[int, int, int, int]:
     return surf.get_at((x, y))
+
+
+def _warning_records() -> tuple[list[str], int]:
+    """Capture loguru WARNING+ messages into a list (see test_ui.py)."""
+    records: list[str] = []
+    sink_id = logger.add(lambda message: records.append(str(message)), level="WARNING")
+    return records, sink_id
+
+
+def _font_size_spy(theme: Theme) -> list[int]:
+    """Record every point size a draw requests from ``theme.get_font``."""
+    requested: list[int] = []
+    original = theme.get_font
+
+    def spy(size: int) -> pygame.font.Font:
+        requested.append(size)
+        return original(size)
+
+    theme.get_font = spy  # instance attribute shadows the bound method
+    return requested
+
+
+def _is_white(pixel: tuple[int, int, int, int]) -> bool:
+    return pixel[0] > 200 and pixel[1] > 200 and pixel[2] > 200
+
+
+def _is_text_ink(pixel: tuple[int, int, int, int]) -> bool:
+    # Red-dominant thresholds tell the red text apart from the white
+    # icon and green fill (exact-color matching is unsafe per issue #37).
+    return pixel[0] > 150 and pixel[1] < 100 and pixel[2] < 100
+
+
+def _ink_bbox(
+    screen: pygame.Surface,
+    region: tuple[int, int, int, int],
+    predicate,
+) -> tuple[int, int, int, int] | None:
+    """Tight bounding box of pixels matching ``predicate`` inside ``region``.
+
+    Returns ``(x, y, width, height)`` or ``None`` when nothing matches.
+    """
+    x0, y0, w, h = region
+    xs: list[int] = []
+    ys: list[int] = []
+    for x in range(x0, x0 + w):
+        for y in range(y0, y0 + h):
+            if predicate(screen.get_at((x, y))):
+                xs.append(x)
+                ys.append(y)
+    if not xs:
+        return None
+    return (min(xs), min(ys), max(xs) - min(xs) + 1, max(ys) - min(ys) + 1)
 
 
 class TestButtonRendering:
@@ -269,6 +322,392 @@ class TestButtonRendering:
         text_visible = any(_pixel(screen, x, y) != (0, 255, 0, 255) for x in range(0, 100) for y in range(0, 100))
         assert text_visible
         assert _pixel(screen, 120, 50) == (0, 0, 0, 255)
+
+
+class TestButtonIconAndTextLayout:
+    """Icon/text scaling, placement, and inner-rect clipping (spec 04,
+    as amended 2026-10-08). Geometry assertions run at the design
+    resolution (scale 1) so expected pixel values are exact."""
+
+    def test_icon_only_should_scale_icon_to_inner_height_minus_margins(
+        self, font_ready: None
+    ) -> None:
+        # GIVEN an icon-only button (16x16 white icon) in a 100x100 rect
+        # with no border: inner 100x100, margin 5, target height 90:
+        icon = pygame.Surface((16, 16))
+        icon.fill((255, 255, 255))
+        pygame.display.set_mode((1920, 1080))
+        button, ui, _ = _button_ui(pygame.Rect(0, 0, 100, 100), _theme(TEST_THEME_JSON), icon=icon)
+
+        # WHEN the UI draws:
+        ui.draw(pygame.display.get_surface())
+
+        # THEN the icon is scaled to 90x90 and centered horizontally
+        # (spec 04: Icon scaling / Button layout - icon only):
+        screen = pygame.display.get_surface()
+        assert _ink_bbox(screen, (0, 0, 100, 100), _is_white) == (5, 5, 90, 90)
+
+    def test_icon_with_border_should_scale_to_inner_rect_height(
+        self, font_ready: None
+    ) -> None:
+        # GIVEN a 100x100 button with a 10px border: inner rect is
+        # (10, 10, 80, 80), margin 4, target height 72:
+        icon = pygame.Surface((16, 16))
+        icon.fill((255, 255, 255))
+        pygame.display.set_mode((1920, 1080))
+        button, ui, _ = _button_ui(
+            pygame.Rect(0, 0, 100, 100), _theme(TEST_THEME_JSON), icon=icon, border_width=10
+        )
+
+        # WHEN the UI draws:
+        ui.draw(pygame.display.get_surface())
+
+        # THEN the icon scales to the INNER rect height and centers
+        # within it (spec 04: inner rect):
+        screen = pygame.display.get_surface()
+        assert _ink_bbox(screen, (0, 0, 100, 100), _is_white) == (14, 14, 72, 72)
+
+    def test_wide_icon_should_clip_at_inner_rect_boundary(
+        self, font_ready: None
+    ) -> None:
+        # GIVEN a 100x100 button with a 10px border and a 400x16 icon:
+        # the icon scales to 72px tall and ~1800px wide, far past the
+        # inner rect:
+        icon = pygame.Surface((400, 16))
+        icon.fill((255, 255, 255))
+        pygame.display.set_mode((1920, 1080))
+        button, ui, _ = _button_ui(
+            pygame.Rect(0, 0, 100, 100), _theme(TEST_THEME_JSON), icon=icon, border_width=10
+        )
+
+        # WHEN the UI draws:
+        ui.draw(pygame.display.get_surface())
+
+        # THEN the icon spans the inner rect vertically (y 14..85) but
+        # never enters the border band - clipping happens at the inner
+        # rect boundary, not the outer one (spec 04: inner rect):
+        screen = pygame.display.get_surface()
+        assert _is_white(_pixel(screen, 50, 14))
+        assert _is_white(_pixel(screen, 50, 85))
+        assert not _is_white(_pixel(screen, 50, 13))
+        assert not _is_white(_pixel(screen, 50, 86))
+        assert _pixel(screen, 5, 50) == (255, 0, 0, 255)  # border stays pure
+
+    def test_zero_or_negative_inner_rect_should_prevent_icon_and_text_from_drawing(
+        self, font_ready: None
+    ) -> None:
+        # GIVEN a 100x100 button whose 60px border leaves a negative
+        # inner rect, with both an icon and a label:
+        icon = pygame.Surface((16, 16))
+        icon.fill((255, 255, 255))
+        pygame.display.set_mode((1920, 1080))
+        theme = _theme(TEST_THEME_JSON)
+        requested_sizes = _font_size_spy(theme)
+        button, ui, _ = _button_ui(
+            pygame.Rect(0, 0, 100, 100), theme, text="OK", icon=icon, border_width=60
+        )
+
+        # WHEN the UI draws:
+        ui.draw(pygame.display.get_surface())
+
+        # THEN no icon pixels render and no font is ever requested - the
+        # label is not drawn at all (spec 04: inner rect):
+        screen = pygame.display.get_surface()
+        assert _ink_bbox(screen, (0, 0, 100, 100), _is_white) is None
+        assert requested_sizes == []
+
+    def test_icon_and_text_should_left_align_icon_and_center_text_in_remaining_space(
+        self, font_ready: None
+    ) -> None:
+        # GIVEN a 400x100 button with an icon and a label pinned to 20pt:
+        # the icon left-aligns at the margin (5,5) at 90x90, leaving
+        # x >= 100 for the label:
+        icon = pygame.Surface((16, 16))
+        icon.fill((255, 255, 255))
+        pygame.display.set_mode((1920, 1080))
+        theme = _theme(TEST_THEME_JSON)
+        button, ui, _ = _button_ui(
+            pygame.Rect(0, 0, 400, 100), theme, text="GO", icon=icon
+        )
+        button.set_font_point_size(20)
+
+        # WHEN the UI draws:
+        ui.draw(pygame.display.get_surface())
+
+        # THEN the icon is left-aligned with its margin, and the label
+        # is centered in the remaining space right of the icon
+        # (spec 04: Button layout - both icon and text):
+        screen = pygame.display.get_surface()
+        assert _ink_bbox(screen, (0, 0, 400, 100), _is_white) == (5, 5, 90, 90)
+        font = theme.get_font(20)
+        text_w, text_h = font.size("GO")
+        expected_x = 100 + (300 - text_w) // 2
+        expected_y = (100 - text_h) // 2
+        bbox = _ink_bbox(screen, (0, 0, 400, 100), _is_text_ink)
+        assert bbox is not None
+        bx, by, bw, bh = bbox
+        assert bx >= expected_x and bx + bw <= expected_x + text_w
+        assert by >= expected_y and by + bh <= expected_y + text_h
+
+    def test_wide_icon_should_suppress_text_when_no_space_remains(
+        self, font_ready: None
+    ) -> None:
+        # GIVEN a 100x100 button whose 400x16 icon (scaled to ~2250px
+        # wide) leaves the label less than 1px of horizontal space:
+        icon = pygame.Surface((400, 16))
+        icon.fill((255, 255, 255))
+        pygame.display.set_mode((1920, 1080))
+        button, ui, _ = _button_ui(
+            pygame.Rect(0, 0, 100, 100), _theme(TEST_THEME_JSON), text="OK", icon=icon
+        )
+        button.set_font_point_size(20)
+
+        # WHEN the UI draws:
+        ui.draw(pygame.display.get_surface())
+
+        # THEN no label ink renders anywhere (spec 04: Button layout -
+        # both icon and text, remaining space < 1px):
+        screen = pygame.display.get_surface()
+        assert _ink_bbox(screen, (0, 0, 100, 100), _is_text_ink) is None
+
+    def test_icon_size_should_not_change_with_or_without_text(
+        self, font_ready: None
+    ) -> None:
+        # GIVEN the same icon in the same rect, once alone and once
+        # with a label:
+        pygame.display.set_mode((1920, 1080))
+        screen = pygame.display.get_surface()
+        bboxes: list[tuple[int, int, int, int] | None] = []
+        for text in (None, "OK"):
+            icon = pygame.Surface((16, 16))
+            icon.fill((255, 255, 255))
+            button, ui, _ = _button_ui(
+                pygame.Rect(0, 0, 400, 100), _theme(TEST_THEME_JSON), text=text, icon=icon
+            )
+            screen.fill((0, 0, 0, 255))
+            ui.draw(screen)
+            bboxes.append(_ink_bbox(screen, (0, 0, 400, 100), _is_white))
+
+        # THEN the icon is identically sized in both (only its position
+        # may differ, spec 04: Icon scaling):
+        assert bboxes[0] is not None
+        assert bboxes[1] is not None
+        assert bboxes[0][2:] == bboxes[1][2:]
+
+    def test_rect_change_should_rescale_icon_to_new_inner_rect(
+        self, font_ready: None
+    ) -> None:
+        # GIVEN an icon-only button rendered in a 100x100 rect:
+        icon = pygame.Surface((16, 16))
+        icon.fill((255, 255, 255))
+        pygame.display.set_mode((1920, 1080))
+        button, ui, _ = _button_ui(pygame.Rect(0, 0, 100, 100), _theme(TEST_THEME_JSON), icon=icon)
+
+        # WHEN the rect grows to 200x200 and the UI redraws:
+        screen = pygame.display.get_surface()
+        button.rect = pygame.Rect(0, 0, 200, 200)
+        screen.fill((0, 0, 0, 255))
+        ui.draw(screen)
+
+        # THEN the icon rescales to the new inner rect (margin 10,
+        # target 180, centered at (10, 10), spec 04: Icon scaling):
+        assert _ink_bbox(screen, (0, 0, 200, 200), _is_white) == (10, 10, 180, 180)
+
+    def test_set_font_point_size_with_positive_size_should_render_at_that_size(
+        self, font_ready: None
+    ) -> None:
+        # GIVEN a text button at the design resolution with its label
+        # pinned to 20pt:
+        pygame.display.set_mode((1920, 1080))
+        theme = _theme(TEST_THEME_JSON)
+        requested_sizes = _font_size_spy(theme)
+        button, ui, _ = _button_ui(pygame.Rect(0, 0, 400, 100), theme, text="OK")
+        button.set_font_point_size(20)
+
+        # WHEN the UI draws:
+        ui.draw(pygame.display.get_surface())
+
+        # THEN the font is requested at exactly 20px - no auto-scale
+        # search (spec 04: set_font_point_size):
+        assert set(requested_sizes) == {20}
+        assert _ink_bbox(pygame.display.get_surface(), (0, 0, 400, 100), _is_text_ink) is not None
+
+    def test_set_font_point_size_should_convert_design_points_to_pixels_with_floor(
+        self, font_ready: None
+    ) -> None:
+        # GIVEN a 1280x720 window (scale 2/3) and a label pinned to 25
+        # design-space points:
+        pygame.display.set_mode((1280, 720))
+        theme = _theme(TEST_THEME_JSON)
+        requested_sizes = _font_size_spy(theme)
+        button, ui, _ = _button_ui(pygame.Rect(0, 0, 600, 150), theme, text="OK")
+        button.set_font_point_size(25)
+
+        # WHEN the UI draws:
+        ui.draw(pygame.display.get_surface())
+
+        # THEN the requested pixel size is floor(25 * 2/3) = 16
+        # (spec 04: design-space point size, rounding=floor):
+        assert set(requested_sizes) == {16}
+
+    def test_fixed_size_text_smaller_than_inner_rect_should_be_centered(
+        self, font_ready: None
+    ) -> None:
+        # GIVEN a 400x100 border-less button with a 20pt label much
+        # smaller than the inner rect:
+        pygame.display.set_mode((1920, 1080))
+        theme = _theme(TEST_THEME_JSON)
+        button, ui, _ = _button_ui(pygame.Rect(0, 0, 400, 100), theme, text="OK")
+        button.set_font_point_size(20)
+
+        # WHEN the UI draws:
+        ui.draw(pygame.display.get_surface())
+
+        # THEN every ink pixel falls inside the centered text surface
+        # (spec 04: fixed-size text is centered in its available space):
+        text_w, text_h = theme.get_font(20).size("OK")
+        expected_x = (400 - text_w) // 2
+        expected_y = (100 - text_h) // 2
+        bbox = _ink_bbox(pygame.display.get_surface(), (0, 0, 400, 100), _is_text_ink)
+        assert bbox is not None
+        bx, by, bw, bh = bbox
+        assert bx >= expected_x and bx + bw <= expected_x + text_w
+        assert by >= expected_y and by + bh <= expected_y + text_h
+
+    def test_fixed_size_text_too_large_should_clip_inside_the_rect(
+        self, font_ready: None
+    ) -> None:
+        # GIVEN a 100x100 border-less button with a 60pt label far too
+        # large for it (inner rect == rect here):
+        pygame.display.set_mode((1920, 1080))
+        button, ui, _ = _button_ui(pygame.Rect(0, 0, 100, 100), _theme(TEST_THEME_JSON), text="OK OK")
+        button.set_font_point_size(60)
+
+        # WHEN the UI draws (must not raise):
+        ui.draw(pygame.display.get_surface())
+
+        # THEN nothing renders outside the rect (spec 04: fixed-size text
+        # clips at the inner rect boundary):
+        screen = pygame.display.get_surface()
+        outside = [
+            _pixel(screen, x, y)
+            for x in range(100, 110)
+            for y in range(0, 110)
+        ] + [_pixel(screen, x, y) for x in range(0, 110) for y in range(100, 110)]
+        assert all(p == (0, 0, 0, 255) for p in outside)
+
+    def test_auto_scale_without_icon_should_center_text_in_inner_rect(
+        self, font_ready: None
+    ) -> None:
+        # GIVEN a text-only 400x100 button with no point size set:
+        pygame.display.set_mode((1920, 1080))
+        button, ui, _ = _button_ui(pygame.Rect(0, 0, 400, 100), _theme(TEST_THEME_JSON), text="OK")
+
+        # WHEN the UI draws:
+        ui.draw(pygame.display.get_surface())
+
+        # THEN the label ink is centered within the inner rect (spec 04:
+        # Button layout - text only; tolerance covers glyph side bearings):
+        bbox = _ink_bbox(pygame.display.get_surface(), (0, 0, 400, 100), _is_text_ink)
+        assert bbox is not None
+        bx, by, bw, bh = bbox
+        assert abs((bx + bw / 2) - 200) <= 5
+        assert abs((by + bh / 2) - 50) <= 5
+
+    def test_auto_scale_with_icon_should_keep_text_in_remaining_space(
+        self, font_ready: None
+    ) -> None:
+        # GIVEN a 400x100 button with an icon and auto-scaled text:
+        icon = pygame.Surface((16, 16))
+        icon.fill((255, 255, 255))
+        pygame.display.set_mode((1920, 1080))
+        button, ui, _ = _button_ui(
+            pygame.Rect(0, 0, 400, 100), _theme(TEST_THEME_JSON), text="OK", icon=icon
+        )
+
+        # WHEN the UI draws:
+        ui.draw(pygame.display.get_surface())
+
+        # THEN the auto-scaled label never crosses into the icon's
+        # reserved space (x >= 100) and is present within the remainder
+        # (spec 04: Text scaling with reduced space):
+        screen = pygame.display.get_surface()
+        assert _ink_bbox(screen, (0, 0, 100, 100), _is_text_ink) is None
+        assert _ink_bbox(screen, (100, 0, 300, 100), _is_text_ink) is not None
+
+    def test_auto_scale_should_height_limit_point_size_for_short_wide_button(
+        self, font_ready: None
+    ) -> None:
+        # GIVEN a 400x20 button (width is plentiful, height is not) with
+        # auto-scaled text:
+        pygame.display.set_mode((1920, 1080))
+        theme = _theme(TEST_THEME_JSON)
+        requested_sizes = _font_size_spy(theme)
+        button, ui, _ = _button_ui(pygame.Rect(0, 0, 400, 20), theme, text="OK")
+
+        # WHEN the UI draws:
+        ui.draw(pygame.display.get_surface())
+
+        # THEN the size actually used fits the 20px inner height - a
+        # width-only search would have picked the 20 upper bound, whose
+        # height exceeds the box (spec 04: auto-scale must height-limit):
+        assert theme.get_font(20).get_height() > 20  # premise of the test
+
+        def fits(size: int) -> bool:
+            font = theme.get_font(size)
+            return font.get_height() <= 20 and font.size("OK")[0] <= 400
+
+        chosen = [size for size in set(requested_sizes) if fits(size)]
+        assert chosen
+        assert max(chosen) < 20
+
+    @pytest.mark.parametrize("invalid_size", [0, -5, 12.5, "big", True])
+    def test_set_font_point_size_with_invalid_value_should_warn_and_use_auto_scale(
+        self, font_ready: None, invalid_size: object
+    ) -> None:
+        # GIVEN a button whose label was pinned to 50pt:
+        pygame.display.set_mode((1920, 1080))
+        theme = _theme(TEST_THEME_JSON)
+        button, ui, _ = _button_ui(pygame.Rect(0, 0, 400, 100), theme, text="OK")
+        button.set_font_point_size(50)
+
+        # WHEN an invalid value is applied (and the UI redraws):
+        records, sink_id = _warning_records()
+        try:
+            button.set_font_point_size(invalid_size)  # type: ignore[arg-type]
+        finally:
+            logger.remove(sink_id)
+        requested_sizes = _font_size_spy(theme)
+        ui.draw(pygame.display.get_surface())
+
+        # THEN a warning was logged and auto-scale is back in effect -
+        # the search probes multiple sizes instead of one fixed size
+        # (spec 04: set_font_point_size invalid values):
+        assert any("set_font_point_size" in record for record in records)
+        assert len(set(requested_sizes)) > 1
+
+    def test_set_font_point_size_with_none_should_not_warn_and_re_enable_auto_scale(
+        self, font_ready: None
+    ) -> None:
+        # GIVEN a button pinned to 20pt:
+        pygame.display.set_mode((1920, 1080))
+        theme = _theme(TEST_THEME_JSON)
+        button, ui, _ = _button_ui(pygame.Rect(0, 0, 400, 100), theme, text="OK")
+        button.set_font_point_size(20)
+
+        # WHEN None is applied (the documented default) and the UI redraws:
+        records, sink_id = _warning_records()
+        try:
+            button.set_font_point_size(None)
+        finally:
+            logger.remove(sink_id)
+        requested_sizes = _font_size_spy(theme)
+        ui.draw(pygame.display.get_surface())
+
+        # THEN no warning is logged (None is valid) and auto-scale is
+        # re-enabled, toggling back from fixed size (spec 04):
+        assert records == []
+        assert len(set(requested_sizes)) > 1
 
 
 class TestButtonClick:

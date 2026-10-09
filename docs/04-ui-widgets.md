@@ -466,6 +466,7 @@ The spec can be implemented in stages:
    nothing rendered, obvious once the Title Screen drew a background. **Completed 2026-10-06**
 9. Amendment from 2026-10-08: add implementation and tests for `set_font_point_size()` and button layout.
    Adjust existing code according to icon and text placement and sizing rules, and inner rect clipping rules.
+   **Completed 2026-10-08**
 
 Upon completion, if all tests pass, mark this document as "active". (Done 2026-10-01;
 full suite green at 280 tests.)
