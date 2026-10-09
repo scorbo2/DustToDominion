@@ -1,7 +1,7 @@
-"""Unit tests for the ``Button`` widget (spec 04: Supplied widget - Button).
+"""Unit tests for the ``Button`` widget (spec 09: Button options).
 
 Mouse events are synthesized against a dummy display (hermetic, per spec
-04: Testing); pixel assertions read the display surface after
+09: Testing); pixel assertions read the display surface after
 ``ui.draw``.
 """
 from __future__ import annotations
@@ -155,7 +155,7 @@ class TestButtonRendering:
         # WHEN the UI draws:
         ui.draw(pygame.display.get_surface())
 
-        # THEN hover colors are used (spec 04: on-hover color changing):
+        # THEN hover colors are used (spec 09: Button options):
         assert button.hovered is True
         screen = pygame.display.get_surface()
         assert _pixel(screen, 320, 180) == (255, 255, 0, 255)
@@ -300,7 +300,7 @@ class TestButtonRendering:
         ui.draw(pygame.display.get_surface())
 
         # THEN nothing renders outside the rect (clipped at the boundary,
-        # spec 04):
+        # spec 09):
         screen = pygame.display.get_surface()
         outside = [_pixel(screen, x, y) for x in range(50, 60) for y in range(0, 30)]
         assert all(p == (0, 0, 0, 255) for p in outside)
@@ -325,7 +325,7 @@ class TestButtonRendering:
 
 
 class TestButtonIconAndTextLayout:
-    """Icon/text scaling, placement, and inner-rect clipping (spec 04,
+    """Icon/text scaling, placement, and inner-rect clipping (spec 09,
     as amended 2026-10-08). Geometry assertions run at the design
     resolution (scale 1) so expected pixel values are exact."""
 
@@ -343,7 +343,7 @@ class TestButtonIconAndTextLayout:
         ui.draw(pygame.display.get_surface())
 
         # THEN the icon is scaled to 90x90 and centered horizontally
-        # (spec 04: Icon scaling / Button layout - icon only):
+        # (spec 09: Icon scaling / Button layout - icon only):
         screen = pygame.display.get_surface()
         assert _ink_bbox(screen, (0, 0, 100, 100), _is_white) == (5, 5, 90, 90)
 
@@ -363,7 +363,7 @@ class TestButtonIconAndTextLayout:
         ui.draw(pygame.display.get_surface())
 
         # THEN the icon scales to the INNER rect height and centers
-        # within it (spec 04: inner rect):
+        # within it (spec 09: inner rect):
         screen = pygame.display.get_surface()
         assert _ink_bbox(screen, (0, 0, 100, 100), _is_white) == (14, 14, 72, 72)
 
@@ -385,7 +385,7 @@ class TestButtonIconAndTextLayout:
 
         # THEN the icon spans the inner rect vertically (y 14..85) but
         # never enters the border band - clipping happens at the inner
-        # rect boundary, not the outer one (spec 04: inner rect):
+        # rect boundary, not the outer one (spec 09: inner rect):
         screen = pygame.display.get_surface()
         assert _is_white(_pixel(screen, 50, 14))
         assert _is_white(_pixel(screen, 50, 85))
@@ -411,7 +411,7 @@ class TestButtonIconAndTextLayout:
         ui.draw(pygame.display.get_surface())
 
         # THEN no icon pixels render and no font is ever requested - the
-        # label is not drawn at all (spec 04: inner rect):
+        # label is not drawn at all (spec 09: inner rect):
         screen = pygame.display.get_surface()
         assert _ink_bbox(screen, (0, 0, 100, 100), _is_white) is None
         assert requested_sizes == []
@@ -436,7 +436,7 @@ class TestButtonIconAndTextLayout:
 
         # THEN the icon is left-aligned with its margin, and the label
         # is centered in the remaining space right of the icon
-        # (spec 04: Button layout - both icon and text):
+        # (spec 09: Button layout - both icon and text):
         screen = pygame.display.get_surface()
         assert _ink_bbox(screen, (0, 0, 400, 100), _is_white) == (5, 5, 90, 90)
         font = theme.get_font(20)
@@ -465,7 +465,7 @@ class TestButtonIconAndTextLayout:
         # WHEN the UI draws:
         ui.draw(pygame.display.get_surface())
 
-        # THEN no label ink renders anywhere (spec 04: Button layout -
+        # THEN no label ink renders anywhere (spec 09: Button layout -
         # both icon and text, remaining space < 1px):
         screen = pygame.display.get_surface()
         assert _ink_bbox(screen, (0, 0, 100, 100), _is_text_ink) is None
@@ -489,7 +489,7 @@ class TestButtonIconAndTextLayout:
             bboxes.append(_ink_bbox(screen, (0, 0, 400, 100), _is_white))
 
         # THEN the icon is identically sized in both (only its position
-        # may differ, spec 04: Icon scaling):
+        # may differ, spec 09: Icon scaling):
         assert bboxes[0] is not None
         assert bboxes[1] is not None
         assert bboxes[0][2:] == bboxes[1][2:]
@@ -510,7 +510,7 @@ class TestButtonIconAndTextLayout:
         ui.draw(screen)
 
         # THEN the icon rescales to the new inner rect (margin 10,
-        # target 180, centered at (10, 10), spec 04: Icon scaling):
+        # target 180, centered at (10, 10), spec 09: Icon scaling):
         assert _ink_bbox(screen, (0, 0, 200, 200), _is_white) == (10, 10, 180, 180)
 
     def test_set_font_point_size_with_positive_size_should_render_at_that_size(
@@ -528,7 +528,7 @@ class TestButtonIconAndTextLayout:
         ui.draw(pygame.display.get_surface())
 
         # THEN the font is requested at exactly 20px - no auto-scale
-        # search (spec 04: set_font_point_size):
+        # search (spec 09: set_font_point_size):
         assert set(requested_sizes) == {20}
         assert _ink_bbox(pygame.display.get_surface(), (0, 0, 400, 100), _is_text_ink) is not None
 
@@ -547,7 +547,7 @@ class TestButtonIconAndTextLayout:
         ui.draw(pygame.display.get_surface())
 
         # THEN the requested pixel size is floor(25 * 2/3) = 16
-        # (spec 04: design-space point size, rounding=floor):
+        # (spec 09: design-space point size, rounding=floor):
         assert set(requested_sizes) == {16}
 
     def test_fixed_size_text_smaller_than_inner_rect_should_be_centered(
@@ -564,7 +564,7 @@ class TestButtonIconAndTextLayout:
         ui.draw(pygame.display.get_surface())
 
         # THEN every ink pixel falls inside the centered text surface
-        # (spec 04: fixed-size text is centered in its available space):
+        # (spec 09: fixed-size text is centered in its available space):
         text_w, text_h = theme.get_font(20).size("OK")
         expected_x = (400 - text_w) // 2
         expected_y = (100 - text_h) // 2
@@ -586,7 +586,7 @@ class TestButtonIconAndTextLayout:
         # WHEN the UI draws (must not raise):
         ui.draw(pygame.display.get_surface())
 
-        # THEN nothing renders outside the rect (spec 04: fixed-size text
+        # THEN nothing renders outside the rect (spec 09: fixed-size text
         # clips at the inner rect boundary):
         screen = pygame.display.get_surface()
         outside = [
@@ -606,7 +606,7 @@ class TestButtonIconAndTextLayout:
         # WHEN the UI draws:
         ui.draw(pygame.display.get_surface())
 
-        # THEN the label ink is centered within the inner rect (spec 04:
+        # THEN the label ink is centered within the inner rect (spec 09:
         # Button layout - text only; tolerance covers glyph side bearings):
         bbox = _ink_bbox(pygame.display.get_surface(), (0, 0, 400, 100), _is_text_ink)
         assert bbox is not None
@@ -630,7 +630,7 @@ class TestButtonIconAndTextLayout:
 
         # THEN the auto-scaled label never crosses into the icon's
         # reserved space (x >= 100) and is present within the remainder
-        # (spec 04: Text scaling with reduced space):
+        # (spec 09: Text scaling with reduced space):
         screen = pygame.display.get_surface()
         assert _ink_bbox(screen, (0, 0, 100, 100), _is_text_ink) is None
         assert _ink_bbox(screen, (100, 0, 300, 100), _is_text_ink) is not None
@@ -650,7 +650,7 @@ class TestButtonIconAndTextLayout:
 
         # THEN the size actually used fits the 20px inner height - a
         # width-only search would have picked the 20 upper bound, whose
-        # height exceeds the box (spec 04: auto-scale must height-limit):
+        # height exceeds the box (spec 09: auto-scale must height-limit):
         assert theme.get_font(20).get_height() > 20  # premise of the test
 
         def fits(size: int) -> bool:
@@ -682,7 +682,7 @@ class TestButtonIconAndTextLayout:
 
         # THEN a warning was logged and auto-scale is back in effect -
         # the search probes multiple sizes instead of one fixed size
-        # (spec 04: set_font_point_size invalid values):
+        # (spec 09: set_font_point_size invalid values):
         assert any("set_font_point_size" in record for record in records)
         assert len(set(requested_sizes)) > 1
 
@@ -705,7 +705,7 @@ class TestButtonIconAndTextLayout:
         ui.draw(pygame.display.get_surface())
 
         # THEN no warning is logged (None is valid) and auto-scale is
-        # re-enabled, toggling back from fixed size (spec 04):
+        # re-enabled, toggling back from fixed size (spec 09):
         assert records == []
         assert len(set(requested_sizes)) > 1
 
@@ -743,7 +743,7 @@ class TestButtonClick:
         # WHEN press+release happen at that point:
         ui.update([_down(pos), _up(pos)])
 
-        # THEN the click registers consistently (spec 04: Testing):
+        # THEN the click registers consistently (spec 09: Testing):
         assert len(clicks) == 1
 
     def test_release_outside_after_inside_press_should_not_fire(
@@ -757,7 +757,7 @@ class TestButtonClick:
         # WHEN the release happens outside (drag-off):
         ui.update([_up((700, 400))])
 
-        # THEN no click fires (spec 04: avoids drag-off false clicks):
+        # THEN no click fires (spec 09: Button events):
         assert len(clicks) == 0
 
     def test_press_outside_release_inside_should_not_fire(
@@ -796,7 +796,7 @@ class TestButtonClick:
         # WHEN only the right mouse button is used:
         ui.update([_down((320, 180), button=3), _up((320, 180), button=3)])
 
-        # THEN no click fires (only the left button counts, spec 04):
+        # THEN no click fires (only the left button counts, spec 09):
         assert len(clicks) == 0
 
     def test_button_without_on_click_should_not_raise_on_click(

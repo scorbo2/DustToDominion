@@ -39,7 +39,7 @@ Rendering contract (spec 07: Visual appearance):
   thicker than half the height) means no pagers and an inoperative -
   though not disabled - widget: a client geometry problem.
 - A click is a left-button press *and* release inside the same pager
-  square (the same rule as Button, spec 04).
+  square (the same rule as Button, spec 09: Button events).
 """
 from __future__ import annotations
 
@@ -242,7 +242,7 @@ class ChoiceList(Widget):
         left, right = pagers
         return pygame.Rect(left.right, inner.y, right.left - left.right, inner.h)
 
-    # -- input (spec 07: click rules identical to Button, spec 04) ---------
+    # -- input (spec 07: click rules identical to Button, spec 09) ---------
     def update(self, events: list[pygame.event.Event]) -> None:
         """Track press-to-release on each pager control.
 
