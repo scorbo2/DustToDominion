@@ -20,10 +20,18 @@ SUPPORTED_RESOLUTIONS = ("1280x720", "1920x1080", "2560x1440")
 DEFAULT_FULLSCREEN_RESOLUTION = "1920x1080"
 
 # --- Audio manager (spec 05) -----------------------------------------------
-#: The mixer channel budget for all sfx playback (spec 05: Channel budget).
-#: One-shot plays and sfx loops share this single pool; when it is exhausted,
-#: further play requests are silently ignored by pygame.
-AUDIO_CHANNEL_BUDGET = 16
+#: Per-category channel counts for the reserved mixer pool (spec 05,
+#: amendment 2026-10-09: Channel budget). The pool is split into fixed
+#: contiguous index ranges, in this order: game sfx 0-11, UI sfx 12-14,
+#: speech 15.
+GAME_SFX_CHANNEL_COUNT = 12
+UI_SFX_CHANNEL_COUNT = 3
+SPEECH_CHANNEL_COUNT = 1
+#: The mixer channel budget, derived from the category counts so the total
+#: and the parts can never drift apart (spec 05: Channel budget).
+AUDIO_CHANNEL_BUDGET = (
+    GAME_SFX_CHANNEL_COUNT + UI_SFX_CHANNEL_COUNT + SPEECH_CHANNEL_COUNT
+)
 #: The allowable volume range, as integer percentages (spec 05: Validation).
 #: 0 is mute, 100 is full volume. Shared by the config validation rules and
 #: the runtime setter clamping so the two can never drift apart.

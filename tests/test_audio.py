@@ -22,7 +22,7 @@ from dtd import audio, game_config, resource_loader
 from dtd.audio import AudioManager
 from dtd.errors import ConfigError
 from dtd.game_config import AudioConfig
-from dtd.game_constants import AUDIO_CHANNEL_BUDGET
+from dtd.game_constants import AUDIO_CHANNEL_BUDGET, GAME_SFX_CHANNEL_COUNT
 from dtd.game_config import ResourcesConfig
 from dtd.resource_loader import ResourceLoader
 
@@ -31,8 +31,9 @@ SFX_LASER = "audio/sfx/laser.wav"
 SFX_LONG_HIT = "audio/sfx/long_hit.wav"
 MUSIC_THEME = "audio/music/theme.wav"
 MUSIC_AMBIENT = "audio/music/ambient.wav"
-#: 16 distinct ids so the channel budget can be exhausted exactly.
-LOOP_IDS = [f"audio/sfx/loop{i:02d}.wav" for i in range(AUDIO_CHANNEL_BUDGET)]
+#: 12 distinct ids so the reserved game-sfx channel range can be
+#: exhausted exactly (spec 05 amendment: Channel budget).
+LOOP_IDS = [f"audio/sfx/loop{i:02d}.wav" for i in range(GAME_SFX_CHANNEL_COUNT)]
 
 
 @pytest.fixture
@@ -104,48 +105,6 @@ def _channels_playing(sound: pygame.mixer.Sound) -> list[int]:
     return indices
 
 
-class _ChannelSpy:
-    """Delegates to a real mixer channel but counts ``stop()`` calls.
-
-    ``pygame.mixer.Channel`` is an immutable C type in pygame-ce 2.5.8, so
-    its methods cannot be monkeypatched; wrapping the channels that
-    ``find_channel`` hands out is the observation point instead.
-    """
-
-    def __init__(self, real: pygame.mixer.Channel) -> None:
-        self._real = real
-        self.id = real.id
-        self.stop_count = 0
-
-    def play(self, *args, **kwargs):
-        return self._real.play(*args, **kwargs)
-
-    def stop(self):
-        self.stop_count += 1
-        return self._real.stop()
-
-    def get_busy(self):
-        return self._real.get_busy()
-
-
-def _spy_find_channel(monkeypatch: pytest.MonkeyPatch) -> list[_ChannelSpy]:
-    """Every channel ``find_channel`` returns is wrapped so stop calls
-    can be counted."""
-    spies: list[_ChannelSpy] = []
-    real_find = pygame.mixer.find_channel
-
-    def spy_find(force: bool = False) -> _ChannelSpy | None:
-        channel = real_find(force=force)
-        if channel is None:
-            return None
-        spy = _ChannelSpy(channel)
-        spies.append(spy)
-        return spy
-
-    monkeypatch.setattr(pygame.mixer, "find_channel", spy_find)
-    return spies
-
-
 def _spy_music_load(monkeypatch: pytest.MonkeyPatch) -> list[bytes]:
     """Record the raw bytes each ``mixer.music.load`` call receives."""
     loaded: list[bytes] = []
@@ -206,10 +165,13 @@ def _config_payload(home: Path) -> dict:
 
 class TestConstructor:
     def test_should_set_channel_budget_to_specified_constant(self, audio_manager: None) -> None:
-        # Spec 05: Channel budget - the mixer gets a 16-channel pool at
-        # construction (which happens at startup, after mixer.init).
+        # Spec 05 (amendment): the mixer gets a 16-channel pool at
+        # construction (which happens at startup, after mixer.init), and
+        # that total is derived from the 12/3/1 category counts so the
+        # parts and the whole can never drift apart.
         assert pygame.mixer.get_num_channels() == AUDIO_CHANNEL_BUDGET
         assert AUDIO_CHANNEL_BUDGET == 16
+        assert GAME_SFX_CHANNEL_COUNT == 12
 
     def test_with_null_config_should_use_defaults(self, loaded_loader: ResourceLoader) -> None:
         # Spec 05: a missing/null audio section means defaults.
@@ -232,41 +194,81 @@ class TestConstructor:
         assert pygame.mixer.music.get_volume() == _vol(0.5)
 
 
-class TestPlaySfx:
-    def test_when_sfx_disabled_should_be_silent_noop(self, loaded_loader: ResourceLoader) -> None:
-        # Spec 05: invoking play_sfx when game_sfx_enabled is False does nothing.
+class TestPlayGameSfx:
+    def test_when_game_sfx_disabled_should_be_silent_noop(self, loaded_loader: ResourceLoader) -> None:
+        # Spec 05: invoking play_game_sfx when game_sfx_enabled is False does nothing.
         manager = AudioManager(loaded_loader, AudioConfig(game_sfx_enabled=False))
-        manager.play_sfx(SFX_BOOM)
+        manager.play_game_sfx(SFX_BOOM)
         assert _busy_channel_indices() == []
 
     def test_with_nonexistent_id_should_be_silent_noop(self, audio_manager: None) -> None:
         # Spec 05: it is not an error if the id does not resolve to an sfx.
-        audio_manager.play_sfx("audio/sfx/does_not_exist.wav")
+        audio_manager.play_game_sfx("audio/sfx/does_not_exist.wav")
         assert _busy_channel_indices() == []
 
     def test_with_valid_id_should_play_at_configured_volume(
         self, loaded_loader: ResourceLoader
     ) -> None:
         # Spec 05: the one-shot plays at the currently configured volume.
+        # The volume lives on the channel, not on the Sound, so a Sound
+        # shared with another category stays independent (spec 05:
+        # Adjusting volume).
         manager = AudioManager(loaded_loader, AudioConfig(game_sfx_volume=50))
-        manager.play_sfx(SFX_BOOM)
+        manager.play_game_sfx(SFX_BOOM)
         sound = loaded_loader.get_sfx_resource(SFX_BOOM)
-        assert sound.get_volume() == _vol(0.5)
-        assert len(_channels_playing(sound)) == 1
+        playing = _channels_playing(sound)
+        assert len(playing) == 1
+        assert pygame.mixer.Channel(playing[0]).get_volume() == _vol(0.5)
+
+    def test_when_no_free_game_channels_should_be_silent_noop(
+        self, audio_manager: None, loaded_loader: ResourceLoader
+    ) -> None:
+        # GIVEN the entire reserved game-sfx range occupied by loops:
+        audio_manager.set_active_loops(frozenset(LOOP_IDS))
+        assert len(_busy_channel_indices()) == GAME_SFX_CHANNEL_COUNT
+
+        # WHEN a one-shot is requested with no free game channel:
+        audio_manager.play_game_sfx(SFX_BOOM)
+
+        # THEN it is a silent no-op - a busy channel is never stolen
+        # (spec 05: Channel budget):
+        assert _channels_playing(loaded_loader.get_sfx_resource(SFX_BOOM)) == []
+        assert len(_busy_channel_indices()) == GAME_SFX_CHANNEL_COUNT
+
+    def test_when_lower_channels_busy_should_pick_lowest_idle_channel(
+        self, audio_manager: None, loaded_loader: ResourceLoader
+    ) -> None:
+        # GIVEN three long one-shots occupying the lowest channels 0-2:
+        long_hit = loaded_loader.get_sfx_resource(SFX_LONG_HIT)
+        audio_manager.play_game_sfx(SFX_LONG_HIT)
+        audio_manager.play_game_sfx(SFX_LONG_HIT)
+        audio_manager.play_game_sfx(SFX_LONG_HIT)
+        assert _channels_playing(long_hit) == [0, 1, 2]
+        # AND a loop occupying the next idle channel (3):
+        audio_manager.set_active_loops(frozenset({SFX_BOOM}))
+        assert _channels_playing(loaded_loader.get_sfx_resource(SFX_BOOM)) == [3]
+
+        # WHEN the loop's channel is freed again:
+        audio_manager.stop_loops()
+
+        # THEN the next one-shot takes the lowest IDLE channel (3) and
+        # never a busy one (spec 05: Channel budget):
+        audio_manager.play_game_sfx(SFX_LONG_HIT)
+        assert _channels_playing(long_hit) == [0, 1, 2, 3]
 
     def test_with_music_typed_id_should_do_nothing(self, audio_manager: None) -> None:
         # Spec 05: a music-typed resource id is not an sfx - nothing happens.
-        audio_manager.play_sfx(MUSIC_THEME)
+        audio_manager.play_game_sfx(MUSIC_THEME)
         assert _busy_channel_indices() == []
 
     def test_when_id_is_active_loop_should_play_one_off_alongside_loop(
         self, audio_manager: None, loaded_loader: ResourceLoader
     ) -> None:
-        # Spec 05: play_sfx on an active-loop id adds a one-shot on top of
+        # Spec 05: play_game_sfx on an active-loop id adds a one-shot on top of
         # the loop (the loop keeps running).
         sound = loaded_loader.get_sfx_resource(SFX_BOOM)
         audio_manager.set_active_loops(frozenset({SFX_BOOM}))
-        audio_manager.play_sfx(SFX_BOOM)
+        audio_manager.play_game_sfx(SFX_BOOM)
         assert len(_channels_playing(sound)) == 2
 
 
@@ -288,7 +290,7 @@ class TestSetActiveLoops:
         # And a later empty set is still a clean no-op:
         audio_manager.set_active_loops(frozenset())
 
-    def test_when_sfx_disabled_should_be_silent_noop(self, loaded_loader: ResourceLoader) -> None:
+    def test_when_game_sfx_disabled_should_be_silent_noop(self, loaded_loader: ResourceLoader) -> None:
         # Spec 05: invoking set_active_loops when game_sfx_enabled is False does nothing.
         manager = AudioManager(loaded_loader, AudioConfig(game_sfx_enabled=False))
         manager.set_active_loops(frozenset({SFX_BOOM}))
@@ -311,22 +313,39 @@ class TestSetActiveLoops:
     ) -> None:
         # Spec 05: idempotent per frame - an unchanged set never restarts
         # (and re-stutters) an already-running loop.
-        spies = _spy_find_channel(monkeypatch)
+        # GIVEN a running loop, with the allocator's find_free wrapped so
+        # any channel acquisition would be recorded (pygame's Channel is
+        # an immutable C type, so the allocator is the observation
+        # point):
+        acquired: list = []
+        allocator = audio_manager._game_sfx_allocator
+        real_find_free = allocator.find_free
+
+        def spy_find_free():
+            channel = real_find_free()
+            acquired.append(channel)
+            return channel
+
+        monkeypatch.setattr(allocator, "find_free", spy_find_free)
         sound = loaded_loader.get_sfx_resource(SFX_BOOM)
         audio_manager.set_active_loops(frozenset({SFX_BOOM}))
+        assert len(acquired) == 1
         original_channel = _channels_playing(sound)[0]
+
         # WHEN the same set is submitted again:
         audio_manager.set_active_loops(frozenset({SFX_BOOM}))
-        # THEN no channel was stopped and the loop is on the SAME channel:
-        assert all(spy.stop_count == 0 for spy in spies)
+
+        # THEN no channel was acquired (so nothing was stopped or
+        # restarted) and the loop is on the SAME channel:
+        assert len(acquired) == 1
         assert _channels_playing(sound) == [original_channel]
 
-    def test_when_id_playing_via_play_sfx_should_restart_it_as_loop(
+    def test_when_id_playing_via_play_game_sfx_should_restart_it_as_loop(
         self, audio_manager: None, loaded_loader: ResourceLoader
     ) -> None:
-        # Spec 05: an id already playing via play_sfx is restarted AS a loop.
+        # Spec 05: an id already playing via play_game_sfx is restarted AS a loop.
         sound = loaded_loader.get_sfx_resource(SFX_BOOM)
-        audio_manager.play_sfx(SFX_BOOM)
+        audio_manager.play_game_sfx(SFX_BOOM)
         audio_manager.set_active_loops(frozenset({SFX_BOOM}))
         # The one-shot is replaced by the loop immediately...
         assert len(_channels_playing(sound)) == 1
@@ -338,13 +357,14 @@ class TestSetActiveLoops:
     def test_when_budget_full_should_not_start_extra_loop(
         self, audio_manager: None, loaded_loader: ResourceLoader
     ) -> None:
-        # Spec 05: Channel budget - with all 16 channels holding loops, a
-        # 17th loop attempt is silently ignored (not marked active).
+        # Spec 05 (amendment): with all 12 reserved game-sfx channels
+        # holding loops, a 13th loop attempt is silently ignored (not
+        # marked active).
         audio_manager.set_active_loops(frozenset(LOOP_IDS))
-        assert len(_busy_channel_indices()) == AUDIO_CHANNEL_BUDGET
+        assert len(_busy_channel_indices()) == GAME_SFX_CHANNEL_COUNT
         audio_manager.set_active_loops(frozenset(LOOP_IDS) | {SFX_BOOM})
         assert _channels_playing(loaded_loader.get_sfx_resource(SFX_BOOM)) == []
-        assert len(_busy_channel_indices()) == AUDIO_CHANNEL_BUDGET
+        assert len(_busy_channel_indices()) == GAME_SFX_CHANNEL_COUNT
 
     def test_when_budget_full_then_loop_removed_should_allow_retry(
         self, audio_manager: None, loaded_loader: ResourceLoader
@@ -377,7 +397,7 @@ class TestStopSfx:
     ) -> None:
         # GIVEN a one-shot sfx that is still playing (150 ms long):
         sound = loaded_loader.get_sfx_resource(SFX_LONG_HIT)
-        audio_manager.play_sfx(SFX_LONG_HIT)
+        audio_manager.play_game_sfx(SFX_LONG_HIT)
         assert _channels_playing(sound) != []
 
         # WHEN the client requests that id be stopped:
@@ -393,8 +413,8 @@ class TestStopSfx:
         # GIVEN the same sfx played twice, occupying two channels (spec 06
         # note: Sound.stop() stops it on ALL channels):
         sound = loaded_loader.get_sfx_resource(SFX_LONG_HIT)
-        audio_manager.play_sfx(SFX_LONG_HIT)
-        audio_manager.play_sfx(SFX_LONG_HIT)
+        audio_manager.play_game_sfx(SFX_LONG_HIT)
+        audio_manager.play_game_sfx(SFX_LONG_HIT)
         assert len(_channels_playing(sound)) == 2
 
         # WHEN stop_sfx is requested a single time:
@@ -431,7 +451,7 @@ class TestStopSfx:
     ) -> None:
         # GIVEN one sfx playing and a second valid id that is not:
         long_hit = loaded_loader.get_sfx_resource(SFX_LONG_HIT)
-        audio_manager.play_sfx(SFX_LONG_HIT)
+        audio_manager.play_game_sfx(SFX_LONG_HIT)
 
         # WHEN the idle id is stopped:
         audio_manager.stop_sfx(SFX_BOOM)
@@ -453,7 +473,7 @@ class TestStopSfx:
         # THEN the music keeps playing:
         assert pygame.mixer.music.get_busy()
 
-    def test_when_sfx_disabled_should_be_silent_noop(
+    def test_when_game_sfx_disabled_should_be_silent_noop(
         self, loaded_loader: ResourceLoader
     ) -> None:
         # Spec 05: with sfx disabled nothing can be playing, so
@@ -648,15 +668,19 @@ class TestConfigurationSetters:
     def test_game_sfx_volume_change_should_apply_immediately_to_playing_audio(
         self, audio_manager: None, loaded_loader: ResourceLoader
     ) -> None:
-        # Spec 05: game_sfx_volume adjusted while audio is playing takes effect
-        # immediately on currently playing sfx and loops.
+        # Spec 05: game_sfx_volume adjusted while audio is playing takes
+        # effect immediately on the channels playing sfx and loops - via
+        # channel volume, never Sound volume (spec 05: Adjusting volume).
         long_hit = loaded_loader.get_sfx_resource(SFX_LONG_HIT)
         boom = loaded_loader.get_sfx_resource(SFX_BOOM)
-        audio_manager.play_sfx(SFX_LONG_HIT)
+        audio_manager.play_game_sfx(SFX_LONG_HIT)
         audio_manager.set_active_loops(frozenset({SFX_BOOM}))
         audio_manager.game_sfx_volume = 25
-        assert long_hit.get_volume() == _vol(0.25)
-        assert boom.get_volume() == _vol(0.25)
+        for sound in (long_hit, boom):
+            playing = _channels_playing(sound)
+            assert playing != []
+            for index in playing:
+                assert pygame.mixer.Channel(index).get_volume() == _vol(0.25)
         # ...and playback continues:
         assert _channels_playing(long_hit) != []
         assert _channels_playing(boom) != []
@@ -681,7 +705,9 @@ class TestConfigurationSetters:
         audio_manager.music_volume = 60
         assert audio_manager.game_sfx_volume == 30
         assert audio_manager.music_volume == 60
-        assert boom.get_volume() == _vol(0.3)
+        loop_channels = _channels_playing(boom)
+        assert loop_channels != []
+        assert pygame.mixer.Channel(loop_channels[0]).get_volume() == _vol(0.3)
         assert pygame.mixer.music.get_volume() == _vol(0.6)
 
     def test_setting_game_sfx_enabled_false_should_stop_playing_sfx_and_loops(
@@ -689,7 +715,7 @@ class TestConfigurationSetters:
     ) -> None:
         # Spec 05: setting game_sfx_enabled to false stops any currently playing
         # sfx/loop.
-        audio_manager.play_sfx(SFX_LONG_HIT)
+        audio_manager.play_game_sfx(SFX_LONG_HIT)
         audio_manager.set_active_loops(frozenset({SFX_BOOM}))
         assert len(_busy_channel_indices()) == 2
         audio_manager.game_sfx_enabled = False
@@ -701,7 +727,7 @@ class TestConfigurationSetters:
     ) -> None:
         audio_manager.game_sfx_enabled = False
         audio_manager.game_sfx_enabled = True
-        audio_manager.play_sfx(SFX_BOOM)
+        audio_manager.play_game_sfx(SFX_BOOM)
         assert _channels_playing(loaded_loader.get_sfx_resource(SFX_BOOM)) != []
 
     def test_setting_music_enabled_false_should_stop_playing_music(

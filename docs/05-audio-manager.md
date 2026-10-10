@@ -401,7 +401,11 @@ The following dev plan is suggested for this amendment:
    the 12 game sfx channels. The other channels are unused at this stage.
    Update tests for `play_sfx()` as needed for `play_game_sfx()`.
    Update any tests for `set_active_loops()` as needed.
+   **Completed 2026-10-09**
 4. Implement `play_ui_sfx()` and tests. Implement `play_speech()` and tests.
+   Also add the `ui_sfx_enabled`/`ui_sfx_volume` and `speech_enabled`/`speech_volume`
+   getters/setters on AudioManager (added 2026-10-09 so this sliver of the
+   amendment is not lost between stages).
 5. Final check. Have all stale references to the old methods and config properties
    been updated in code, comments, docstrings, and other spec docs? Have all
    tests in the Testing section been updated (if they already existed) or implemented

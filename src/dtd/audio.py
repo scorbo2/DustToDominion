@@ -23,6 +23,7 @@ from dtd.errors import ConfigError
 from dtd.game_config import AudioConfig
 from dtd.game_constants import (
     AUDIO_CHANNEL_BUDGET,
+    GAME_SFX_CHANNEL_COUNT,
     VOLUME_MAX_PERCENT,
     VOLUME_MIN_PERCENT,
 )
@@ -42,16 +43,49 @@ class _UnboundedVolume(BaseModel):
     value: int
 
 
+class _ChannelAllocator:
+    """Hands out channels from one category's reserved index range
+    (spec 05: Channel budget, amendment 2026-10-09).
+
+    Channels are never stolen: when every channel in the range is busy,
+    ``find_free`` returns ``None`` and the caller's play request becomes
+    a silent no-op. The lowest free index wins, so channel choice is
+    deterministic and testable. ``Sound.play()`` cannot target a channel
+    (no ``channel=`` kwarg, verified against pygame-ce 2.5.8), so all
+    playback goes through the explicit ``Channel`` objects handed out
+    here.
+    """
+
+    def __init__(self, index_range: range) -> None:
+        self._index_range = index_range
+
+    def find_free(self) -> pygame.mixer.Channel | None:
+        """The lowest-index idle channel in the range, or ``None``."""
+        for index in self._index_range:
+            channel = pygame.mixer.Channel(index)
+            if not channel.get_busy():
+                return channel
+        return None
+
+    def channels(self) -> Iterator[pygame.mixer.Channel]:
+        """Every channel in the range, busy or not - category-scoped
+        volume changes and stop-all iterate over this."""
+        for index in self._index_range:
+            yield pygame.mixer.Channel(index)
+
+
 class _LoopRegistry:
     """Bookkeeping for which sfx loops are playing on which channels
     (spec 05: Channel budget).
 
     Every loop start/stop/deregister flows through this helper so the
     per-frame idempotency rules and the budget-exhaustion rules live in
-    exactly one place.
+    exactly one place. Loops only ever use the game-sfx allocator: UI
+    sfx and speech are always one-offs (spec 05: Looping).
     """
 
-    def __init__(self) -> None:
+    def __init__(self, allocator: _ChannelAllocator) -> None:
+        self._allocator = allocator
         self._channels: dict[str, pygame.mixer.Channel] = {}
 
     def active_ids(self) -> set[str]:
@@ -64,15 +98,17 @@ class _LoopRegistry:
         """Start ``sound`` looping for ``resource_id``.
 
         Any in-flight one-shot of the same sound is killed first (spec 05:
-        an id already playing via ``play_sfx`` restarts AS a loop). Budget
-        exhaustion simply leaves the id inactive - it is retried on a
-        later frame (spec 05: Channel budget).
+        an id already playing via ``play_game_sfx`` restarts AS a loop).
+        Budget exhaustion simply leaves the id inactive - it is retried on
+        a later frame (spec 05: Channel budget). Volume is set on the
+        channel, never on the Sound, so the same sound playing in another
+        category is never touched (spec 05: Adjusting volume).
         """
         sound.stop()
-        sound.set_volume(volume_fraction)
-        channel = pygame.mixer.find_channel(force=False)
+        channel = self._allocator.find_free()
         if channel is None:
             return
+        channel.set_volume(volume_fraction)
         channel.play(sound, loops=-1)
         self._channels[resource_id] = channel
 
@@ -99,6 +135,8 @@ class AudioManager:
 
     State kept:
 
+    - ``_game_sfx_allocator``: a ``_ChannelAllocator`` over the reserved
+      game-sfx channel range (spec 05: Channel budget).
     - ``_loops``: a ``_LoopRegistry`` mapping resource id -> the mixer
       channel a sfx loop is playing on, so ``channel.stop()`` can target
       exactly that loop (spec 05: Channel budget).
@@ -124,7 +162,14 @@ class AudioManager:
         # that calling it earlier raises "mixer not initialized" (spec 05:
         # Channel budget).
         pygame.mixer.set_num_channels(AUDIO_CHANNEL_BUDGET)
-        self._loops = _LoopRegistry()
+        # Category ranges are fixed and contiguous (spec 05: Channel
+        # budget): game sfx own indices 0..GAME_SFX_CHANNEL_COUNT-1. The
+        # UI-sfx and speech allocators join in stage 4 of the amendment;
+        # their channels stay unused until then.
+        self._game_sfx_allocator = _ChannelAllocator(
+            range(GAME_SFX_CHANNEL_COUNT)
+        )
+        self._loops = _LoopRegistry(self._game_sfx_allocator)
         self._current_music_id: str | None = None
         # Apply the persisted music volume up front so the first track
         # starts at the configured level (spec 05: startup applies config).
@@ -133,29 +178,36 @@ class AudioManager:
     # ------------------------------------------------------------------ #
     # sound effects
     # ------------------------------------------------------------------ #
-    def play_sfx(self, resource_id: str) -> None:
-        """Play a one-shot sound effect (spec 05: AudioManager).
+    def play_game_sfx(self, resource_id: str) -> None:
+        """Play a one-shot game sound effect (spec 05: AudioManager).
 
-        Unknown ids and a disabled sfx setting are silent no-ops. If no
-        mixer channel is free (the 16-channel pool is shared between
-        one-shots and loops), pygame silently ignores the play.
+        Unknown ids and a disabled game-sfx setting are silent no-ops.
+        The sound plays on the lowest idle channel of the reserved
+        game-sfx range at the current game_sfx_volume; when that range
+        is fully occupied the request is a no-op - game sfx never steal
+        a busy channel (spec 05: Channel budget).
         """
         if not self._config.game_sfx_enabled:
             return
         sound = self._loader.get_sfx_resource(resource_id)
         if sound is None:
             return
-        sound.set_volume(self._game_sfx_volume_fraction())
-        sound.play()
+        channel = self._game_sfx_allocator.find_free()
+        if channel is None:
+            return
+        channel.set_volume(self._game_sfx_volume_fraction())
+        channel.play(sound)
 
     def set_active_loops(self, resource_ids: frozenset[str]) -> None:
-        """Converge the audible sfx loops on ``resource_ids`` (spec 05).
+        """Converge the audible game-sfx loops on ``resource_ids`` (spec 05).
 
-        Idempotent per frame: only loops entering or leaving the set are
-        touched, so an unchanged set never restarts (and re-stutters) an
-        already-running loop. A loop that cannot start - unknown id, or
-        budget exhaustion - is simply not marked active and is retried on
-        subsequent frames. A disabled sfx setting is a silent no-op.
+        Loops only ever occupy the reserved game-sfx channel range - UI
+        sfx and speech never loop (spec 05: Looping). Idempotent per
+        frame: only loops entering or leaving the set are touched, so an
+        unchanged set never restarts (and re-stutters) an already-running
+        loop. A loop that cannot start - unknown id, or game-sfx channel
+        exhaustion - is simply not marked active and is retried on
+        subsequent frames. A disabled game-sfx setting is a silent no-op.
         """
         if not self._config.game_sfx_enabled:
             return
@@ -317,16 +369,19 @@ class AudioManager:
         return self._config.music_volume / 100
 
     def _apply_game_sfx_volume(self) -> None:
-        """Apply the current sfx volume to every sound in use (spec 05:
-        immediate effect on currently playing sfx and loops)."""
+        """Apply the current game-sfx volume to every game channel (spec 05:
+        immediate effect on currently playing sfx and loops). Channel
+        volume, never Sound volume: the same Sound may be playing in
+        another category and must stay untouched (spec 05: Adjusting
+        volume)."""
         fraction = self._game_sfx_volume_fraction()
-        for channel in self._iter_channels():
-            sound = channel.get_sound()
-            if sound is not None:
-                sound.set_volume(fraction)
+        for channel in self._game_sfx_allocator.channels():
+            channel.set_volume(fraction)
 
     def _stop_all_sfx(self) -> None:
-        for channel in self._iter_channels():
+        # Category-scoped: only the reserved game-sfx range, never the
+        # UI or speech channels (spec 05: the configuration setters).
+        for channel in self._game_sfx_allocator.channels():
             channel.stop()
         self._loops.clear()
 
@@ -391,10 +446,6 @@ class AudioManager:
                 getattr(self._config, field_name),
             )
             return getattr(self._config, field_name)
-
-    def _iter_channels(self) -> Iterator[pygame.mixer.Channel]:
-        for index in range(pygame.mixer.get_num_channels()):
-            yield pygame.mixer.Channel(index)
 
     def _persist(self) -> None:
         try:

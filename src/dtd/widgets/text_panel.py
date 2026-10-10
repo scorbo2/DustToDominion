@@ -436,7 +436,10 @@ class TextPanel(Widget):
         if resource_id is not None:
             # The id goes to AudioManager as-is; the panel never
             # validates it, and audio does not wait for any animation.
-            get_audio_manager().play_sfx(resource_id)
+            # NOTE (spec 05 amendment, dev stage 3): panel audio is UI
+            # sound and will move to play_ui_sfx() in stage 4; until
+            # that method exists, game sfx is the only category.
+            get_audio_manager().play_game_sfx(resource_id)
 
     def _stop_sfx_if_set(self, resource_id: str | None) -> None:
         if resource_id is not None:
