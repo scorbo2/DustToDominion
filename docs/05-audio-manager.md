@@ -226,6 +226,17 @@ The `set_active_loops` function must track which channel a loop is playing on, s
 that `channel.stop()` can be invoked when the loop is to be stopped. It is not an error if the loop
 budget is exhausted - any additional loop attempts are silently ignored.
 
+When a loop starts, any in-flight one-shot instance of the same sound is terminated first
+(the restart-as-loop rule above). That termination is scoped to the game sfx channel range:
+the same sound playing as a UI sound effect or as speech is NOT interrupted. This keeps the
+category independence promised in the "Adjusting volume" section intact. Implementation note:
+`Sound.stop()` would stop the sound on ALL channels, so the implementation must instead stop
+only the channels in the game sfx range whose `get_sound()` is the target sound.
+
+(Verified against pygame-ce 2.5.8: `Channel.get_sound()` returns the very `Sound` object
+that was handed to `Channel.play()` - identity comparison works - and `Channel.stop()`
+affects only that one channel.)
+
 If `game_sfx_enabled` is disabled while any loop is playing, then in addition to stopping
 all currently-playing loops, the list of active loops is cleared.
 
@@ -278,6 +289,8 @@ Simple, short, single-tone sounds are sufficient.
   - `play_game_sfx` with a non-existent id is a silent no-op.
   - `set_active_loops` with a valid sfx id starts looping that sound effect at the `game_sfx_volume` level.
   - `set_active_loops` with a valid sfx id that is already playing via `play_game_sfx` restarts that sfx as a loop.
+  - starting a loop for a sound that is simultaneously playing as a UI sfx or as speech does NOT
+    interrupt those instances - the restart-as-loop termination only touches game sfx channels.
   - `set_active_loops` with an empty set stops all current loops.
   - `set_active_loops` when the game sfx channel budget is full with 12 other loops is a no-op. Removing another loop allows the retry to succeed.
   - `set_active_loops` with the same set that is already playing does not stop or restart any existing loop - it's a no-op.
@@ -368,7 +381,7 @@ Simple, short, single-tone sounds are sufficient.
 ## Dev plan
 
 The original version of this spec doc was underneath the size threshold of 250 lines and therefore had no dev plan.
-The original spec was implemented in a single pass and was flipped to `active` status.
+The original spec was implemented in a single pass and was flipped to `active` status on 2026-10-03.
 
 Amendment 2026-10-09:
 - dropped `play_sfx()` in favor of new methods `play_game_sfx()`, `play_ui_sfx()`, and `play_speech()`.
@@ -413,6 +426,6 @@ The following dev plan is suggested for this amendment:
    (if they were added by this amendment)? Are the Acceptance criteria all met?
    Does the test suite pass with no failures? If so, flip this document
    back to `active` status.
-   **Completed 2026-10-09 - full suite green (659 passed); Testing section and
-   Acceptance criteria verified item by item; document flipped to `active`.**
+   **Completed 2026-10-09** - full suite green (659 passed); Testing section and
+   Acceptance criteria verified item by item; document flipped to `active`.
 

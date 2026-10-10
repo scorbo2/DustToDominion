@@ -495,6 +495,33 @@ class TestSetActiveLoops:
         time.sleep(0.08)
         assert len(_channels_playing(sound)) == 1
 
+    def test_starting_loop_with_sound_also_playing_as_ui_sfx_or_speech_should_not_interrupt_them(
+        self, audio_manager: None, loaded_loader: ResourceLoader
+    ) -> None:
+        # Spec 05 (Looping): the restart-as-loop kill is scoped to the
+        # game-sfx range; the same sound in other categories is untouched.
+        # GIVEN the same long sound (150 ms) playing in all three
+        # categories (lowest idle channels: 0, 12, 15):
+        long_hit = loaded_loader.get_sfx_resource(SFX_LONG_HIT)
+        audio_manager.play_game_sfx(SFX_LONG_HIT)
+        audio_manager.play_ui_sfx(SFX_LONG_HIT)
+        audio_manager.play_speech(SFX_LONG_HIT)
+        assert _channels_playing(long_hit) == [0, 12, 15]
+
+        # WHEN a loop of that same id starts:
+        audio_manager.set_active_loops(frozenset({SFX_LONG_HIT}))
+
+        # THEN the game one-shot is replaced by the loop on channel 0 and
+        # the UI and speech instances keep playing (an unscoped Sound.stop()
+        # would have silenced channels 12 and 15 here):
+        assert _channels_playing(long_hit) == [0, 12, 15]
+
+        # AND past the 150 ms track length only the LOOP survives - proof
+        # the game instance really is looping and the others were ordinary
+        # one-shots that ended on their own:
+        time.sleep(0.2)
+        assert _channels_playing(long_hit) == [0]
+
     def test_when_budget_full_should_not_start_extra_loop(
         self, audio_manager: None, loaded_loader: ResourceLoader
     ) -> None:

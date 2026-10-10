@@ -5,6 +5,8 @@ that tuning the game does not require hunting through code.
 """
 from __future__ import annotations
 
+from typing import Final
+
 # Fixed simulation step used by the test harness (spec 00: Testing). The
 # accumulator that consumes this step lives in the test harness, not the game.
 SIM_STEP = 1 / 60
@@ -35,8 +37,10 @@ AUDIO_CHANNEL_BUDGET = (
 #: The fixed contiguous channel index range each category owns, derived
 #: from the counts above in order: game sfx 0-11, UI sfx 12-14, speech 15
 #: (spec 05: Channel budget). Keyed by the same category names the config
-#: keys use. This is the ONLY place the offsets are computed.
-AUDIO_CHANNEL_RANGES = {
+#: keys use. This is the ONLY place the offsets are computed. The Final
+#: annotation marks the mapping itself as module constant - the ranges are
+#: immutable, and rebinding or editing the dict at runtime is a bug.
+AUDIO_CHANNEL_RANGES: Final[dict[str, range]] = {
     "game_sfx": range(0, GAME_SFX_CHANNEL_COUNT),
     "ui_sfx": range(
         GAME_SFX_CHANNEL_COUNT, GAME_SFX_CHANNEL_COUNT + UI_SFX_CHANNEL_COUNT

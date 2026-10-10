@@ -76,6 +76,13 @@ class _ChannelAllocator:
         sensible for single-channel ranges; game and UI sfx must keep
         using ``find_free``.
         """
+        # Enforce the precondition instead of trusting the comment: with a
+        # multi-channel range this method would interrupt the range start
+        # even while a higher channel sat idle (spec 05: Channel budget).
+        assert len(self._index_range) == 1, (
+            "find_free_or_interrupt is only valid for single-channel "
+            f"ranges, got {len(self._index_range)} channels"
+        )
         channel = self.find_free()
         if channel is not None:
             return channel
@@ -113,12 +120,19 @@ class _LoopRegistry:
 
         Any in-flight one-shot of the same sound is killed first (spec 05:
         an id already playing via ``play_game_sfx`` restarts AS a loop).
-        Budget exhaustion simply leaves the id inactive - it is retried on
-        a later frame (spec 05: Channel budget). Volume is set on the
-        channel, never on the Sound, so the same sound playing in another
-        category is never touched (spec 05: Adjusting volume).
+        The kill is scoped to the game-sfx channel range - the same sound
+        playing as UI sfx or speech is never interrupted (spec 05:
+        Looping). Budget exhaustion simply leaves the id inactive - it is
+        retried on a later frame (spec 05: Channel budget). Volume is set
+        on the channel, never on the Sound, so the same sound playing in
+        another category is never touched (spec 05: Adjusting volume).
         """
-        sound.stop()
+        # NOT sound.stop(): that would silence the sound on ALL channels,
+        # including the UI and speech ranges. Stop only the channels this
+        # category owns (spec 05: Looping).
+        for channel in self._allocator.channels():
+            if channel.get_sound() is sound:
+                channel.stop()
         channel = self._allocator.find_free()
         if channel is None:
             return
@@ -382,7 +396,9 @@ class AudioManager:
             stop_all()
         self._persist()
 
-    def _set_volume(self, field_name: str, value: object, apply_volume: Callable[[], None]) -> None:
+    def _set_volume(
+        self, field_name: str, value: object, apply_volume: Callable[[], None]
+    ) -> None:
         """Validate/clamp, set, and persist one volume; the new level is
         applied immediately to the category's channels (spec 05)."""
         setattr(self._config, field_name, self._coerce_volume(field_name, value))
