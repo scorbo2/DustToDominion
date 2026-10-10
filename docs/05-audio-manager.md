@@ -1,6 +1,6 @@
 ---
 description: Describes the game's approach to audio handling (sfx, speech, and music).
-status: proposed
+status: active
 ---
 
 # Audio Manager
@@ -406,10 +406,13 @@ The following dev plan is suggested for this amendment:
    Also add the `ui_sfx_enabled`/`ui_sfx_volume` and `speech_enabled`/`speech_volume`
    getters/setters on AudioManager (added 2026-10-09 so this sliver of the
    amendment is not lost between stages).
+   **Completed 2026-10-09**
 5. Final check. Have all stale references to the old methods and config properties
    been updated in code, comments, docstrings, and other spec docs? Have all
    tests in the Testing section been updated (if they already existed) or implemented
    (if they were added by this amendment)? Are the Acceptance criteria all met?
    Does the test suite pass with no failures? If so, flip this document
    back to `active` status.
+   **Completed 2026-10-09 - full suite green (659 passed); Testing section and
+   Acceptance criteria verified item by item; document flipped to `active`.**
 

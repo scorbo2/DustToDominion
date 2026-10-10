@@ -32,6 +32,19 @@ SPEECH_CHANNEL_COUNT = 1
 AUDIO_CHANNEL_BUDGET = (
     GAME_SFX_CHANNEL_COUNT + UI_SFX_CHANNEL_COUNT + SPEECH_CHANNEL_COUNT
 )
+#: The fixed contiguous channel index range each category owns, derived
+#: from the counts above in order: game sfx 0-11, UI sfx 12-14, speech 15
+#: (spec 05: Channel budget). Keyed by the same category names the config
+#: keys use. This is the ONLY place the offsets are computed.
+AUDIO_CHANNEL_RANGES = {
+    "game_sfx": range(0, GAME_SFX_CHANNEL_COUNT),
+    "ui_sfx": range(
+        GAME_SFX_CHANNEL_COUNT, GAME_SFX_CHANNEL_COUNT + UI_SFX_CHANNEL_COUNT
+    ),
+    "speech": range(
+        GAME_SFX_CHANNEL_COUNT + UI_SFX_CHANNEL_COUNT, AUDIO_CHANNEL_BUDGET
+    ),
+}
 #: The allowable volume range, as integer percentages (spec 05: Validation).
 #: 0 is mute, 100 is full volume. Shared by the config validation rules and
 #: the runtime setter clamping so the two can never drift apart.

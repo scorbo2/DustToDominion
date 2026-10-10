@@ -12,7 +12,7 @@ constructor then sets the channel budget (spec 05: Channel budget).
 from __future__ import annotations
 
 import io
-from collections.abc import Iterator, Sequence
+from collections.abc import Callable, Iterator, Sequence
 
 import pygame
 from loguru import logger
@@ -23,7 +23,7 @@ from dtd.errors import ConfigError
 from dtd.game_config import AudioConfig
 from dtd.game_constants import (
     AUDIO_CHANNEL_BUDGET,
-    GAME_SFX_CHANNEL_COUNT,
+    AUDIO_CHANNEL_RANGES,
     VOLUME_MAX_PERCENT,
     VOLUME_MIN_PERCENT,
 )
@@ -66,6 +66,20 @@ class _ChannelAllocator:
             if not channel.get_busy():
                 return channel
         return None
+
+    def find_free_or_interrupt(self) -> pygame.mixer.Channel:
+        """``find_free``, but when the whole range is busy, hand back its
+        lowest-index channel - the caller's ``Channel.play()`` then
+        replaces whatever was playing. This is the speech category's
+        documented exception to the never-steal rule (spec 05: Channel
+        budget): a new speech clip terminates the in-progress one. Only
+        sensible for single-channel ranges; game and UI sfx must keep
+        using ``find_free``.
+        """
+        channel = self.find_free()
+        if channel is not None:
+            return channel
+        return pygame.mixer.Channel(self._index_range.start)
 
     def channels(self) -> Iterator[pygame.mixer.Channel]:
         """Every channel in the range, busy or not - category-scoped
@@ -135,8 +149,9 @@ class AudioManager:
 
     State kept:
 
-    - ``_game_sfx_allocator``: a ``_ChannelAllocator`` over the reserved
-      game-sfx channel range (spec 05: Channel budget).
+    - ``_game_sfx_allocator`` / ``_ui_sfx_allocator`` /
+      ``_speech_allocator``: ``_ChannelAllocator`` instances over the
+      reserved channel range of each category (spec 05: Channel budget).
     - ``_loops``: a ``_LoopRegistry`` mapping resource id -> the mixer
       channel a sfx loop is playing on, so ``channel.stop()`` can target
       exactly that loop (spec 05: Channel budget).
@@ -163,17 +178,18 @@ class AudioManager:
         # Channel budget).
         pygame.mixer.set_num_channels(AUDIO_CHANNEL_BUDGET)
         # Category ranges are fixed and contiguous (spec 05: Channel
-        # budget): game sfx own indices 0..GAME_SFX_CHANNEL_COUNT-1. The
-        # UI-sfx and speech allocators join in stage 4 of the amendment;
-        # their channels stay unused until then.
+        # budget); the offsets come from the single ranges constant so
+        # they can never drift from the counts.
         self._game_sfx_allocator = _ChannelAllocator(
-            range(GAME_SFX_CHANNEL_COUNT)
+            AUDIO_CHANNEL_RANGES["game_sfx"]
         )
+        self._ui_sfx_allocator = _ChannelAllocator(AUDIO_CHANNEL_RANGES["ui_sfx"])
+        self._speech_allocator = _ChannelAllocator(AUDIO_CHANNEL_RANGES["speech"])
         self._loops = _LoopRegistry(self._game_sfx_allocator)
         self._current_music_id: str | None = None
         # Apply the persisted music volume up front so the first track
         # starts at the configured level (spec 05: startup applies config).
-        pygame.mixer.music.set_volume(self._music_volume_fraction())
+        self._apply_music_volume()
 
     # ------------------------------------------------------------------ #
     # sound effects
@@ -196,6 +212,45 @@ class AudioManager:
         if channel is None:
             return
         channel.set_volume(self._game_sfx_volume_fraction())
+        channel.play(sound)
+
+    def play_ui_sfx(self, resource_id: str) -> None:
+        """Play a one-shot UI sound effect (spec 05: AudioManager).
+
+        Unknown ids and a disabled UI-sfx setting are silent no-ops.
+        The sound plays on the lowest idle channel of the reserved
+        UI-sfx range at the current ui_sfx_volume; when that range is
+        fully occupied the request is a no-op - UI sfx never steal a
+        busy channel (spec 05: Channel budget).
+        """
+        if not self._config.ui_sfx_enabled:
+            return
+        sound = self._loader.get_sfx_resource(resource_id)
+        if sound is None:
+            return
+        channel = self._ui_sfx_allocator.find_free()
+        if channel is None:
+            return
+        channel.set_volume(self._ui_sfx_volume_fraction())
+        channel.play(sound)
+
+    def play_speech(self, resource_id: str) -> None:
+        """Play a speech clip (spec 05: AudioManager).
+
+        Unknown ids and a disabled speech setting are silent no-ops -
+        and an invalid id never interrupts an in-progress clip, because
+        termination only happens once a valid clip is in hand. Speech
+        is the documented exception to the never-steal rule: with the
+        single reserved speech channel, a new clip terminates the
+        in-progress one (spec 05: Channel budget).
+        """
+        if not self._config.speech_enabled:
+            return
+        sound = self._loader.get_sfx_resource(resource_id)
+        if sound is None:
+            return
+        channel = self._speech_allocator.find_free_or_interrupt()
+        channel.set_volume(self._speech_volume_fraction())
         channel.play(sound)
 
     def set_active_loops(self, resource_ids: frozenset[str]) -> None:
@@ -268,7 +323,7 @@ class AudioManager:
             return
         self._stop_current_music()
         pygame.mixer.music.load(io.BytesIO(track))
-        pygame.mixer.music.set_volume(self._music_volume_fraction())
+        self._apply_music_volume()
         pygame.mixer.music.play(loops=-1)
         self._current_music_id = resource_id
 
@@ -308,21 +363,58 @@ class AudioManager:
 
     # ------------------------------------------------------------------ #
     # configuration (spec 05: getters/setters, immediate + persisted)
+    #
+    # Every setter validates its value first (spec 05: Runtime setter
+    # validation), so an invalid value can never reach game.json, then
+    # applies it immediately and persists it. The two shared helpers
+    # below keep the eight setters honest without octuplicating the
+    # dance.
     # ------------------------------------------------------------------ #
+    def _set_enabled_flag(
+        self, field_name: str, value: object, stop_all: Callable[[], None]
+    ) -> None:
+        """Validate, set, and persist one enabled flag; disabling a
+        category stops that category's audio - and only that category's
+        channels (spec 05: the configuration setters)."""
+        validated = self._coerce_enabled(field_name, value)
+        setattr(self._config, field_name, validated)
+        if not validated:
+            stop_all()
+        self._persist()
+
+    def _set_volume(self, field_name: str, value: object, apply_volume: Callable[[], None]) -> None:
+        """Validate/clamp, set, and persist one volume; the new level is
+        applied immediately to the category's channels (spec 05)."""
+        setattr(self._config, field_name, self._coerce_volume(field_name, value))
+        apply_volume()
+        self._persist()
+
     @property
     def game_sfx_enabled(self) -> bool:
         return self._config.game_sfx_enabled
 
     @game_sfx_enabled.setter
     def game_sfx_enabled(self, value: bool) -> None:
-        # Spec 05: Runtime setter validation - validate BEFORE touching the
-        # model, so an invalid value can never reach game.json.
-        validated = self._coerce_enabled("game_sfx_enabled", value)
-        self._config.game_sfx_enabled = validated
-        if not validated:
-            # Spec 05: disabling sfx stops any currently playing sfx/loop.
-            self._stop_all_sfx()
-        self._persist()
+        # Spec 05: disabling game sfx stops its sfx and loops.
+        self._set_enabled_flag("game_sfx_enabled", value, self._stop_all_sfx)
+
+    @property
+    def ui_sfx_enabled(self) -> bool:
+        return self._config.ui_sfx_enabled
+
+    @ui_sfx_enabled.setter
+    def ui_sfx_enabled(self, value: bool) -> None:
+        # Spec 05: disabling UI sfx stops its sfx only.
+        self._set_enabled_flag("ui_sfx_enabled", value, self._stop_all_ui_sfx)
+
+    @property
+    def speech_enabled(self) -> bool:
+        return self._config.speech_enabled
+
+    @speech_enabled.setter
+    def speech_enabled(self, value: bool) -> None:
+        # Spec 05: disabling speech stops the speech channel only.
+        self._set_enabled_flag("speech_enabled", value, self._stop_all_speech)
 
     @property
     def music_enabled(self) -> bool:
@@ -330,12 +422,8 @@ class AudioManager:
 
     @music_enabled.setter
     def music_enabled(self, value: bool) -> None:
-        validated = self._coerce_enabled("music_enabled", value)
-        self._config.music_enabled = validated
-        if not validated:
-            # Spec 05: disabling music stops any currently playing track.
-            self._stop_current_music()
-        self._persist()
+        # Spec 05: disabling music stops any currently playing track.
+        self._set_enabled_flag("music_enabled", value, self._stop_current_music)
 
     @property
     def game_sfx_volume(self) -> int:
@@ -343,11 +431,23 @@ class AudioManager:
 
     @game_sfx_volume.setter
     def game_sfx_volume(self, value: int) -> None:
-        # Spec 05: Runtime setter validation - clamp/reject BEFORE touching
-        # the model, so an invalid volume can never reach game.json.
-        self._config.game_sfx_volume = self._coerce_volume("game_sfx_volume", value)
-        self._apply_game_sfx_volume()
-        self._persist()
+        self._set_volume("game_sfx_volume", value, self._apply_game_sfx_volume)
+
+    @property
+    def ui_sfx_volume(self) -> int:
+        return self._config.ui_sfx_volume
+
+    @ui_sfx_volume.setter
+    def ui_sfx_volume(self, value: int) -> None:
+        self._set_volume("ui_sfx_volume", value, self._apply_ui_sfx_volume)
+
+    @property
+    def speech_volume(self) -> int:
+        return self._config.speech_volume
+
+    @speech_volume.setter
+    def speech_volume(self, value: int) -> None:
+        self._set_volume("speech_volume", value, self._apply_speech_volume)
 
     @property
     def music_volume(self) -> int:
@@ -355,9 +455,7 @@ class AudioManager:
 
     @music_volume.setter
     def music_volume(self, value: int) -> None:
-        self._config.music_volume = self._coerce_volume("music_volume", value)
-        pygame.mixer.music.set_volume(self._music_volume_fraction())
-        self._persist()
+        self._set_volume("music_volume", value, self._apply_music_volume)
 
     # ------------------------------------------------------------------ #
     # internal helpers
@@ -365,18 +463,44 @@ class AudioManager:
     def _game_sfx_volume_fraction(self) -> float:
         return self._config.game_sfx_volume / 100
 
+    def _ui_sfx_volume_fraction(self) -> float:
+        return self._config.ui_sfx_volume / 100
+
+    def _speech_volume_fraction(self) -> float:
+        return self._config.speech_volume / 100
+
     def _music_volume_fraction(self) -> float:
         return self._config.music_volume / 100
 
-    def _apply_game_sfx_volume(self) -> None:
-        """Apply the current game-sfx volume to every game channel (spec 05:
-        immediate effect on currently playing sfx and loops). Channel
-        volume, never Sound volume: the same Sound may be playing in
-        another category and must stay untouched (spec 05: Adjusting
+    def _apply_music_volume(self) -> None:
+        """Music lives in its own mixer lane, not the channel pool."""
+        pygame.mixer.music.set_volume(self._music_volume_fraction())
+
+    def _apply_category_volume(
+        self, allocator: _ChannelAllocator, fraction: float
+    ) -> None:
+        """Set the volume on every channel of one category's range -
+        channel volume, never Sound volume, so a Sound shared across
+        categories stays independent per category (spec 05: Adjusting
         volume)."""
-        fraction = self._game_sfx_volume_fraction()
-        for channel in self._game_sfx_allocator.channels():
+        for channel in allocator.channels():
             channel.set_volume(fraction)
+
+    def _apply_game_sfx_volume(self) -> None:
+        # Immediate effect on currently playing sfx and loops (spec 05).
+        self._apply_category_volume(
+            self._game_sfx_allocator, self._game_sfx_volume_fraction()
+        )
+
+    def _apply_ui_sfx_volume(self) -> None:
+        self._apply_category_volume(
+            self._ui_sfx_allocator, self._ui_sfx_volume_fraction()
+        )
+
+    def _apply_speech_volume(self) -> None:
+        self._apply_category_volume(
+            self._speech_allocator, self._speech_volume_fraction()
+        )
 
     def _stop_all_sfx(self) -> None:
         # Category-scoped: only the reserved game-sfx range, never the
@@ -384,6 +508,14 @@ class AudioManager:
         for channel in self._game_sfx_allocator.channels():
             channel.stop()
         self._loops.clear()
+
+    def _stop_all_ui_sfx(self) -> None:
+        for channel in self._ui_sfx_allocator.channels():
+            channel.stop()
+
+    def _stop_all_speech(self) -> None:
+        for channel in self._speech_allocator.channels():
+            channel.stop()
 
     def _coerce_volume(self, field_name: str, value: object) -> int:
         """Coerce a caller-supplied volume under spec 05's validation rules.
