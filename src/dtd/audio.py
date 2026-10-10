@@ -140,12 +140,12 @@ class AudioManager:
         mixer channel is free (the 16-channel pool is shared between
         one-shots and loops), pygame silently ignores the play.
         """
-        if not self._config.sfx_enabled:
+        if not self._config.game_sfx_enabled:
             return
         sound = self._loader.get_sfx_resource(resource_id)
         if sound is None:
             return
-        sound.set_volume(self._sfx_volume_fraction())
+        sound.set_volume(self._game_sfx_volume_fraction())
         sound.play()
 
     def set_active_loops(self, resource_ids: frozenset[str]) -> None:
@@ -157,7 +157,7 @@ class AudioManager:
         budget exhaustion - is simply not marked active and is retried on
         subsequent frames. A disabled sfx setting is a silent no-op.
         """
-        if not self._config.sfx_enabled:
+        if not self._config.game_sfx_enabled:
             return
         desired = set(resource_ids)
         for resource_id in self._loops.active_ids() - desired:
@@ -193,7 +193,7 @@ class AudioManager:
             return
         # The registry owns the restart-as-loop and channel-budget rules
         # (spec 05: Channel budget).
-        self._loops.start(resource_id, sound, self._sfx_volume_fraction())
+        self._loops.start(resource_id, sound, self._game_sfx_volume_fraction())
 
     # ------------------------------------------------------------------ #
     # music
@@ -258,15 +258,15 @@ class AudioManager:
     # configuration (spec 05: getters/setters, immediate + persisted)
     # ------------------------------------------------------------------ #
     @property
-    def sfx_enabled(self) -> bool:
-        return self._config.sfx_enabled
+    def game_sfx_enabled(self) -> bool:
+        return self._config.game_sfx_enabled
 
-    @sfx_enabled.setter
-    def sfx_enabled(self, value: bool) -> None:
+    @game_sfx_enabled.setter
+    def game_sfx_enabled(self, value: bool) -> None:
         # Spec 05: Runtime setter validation - validate BEFORE touching the
         # model, so an invalid value can never reach game.json.
-        validated = self._coerce_enabled("sfx_enabled", value)
-        self._config.sfx_enabled = validated
+        validated = self._coerce_enabled("game_sfx_enabled", value)
+        self._config.game_sfx_enabled = validated
         if not validated:
             # Spec 05: disabling sfx stops any currently playing sfx/loop.
             self._stop_all_sfx()
@@ -286,15 +286,15 @@ class AudioManager:
         self._persist()
 
     @property
-    def sfx_volume(self) -> int:
-        return self._config.sfx_volume
+    def game_sfx_volume(self) -> int:
+        return self._config.game_sfx_volume
 
-    @sfx_volume.setter
-    def sfx_volume(self, value: int) -> None:
+    @game_sfx_volume.setter
+    def game_sfx_volume(self, value: int) -> None:
         # Spec 05: Runtime setter validation - clamp/reject BEFORE touching
         # the model, so an invalid volume can never reach game.json.
-        self._config.sfx_volume = self._coerce_volume("sfx_volume", value)
-        self._apply_sfx_volume()
+        self._config.game_sfx_volume = self._coerce_volume("game_sfx_volume", value)
+        self._apply_game_sfx_volume()
         self._persist()
 
     @property
@@ -310,16 +310,16 @@ class AudioManager:
     # ------------------------------------------------------------------ #
     # internal helpers
     # ------------------------------------------------------------------ #
-    def _sfx_volume_fraction(self) -> float:
-        return self._config.sfx_volume / 100
+    def _game_sfx_volume_fraction(self) -> float:
+        return self._config.game_sfx_volume / 100
 
     def _music_volume_fraction(self) -> float:
         return self._config.music_volume / 100
 
-    def _apply_sfx_volume(self) -> None:
+    def _apply_game_sfx_volume(self) -> None:
         """Apply the current sfx volume to every sound in use (spec 05:
         immediate effect on currently playing sfx and loops)."""
-        fraction = self._sfx_volume_fraction()
+        fraction = self._game_sfx_volume_fraction()
         for channel in self._iter_channels():
             sound = channel.get_sound()
             if sound is not None:

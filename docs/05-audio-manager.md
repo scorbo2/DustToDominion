@@ -387,11 +387,13 @@ The following dev plan is suggested for this amendment:
    Update that doc to reference `play_ui_sfx()` instead.
    Search other spec docs for stale references and update them as needed.
    This must be done first! Doc changes before any code changes, always!
+   **Completed 2026-10-09**
 2. Update configuration to drop the old properties and add the new ones.
    This is a breaking change for existing game config files, but the game is still very
    early in development and has not been formally released yet, so this is acceptable.
    The existing config code will silently drop the now-unrecognized keys - this is fine.
    Update configuration tests as needed for the new properties.
+   **Completed 2026-10-09**
 3. Implement the channel reservation system and the 12/3/1 allocation.
    Use constants in `game_constants.py` rather than hard-coding channel ids.
    Rename the existing `play_sfx()` method to `play_game_sfx()`, and then

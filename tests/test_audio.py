@@ -214,8 +214,8 @@ class TestConstructor:
     def test_with_null_config_should_use_defaults(self, loaded_loader: ResourceLoader) -> None:
         # Spec 05: a missing/null audio section means defaults.
         manager = AudioManager(loaded_loader, None)
-        assert manager.sfx_enabled is True
-        assert manager.sfx_volume == 100
+        assert manager.game_sfx_enabled is True
+        assert manager.game_sfx_volume == 100
         assert manager.music_enabled is True
         assert manager.music_volume == 80
 
@@ -234,8 +234,8 @@ class TestConstructor:
 
 class TestPlaySfx:
     def test_when_sfx_disabled_should_be_silent_noop(self, loaded_loader: ResourceLoader) -> None:
-        # Spec 05: invoking play_sfx when sfx_enabled is False does nothing.
-        manager = AudioManager(loaded_loader, AudioConfig(sfx_enabled=False))
+        # Spec 05: invoking play_sfx when game_sfx_enabled is False does nothing.
+        manager = AudioManager(loaded_loader, AudioConfig(game_sfx_enabled=False))
         manager.play_sfx(SFX_BOOM)
         assert _busy_channel_indices() == []
 
@@ -248,7 +248,7 @@ class TestPlaySfx:
         self, loaded_loader: ResourceLoader
     ) -> None:
         # Spec 05: the one-shot plays at the currently configured volume.
-        manager = AudioManager(loaded_loader, AudioConfig(sfx_volume=50))
+        manager = AudioManager(loaded_loader, AudioConfig(game_sfx_volume=50))
         manager.play_sfx(SFX_BOOM)
         sound = loaded_loader.get_sfx_resource(SFX_BOOM)
         assert sound.get_volume() == _vol(0.5)
@@ -289,8 +289,8 @@ class TestSetActiveLoops:
         audio_manager.set_active_loops(frozenset())
 
     def test_when_sfx_disabled_should_be_silent_noop(self, loaded_loader: ResourceLoader) -> None:
-        # Spec 05: invoking set_active_loops when sfx_enabled is False does nothing.
-        manager = AudioManager(loaded_loader, AudioConfig(sfx_enabled=False))
+        # Spec 05: invoking set_active_loops when game_sfx_enabled is False does nothing.
+        manager = AudioManager(loaded_loader, AudioConfig(game_sfx_enabled=False))
         manager.set_active_loops(frozenset({SFX_BOOM}))
         assert _busy_channel_indices() == []
 
@@ -458,7 +458,7 @@ class TestStopSfx:
     ) -> None:
         # Spec 05: with sfx disabled nothing can be playing, so
         # stop_sfx is inherently a no-op in that state.
-        manager = AudioManager(loaded_loader, AudioConfig(sfx_enabled=False))
+        manager = AudioManager(loaded_loader, AudioConfig(game_sfx_enabled=False))
         manager.stop_sfx(SFX_BOOM)
         assert _busy_channel_indices() == []
 
@@ -645,16 +645,16 @@ class TestPlayMusicFirstMatch:
 
 
 class TestConfigurationSetters:
-    def test_sfx_volume_change_should_apply_immediately_to_playing_audio(
+    def test_game_sfx_volume_change_should_apply_immediately_to_playing_audio(
         self, audio_manager: None, loaded_loader: ResourceLoader
     ) -> None:
-        # Spec 05: sfx_volume adjusted while audio is playing takes effect
+        # Spec 05: game_sfx_volume adjusted while audio is playing takes effect
         # immediately on currently playing sfx and loops.
         long_hit = loaded_loader.get_sfx_resource(SFX_LONG_HIT)
         boom = loaded_loader.get_sfx_resource(SFX_BOOM)
         audio_manager.play_sfx(SFX_LONG_HIT)
         audio_manager.set_active_loops(frozenset({SFX_BOOM}))
-        audio_manager.sfx_volume = 25
+        audio_manager.game_sfx_volume = 25
         assert long_hit.get_volume() == _vol(0.25)
         assert boom.get_volume() == _vol(0.25)
         # ...and playback continues:
@@ -677,30 +677,30 @@ class TestConfigurationSetters:
         boom = loaded_loader.get_sfx_resource(SFX_BOOM)
         audio_manager.set_active_loops(frozenset({SFX_BOOM}))
         audio_manager.play_music(MUSIC_THEME)
-        audio_manager.sfx_volume = 30
+        audio_manager.game_sfx_volume = 30
         audio_manager.music_volume = 60
-        assert audio_manager.sfx_volume == 30
+        assert audio_manager.game_sfx_volume == 30
         assert audio_manager.music_volume == 60
         assert boom.get_volume() == _vol(0.3)
         assert pygame.mixer.music.get_volume() == _vol(0.6)
 
-    def test_setting_sfx_enabled_false_should_stop_playing_sfx_and_loops(
+    def test_setting_game_sfx_enabled_false_should_stop_playing_sfx_and_loops(
         self, audio_manager: None, loaded_loader: ResourceLoader
     ) -> None:
-        # Spec 05: setting sfx_enabled to false stops any currently playing
+        # Spec 05: setting game_sfx_enabled to false stops any currently playing
         # sfx/loop.
         audio_manager.play_sfx(SFX_LONG_HIT)
         audio_manager.set_active_loops(frozenset({SFX_BOOM}))
         assert len(_busy_channel_indices()) == 2
-        audio_manager.sfx_enabled = False
-        assert audio_manager.sfx_enabled is False
+        audio_manager.game_sfx_enabled = False
+        assert audio_manager.game_sfx_enabled is False
         assert _busy_channel_indices() == []
 
     def test_re_enabling_sfx_should_allow_playing_again(
         self, audio_manager: None, loaded_loader: ResourceLoader
     ) -> None:
-        audio_manager.sfx_enabled = False
-        audio_manager.sfx_enabled = True
+        audio_manager.game_sfx_enabled = False
+        audio_manager.game_sfx_enabled = True
         audio_manager.play_sfx(SFX_BOOM)
         assert _channels_playing(loaded_loader.get_sfx_resource(SFX_BOOM)) != []
 
@@ -724,37 +724,37 @@ class TestSetterValidation:
     startup (InvalidConfigError) and silently lose the user's settings.
     """
 
-    def test_when_sfx_volume_below_range_should_clamp_to_zero_and_warn(
+    def test_when_game_sfx_volume_below_range_should_clamp_to_zero_and_warn(
         self, audio_manager: None, hermetic_persistence: Path
     ) -> None:
         # GIVEN the default sfx volume (100) and a writable game.json:
         warnings, sink_id = _warning_records()
         try:
             # WHEN the client sets a volume below the 0-100 range:
-            audio_manager.sfx_volume = -5
+            audio_manager.game_sfx_volume = -5
         finally:
             logger.remove(sink_id)
         # THEN the in-memory setting is clamped to mute and a warning
         # was logged:
-        assert audio_manager.sfx_volume == 0
+        assert audio_manager.game_sfx_volume == 0
         assert any("clamped" in record for record in warnings)
         # AND game.json holds the valid value - never the raw -5:
-        assert _config_payload(hermetic_persistence)["audio"]["sfx_volume"] == 0
+        assert _config_payload(hermetic_persistence)["audio"]["game_sfx_volume"] == 0
 
-    def test_when_sfx_volume_above_range_should_clamp_to_full_volume_and_warn(
+    def test_when_game_sfx_volume_above_range_should_clamp_to_full_volume_and_warn(
         self, audio_manager: None, hermetic_persistence: Path
     ) -> None:
         warnings, sink_id = _warning_records()
         try:
             # WHEN the client sets a volume above the 0-100 range:
-            audio_manager.sfx_volume = 999
+            audio_manager.game_sfx_volume = 999
         finally:
             logger.remove(sink_id)
         # THEN the setting is clamped to full volume with a warning, and
         # game.json holds 100 - never the raw 999:
-        assert audio_manager.sfx_volume == 100
+        assert audio_manager.game_sfx_volume == 100
         assert any("clamped" in record for record in warnings)
-        assert _config_payload(hermetic_persistence)["audio"]["sfx_volume"] == 100
+        assert _config_payload(hermetic_persistence)["audio"]["game_sfx_volume"] == 100
 
     def test_when_music_volume_below_range_should_clamp_to_zero_and_warn(
         self, audio_manager: None, hermetic_persistence: Path
@@ -782,28 +782,28 @@ class TestSetterValidation:
         assert any("clamped" in record for record in warnings)
         assert _config_payload(hermetic_persistence)["audio"]["music_volume"] == 100
 
-    def test_when_sfx_volume_non_numeric_should_keep_current_value_and_warn(
+    def test_when_game_sfx_volume_non_numeric_should_keep_current_value_and_warn(
         self, audio_manager: None
     ) -> None:
         # GIVEN the default sfx volume (100):
         warnings, sink_id = _warning_records()
         try:
             # WHEN the client sets a value that is not numeric at all:
-            audio_manager.sfx_volume = "banana"
+            audio_manager.game_sfx_volume = "banana"
         finally:
             logger.remove(sink_id)
         # THEN the setting is unchanged and a warning was logged:
-        assert audio_manager.sfx_volume == 100
-        assert any("sfx_volume" in record for record in warnings)
+        assert audio_manager.game_sfx_volume == 100
+        assert any("game_sfx_volume" in record for record in warnings)
 
-    def test_when_sfx_volume_is_numeric_string_should_coerce_as_config_loading_does(
+    def test_when_game_sfx_volume_is_numeric_string_should_coerce_as_config_loading_does(
         self, audio_manager: None, hermetic_persistence: Path
     ) -> None:
         # Spec 05: pydantic coerces "50" to 50 at config-load time; the
         # setter applies the same rule.
-        audio_manager.sfx_volume = "45"
-        assert audio_manager.sfx_volume == 45
-        assert _config_payload(hermetic_persistence)["audio"]["sfx_volume"] == 45
+        audio_manager.game_sfx_volume = "45"
+        assert audio_manager.game_sfx_volume == 45
+        assert _config_payload(hermetic_persistence)["audio"]["game_sfx_volume"] == 45
 
     def test_when_music_volume_is_fractional_should_keep_current_value(
         self, audio_manager: None
@@ -822,28 +822,28 @@ class TestSetterValidation:
         # would fail validation at startup (InvalidConfigError) and the
         # game would silently lose the user's settings.
         # GIVEN out-of-range volumes were clamped by the setters:
-        audio_manager.sfx_volume = -5
+        audio_manager.game_sfx_volume = -5
         audio_manager.music_volume = 999
         # WHEN the config is loaded the way startup loads it:
         config = game_config.load_game_config()
         # THEN the file is valid and the clamped values survived:
         assert config.audio is not None
-        assert config.audio.sfx_volume == 0
+        assert config.audio.game_sfx_volume == 0
         assert config.audio.music_volume == 100
 
-    def test_when_sfx_enabled_non_boolean_should_keep_current_value_and_warn(
+    def test_when_game_sfx_enabled_non_boolean_should_keep_current_value_and_warn(
         self, audio_manager: None
     ) -> None:
         # GIVEN sfx is enabled:
         warnings, sink_id = _warning_records()
         try:
             # WHEN the client sets the flag to a non-boolean value:
-            audio_manager.sfx_enabled = "banana"
+            audio_manager.game_sfx_enabled = "banana"
         finally:
             logger.remove(sink_id)
         # THEN the flag is unchanged and a warning was logged:
-        assert audio_manager.sfx_enabled is True
-        assert any("sfx_enabled" in record for record in warnings)
+        assert audio_manager.game_sfx_enabled is True
+        assert any("game_sfx_enabled" in record for record in warnings)
 
     def test_when_music_enabled_non_boolean_should_keep_current_value(
         self, audio_manager: None
@@ -856,8 +856,8 @@ class TestSetterValidation:
     ) -> None:
         # Spec 05: pydantic accepts 0/1 as booleans at config-load time; the
         # setter applies the same rule.
-        audio_manager.sfx_enabled = 0
-        assert audio_manager.sfx_enabled is False
+        audio_manager.game_sfx_enabled = 0
+        assert audio_manager.game_sfx_enabled is False
 
 
 class TestPersistence:
@@ -865,14 +865,18 @@ class TestPersistence:
         self, audio_manager: None, hermetic_persistence: Path
     ) -> None:
         # Spec 05: config changes are persisted via the configuration module.
-        audio_manager.sfx_volume = 30
+        audio_manager.game_sfx_volume = 30
         payload = json.loads(
             (hermetic_persistence / "game.json").read_text(encoding="utf-8")
         )
         assert payload == {
             "audio": {
-                "sfx_enabled": True,
-                "sfx_volume": 30,
+                "game_sfx_enabled": True,
+                "game_sfx_volume": 30,
+                "ui_sfx_enabled": True,
+                "ui_sfx_volume": 80,
+                "speech_enabled": True,
+                "speech_volume": 90,
                 "music_enabled": True,
                 "music_volume": 80,
             }
@@ -890,7 +894,7 @@ class TestPersistence:
             json.dumps(
                 {
                     "mainWindow": {"mode": "fullscreen", "resolution": "1920x1080"},
-                    "audio": {"sfx_volume": 70},
+                    "audio": {"game_sfx_volume": 70},
                 }
             ),
             encoding="utf-8",
@@ -903,8 +907,12 @@ class TestPersistence:
         payload = json.loads(config_path.read_text(encoding="utf-8"))
         assert payload["mainWindow"] == {"mode": "fullscreen", "resolution": "1920x1080"}
         assert payload["audio"] == {
-            "sfx_enabled": True,
-            "sfx_volume": 70,
+            "game_sfx_enabled": True,
+            "game_sfx_volume": 70,
+            "ui_sfx_enabled": True,
+            "ui_sfx_volume": 80,
+            "speech_enabled": True,
+            "speech_volume": 90,
             "music_enabled": True,
             "music_volume": 10,
         }
@@ -917,19 +925,19 @@ class TestPersistence:
         # GIVEN a game.json with an unrecognized key in the audio section:
         config_path = bootstrapped_persistence / "game.json"
         config_path.write_text(
-            json.dumps({"audio": {"sfx_volume": 30, "bogusKey": 1}}), encoding="utf-8"
+            json.dumps({"audio": {"game_sfx_volume": 30, "bogusKey": 1}}), encoding="utf-8"
         )
         config = game_config.load_game_config()
         # The unknown key is ignored on startup:
         assert config.audio is not None
-        assert config.audio.sfx_volume == 30
+        assert config.audio.game_sfx_volume == 30
         # WHEN the section is saved:
         manager = AudioManager(loaded_loader, config.audio)
         manager.music_volume = 10
         # THEN the unrecognized key is gone from the file:
         payload = json.loads(config_path.read_text(encoding="utf-8"))
         assert "bogusKey" not in payload["audio"]
-        assert payload["audio"]["sfx_volume"] == 30
+        assert payload["audio"]["game_sfx_volume"] == 30
 
     def test_when_persistence_fails_should_keep_settings_and_log_warning(
         self, audio_manager: None, monkeypatch: pytest.MonkeyPatch
@@ -943,11 +951,11 @@ class TestPersistence:
         warnings, sink_id = _warning_records()
         try:
             # WHEN the volume changes despite the failing save:
-            audio_manager.sfx_volume = 10
+            audio_manager.game_sfx_volume = 10
         finally:
             logger.remove(sink_id)
         # THEN the setting is in effect in memory and a warning was logged:
-        assert audio_manager.sfx_volume == 10
+        assert audio_manager.game_sfx_volume == 10
         assert any("audio" in record.lower() for record in warnings)
 
 
@@ -965,10 +973,10 @@ class TestSingleton:
     ) -> None:
         # Spec 05: init_audio_manager creates the global instance; the
         # accessor returns it.
-        created = audio.init_audio_manager(loaded_loader, AudioConfig(sfx_volume=42))
+        created = audio.init_audio_manager(loaded_loader, AudioConfig(game_sfx_volume=42))
         try:
             assert audio.get_audio_manager() is created
-            assert audio.get_audio_manager().sfx_volume == 42
+            assert audio.get_audio_manager().game_sfx_volume == 42
         finally:
             # Keep the module global clean for other tests.
             monkeypatch.setattr(audio, "_audio_manager", None)

@@ -45,18 +45,31 @@ class ResourcesConfig(BaseModel):
 class AudioConfig(BaseModel):
     """The ``audio`` section of game.json (spec 05: Configuration).
 
-    Volumes are integer percentages 0 (mute) - 100 (full), later applied as
-    ``set_volume(value / 100)`` (spec 05: Validation). Deliberately NOT
-    ``extra='forbid'``: per spec 05, unrecognized keys in the ``audio``
-    object are silently ignored (and dropped when the section is next
-    saved, per spec 01's section-rewrite semantics). A ``None`` section
-    means "use defaults" - dtd.audio normalizes it to a fresh
-    ``AudioConfig()`` (spec 05: a top-level ``audio`` of ``null`` is fine).
+    Audio is split into three sound-effect categories plus music, each with
+    its own enabled flag and volume (spec 05 amendment 2026-10-09): game
+    sfx, UI sfx, and speech. Volumes are integer percentages 0 (mute) -
+    100 (full), later applied as ``set_volume(value / 100)`` (spec 05:
+    Validation). Deliberately NOT ``extra='forbid'``: per spec 05,
+    unrecognized keys in the ``audio`` object are silently ignored (and
+    dropped when the section is next saved, per spec 01's section-rewrite
+    semantics) - which is also how the pre-amendment ``sfx_enabled`` /
+    ``sfx_volume`` keys are handled: silently dropped, defaults apply.
+    A ``None`` section means "use defaults" - dtd.audio normalizes it to a
+    fresh ``AudioConfig()`` (spec 05: a top-level ``audio`` of ``null`` is
+    fine).
     """
 
-    sfx_enabled: bool = True
-    sfx_volume: int = Field(
+    game_sfx_enabled: bool = True
+    game_sfx_volume: int = Field(
         default=100, ge=VOLUME_MIN_PERCENT, le=VOLUME_MAX_PERCENT
+    )
+    ui_sfx_enabled: bool = True
+    ui_sfx_volume: int = Field(
+        default=80, ge=VOLUME_MIN_PERCENT, le=VOLUME_MAX_PERCENT
+    )
+    speech_enabled: bool = True
+    speech_volume: int = Field(
+        default=90, ge=VOLUME_MIN_PERCENT, le=VOLUME_MAX_PERCENT
     )
     music_enabled: bool = True
     music_volume: int = Field(
@@ -77,7 +90,7 @@ class GameConfig(BaseModel):
 
     mainWindow: MainWindowConfig | None = None
     resources: ResourcesConfig | None = None
-    # Spec 05: audio sfx/music settings. A missing key (or an explicit
+    # Spec 05: audio sfx/speech/music settings. A missing key (or an explicit
     # null) means "defaults"; dtd.audio resolves None -> AudioConfig().
     audio: AudioConfig | None = None
     # Spec 04: UI theme and font. Both are optional resource identifiers or

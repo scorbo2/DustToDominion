@@ -218,9 +218,66 @@ class TestAudioConfig:
         self, hermetic_persistence: Path
     ) -> None:
         # Spec 05: missing keys silently revert to defaults.
-        _write_game_json(hermetic_persistence, {"audio": {"sfx_volume": 30}})
+        _write_game_json(hermetic_persistence, {"audio": {"game_sfx_volume": 30}})
         result = game_config.load_game_config()
-        assert result.audio == AudioConfig(sfx_volume=30)
+        assert result.audio == AudioConfig(game_sfx_volume=30)
+
+    def test_with_full_audio_section_should_parse_every_category(
+        self, hermetic_persistence: Path
+    ) -> None:
+        # Spec 05 (amendment 2026-10-09): game sfx, UI sfx, speech, and
+        # music each carry their own enabled flag and volume.
+        _write_game_json(
+            hermetic_persistence,
+            {
+                "audio": {
+                    "game_sfx_enabled": False,
+                    "game_sfx_volume": 10,
+                    "ui_sfx_enabled": False,
+                    "ui_sfx_volume": 20,
+                    "speech_enabled": False,
+                    "speech_volume": 30,
+                    "music_enabled": False,
+                    "music_volume": 40,
+                }
+            },
+        )
+        result = game_config.load_game_config()
+        assert result.audio == AudioConfig(
+            game_sfx_enabled=False,
+            game_sfx_volume=10,
+            ui_sfx_enabled=False,
+            ui_sfx_volume=20,
+            speech_enabled=False,
+            speech_volume=30,
+            music_enabled=False,
+            music_volume=40,
+        )
+
+    def test_audio_config_defaults_should_match_the_spec_document_values(self) -> None:
+        # Spec 05: Configuration - the documented defaults are 100/80/90/80
+        # with every category enabled.
+        defaults = AudioConfig()
+        assert defaults.game_sfx_enabled is True
+        assert defaults.game_sfx_volume == 100
+        assert defaults.ui_sfx_enabled is True
+        assert defaults.ui_sfx_volume == 80
+        assert defaults.speech_enabled is True
+        assert defaults.speech_volume == 90
+        assert defaults.music_enabled is True
+        assert defaults.music_volume == 80
+
+    def test_with_legacy_sfx_keys_should_ignore_them(
+        self, hermetic_persistence: Path
+    ) -> None:
+        # Spec 05 (amendment 2026-10-09): the pre-amendment sfx_enabled /
+        # sfx_volume keys are now unrecognized nested keys - silently
+        # ignored, with defaults applying (the documented migration path).
+        _write_game_json(
+            hermetic_persistence,
+            {"audio": {"sfx_enabled": False, "sfx_volume": 0}},
+        )
+        assert game_config.load_game_config().audio == AudioConfig()
 
     def test_with_unexpected_nested_key_should_ignore_it(
         self, hermetic_persistence: Path
@@ -228,10 +285,10 @@ class TestAudioConfig:
         # Spec 05: unrecognized keys in the audio object are silently ignored
         # (unlike resources, whose model forbids extras).
         _write_game_json(
-            hermetic_persistence, {"audio": {"sfx_volume": 30, "bogusKey": 1}}
+            hermetic_persistence, {"audio": {"game_sfx_volume": 30, "bogusKey": 1}}
         )
         result = game_config.load_game_config()
-        assert result.audio == AudioConfig(sfx_volume=30)
+        assert result.audio == AudioConfig(game_sfx_volume=30)
 
     def test_with_wrong_type_for_audio_key_should_return_defaults(
         self, hermetic_persistence: Path
@@ -252,28 +309,38 @@ class TestAudioConfig:
         with pytest.raises(InvalidConfigError):
             config.load_config(path, game_config.GAME_CONFIG_ENV_VAR, GameConfig)
 
+    @pytest.mark.parametrize(
+        "volume_key",
+        ["game_sfx_volume", "ui_sfx_volume", "speech_volume", "music_volume"],
+    )
     def test_with_out_of_range_volume_should_return_defaults(
-        self, hermetic_persistence: Path
+        self, hermetic_persistence: Path, volume_key: str
     ) -> None:
-        # Spec 05: volumes outside 0-100 are rejected -> defaults.
-        _write_game_json(hermetic_persistence, {"audio": {"sfx_volume": 101}})
+        # Spec 05: volumes outside 0-100 are rejected -> defaults, for
+        # every category's volume field alike.
+        _write_game_json(hermetic_persistence, {"audio": {volume_key: 101}})
         assert game_config.load_game_config() == GameConfig()
 
+    @pytest.mark.parametrize(
+        "enabled_key",
+        ["game_sfx_enabled", "ui_sfx_enabled", "speech_enabled", "music_enabled"],
+    )
     def test_with_invalid_enabled_value_should_return_defaults(
-        self, hermetic_persistence: Path
+        self, hermetic_persistence: Path, enabled_key: str
     ) -> None:
-        # Spec 05: an obviously non-boolean enabled value is rejected -> defaults.
-        _write_game_json(hermetic_persistence, {"audio": {"sfx_enabled": "banana"}})
+        # Spec 05: an obviously non-boolean enabled value is rejected ->
+        # defaults, for every category's enabled flag alike.
+        _write_game_json(hermetic_persistence, {"audio": {enabled_key: "banana"}})
         assert game_config.load_game_config() == GameConfig()
 
     def test_with_coerced_values_should_parse(self, hermetic_persistence: Path) -> None:
         # Spec 05: pydantic coercion is acceptable (1 -> True, "50" -> 50).
         _write_game_json(
             hermetic_persistence,
-            {"audio": {"sfx_enabled": 1, "music_volume": "50"}},
+            {"audio": {"game_sfx_enabled": 1, "music_volume": "50"}},
         )
         result = game_config.load_game_config()
-        assert result.audio == AudioConfig(sfx_enabled=True, music_volume=50)
+        assert result.audio == AudioConfig(game_sfx_enabled=True, music_volume=50)
 
 
 class TestSaveGameConfigSection:
