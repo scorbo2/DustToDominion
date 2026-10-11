@@ -295,7 +295,7 @@ class AudioManager:
         (spec 05: Stopping sound effects, added by spec 06: TextPanel).
 
         Unknown ids and ids that are not playing are silent no-ops. With
-        sfx disabled nothing can be playing, so this is inherently a
+        all sfx disabled nothing can be playing, so this is inherently a
         no-op in that state. ``Sound.stop()`` halts the sound on ALL
         channels, so this may also silence another consumer playing the
         same sound - acceptable per spec 06.
