@@ -127,7 +127,8 @@ DEFAULT_THEME_DISPLAY_VALUE = "(Default theme)"
 DEFAULT_FONT_DISPLAY_VALUE = "(System default)"
 
 # --- Resource packaging (spec 03) ----------------------------------------
-#: The directory name the game always scans first in dev mode (spec 03).
+#: The directory name the game always scans first in the resource search
+#: path (spec 03: Resource scanning).
 DEFAULT_RESOURCE_DIRNAME = "resources"
 #: The only ``manifest.json`` version this build of the game can load
 #: (spec 03: Manifest errors). A pak declaring any other version is rejected
@@ -176,7 +177,7 @@ FONT_RESOURCE_ID_PREFIX = "fonts/"
 #: input, so a full parse is deliberately out of scope.
 TTF_MAGIC_NUMBER = b"\x00\x01\x00\x00"
 
-#: The file extension of package files (spec 03: Distribution mode).
+#: The file extension of package files (spec 03: The pak format).
 #: Matching is case-sensitive.
 PAK_FILE_EXTENSION = ".pak"
 

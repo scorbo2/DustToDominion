@@ -10,13 +10,11 @@ The game needs to load resources from disk. Such resources include but are not l
 - sound effects (either single-shot effects or effects designed for continuous looping)
 - music tracks
 
-The game will have two basic modes for loading these resources:
-- "dev mode": resources are loaded from individual files in the `resources/` subdirectory.
-- "distribution mode": resources are loaded from custom package files (archive files, `*.pak`) in the project directory.
-
-In both modes, the game should not make assumptions about the number of resources to be loaded.
-The intention is that additional resource packages can be made after the game ships, as
-add-on packs, and distributed to users as `*.pak` package files.
+The game will ship with certain "core" game resources as individual files in a `resources/`
+subdirectory. This resource directory is always searched first. Additional resources can
+be distributed as `.pak` archive files. These additional resources can either supplement
+or replace the core game resources (search order matters - resources with the same
+id can override resources found earlier in the search).
 
 This document describes the `resource_loader` module, which is responsible for finding and loading
 game resources at game startup. This resource loader is invoked during startup, after the game configuration
@@ -67,73 +65,77 @@ That falls under configuration loading as covered in the `01` spec doc.
 
 None in this spec. Everything documented here should be possible with only the Python standard library.
 
-## Dev mode
+## Resource scanning
 
-On startup, the game will check for the existence of a `resources/` subdirectory within the project directory.
-A recursive scan is done looking for any file with a supported extension. Each found file
-is loaded into memory with an ID relative to the `resources/` directory. For example:
+On startup, the game will check for the existence of a `resources/` subdirectory within the game directory.
+It is not an error if this directory does not exist. If it exists, a recursive scan in this subdirectory is
+executed, to find any file with a supported extension. Each found file is loaded into memory with an ID relative
+to the `resources/` directory. For example:
 
 - `resources/audio/sfx/boom.wav` is loaded and given an ID of `audio/sfx/boom.wav`.
 - `resources/LetterToMyGrandma.doc` is skipped because the extension is not supported (no log warning - silent skip).
 - `resources/graphics/ships/viper.png` is loaded and given an ID of `graphics/ships/viper.png`.
 - `resources/data/NPC_dialog/frank.txt` is loaded and given an ID of `data/NPC_dialog/frank.txt`.
 
-Additionally, any `location` specified in configuration will also be recursively scanned for valid resources,
-which are loaded into memory. Their IDs are computed relative to the named directory. For example,
-given a location of `/home/user/Images/`, the resource `/home/user/Images/graphics/myShips/awesome.png` is loaded
+Once all resources from the `resources/` subdirectory are loaded, an identical search will be
+carried out for each `location` specified in the game configuration (if any). It is not an error
+if a named `location` is empty - just skip it silently (but the named `location` must exist;
+else raise `ResourceLoadError`). It is not an error if
+a resource in a named `location` has a computed id that is identical to one loaded earlier in the
+search - in fact, this is the intended way to allow the user to "override" shipped game resources
+with their own. Any found resource with a computed id that is already in use replaces
+the one that was already loaded (with a log warning). The existing resource is dropped from memory in
+favor of the new one. For id computation purposes, the id is computed relative to the named `location`. For example,
+given a `location` of `/home/user/Images/`, the resource `/home/user/Images/graphics/myShips/awesome.png` is loaded
 and given an ID of `graphics/myShips/awesome.png`.
 
 A resource that cannot be loaded (for example: an invalid PNG image, or a zero-byte `wav` file) triggers
 a `ResourceLoadError` and is considered fatal (exit code 1).
 
-## Distribution mode
+Note that the `location` list in game config may contain entries that do not resolve to a directory,
+but rather to a file with a `.pak` extension. That is not an error - this is our custom resource package
+file format, and that package file will be interrogated at that point in the search. If a `location`
+entry does not resolve to an existing directory or file, raise `ResourceLoadError`. If a `location`
+entry resolves to an existing file that does not have a `.pak` extension, raise `ResourceLoadError`.
+If a `location` entry resolves to an existing `.pak` file that cannot be read (file permission error,
+for example), or a directory that cannot be read, raise `ResourceLoadError`.
 
-On startup, the game will check for the existence of `*.pak` files in the project directory.
-No assumptions are made regarding file names or file count. The scan is NOT
-recursive: only the top level of the project directory (and of any configured
-`location` directory) is examined for `*.pak` files. For example, all game resources might
-be packaged into a single `game_assets.pak`, or they may be packaged separately in `audio.pak`,
-`graphics.pak`, and `data.pak` (for example). Or, resources of the same type may be split across
-multiple package files, like `asteroids.pak` (containing asteroid images) and `ships.pak` (containing
-ship images).
+If the resource scan completes without finding a single resource, raise `NoResourcesFoundError`.
 
-The contents of each package file are enumerated, extracted, and loaded into memory.
+On a successful scan, the game logs an informational startup message summarizing the
+result: the total count of distinct resources in memory once the scan completes, with a
+parenthetical count of how many of those are overrides (resources that replaced an
+earlier resource with an identical id). Example: `Loaded 32 resources total (including 8
+overrides)` - meaning 40 resources were loaded, 8 of which replaced an earlier resource,
+leaving 32 distinct resources in memory. The net total is reported directly so the user
+never has to do arithmetic to learn what the game actually holds. This gives users and
+modders a quick way to confirm their overrides were picked up, without trawling the
+per-resource duplicate warnings. The exact log wording is illustrative; the two counts
+are the requirement.
+
+### Edge cases
+
+- A directory named `resources.pak` is treated as a directory (extensions are ignored for directories).
+- A directory containing multiple `*.pak` files cannot be listed as a `location` with the intention
+  of auto-scanning each `.pak` file contained therein. Each `.pak` file must appear as its own
+  `location` entry.
+- A directory containing a file called `manifest.json` is technically not an error, since Json
+  files are a supported type. It is likely not what the user intended, but we will not log a warning
+  or try to guess the user's intentions. The file will be loaded as a Json resource with an id of `manifest.json`.
+  The reserved-name rule for `manifest.json` applies to entries in a package file only, not in directories.
 
 ## Filesystem monitoring
 
-In neither mode does the game monitor the filesystem for changes. Additional resources that are
-created on disk during the game's runtime are ignored. Existing resources that are deleted from
+The game makes no attempt to monitor the filesystem for changes after startup. Additional resources that
+are created on disk during the game's runtime are ignored. Existing resources that are deleted from
 disk during the game's runtime are ignored (as all assets are loaded into memory, the disk contents
-become irrelevant). The game must be restarted for on-disk changes to be reflected in-game.
-
-## Determining mode
-
-- if no configuration is specified (see Configuration section), dev mode is assumed.
-- if configuration explicitly specifies a mode, the specified mode is used.
-- if dev mode is specified:
-  - check if `resources/` + any listed `location` exists and contains at least one valid resource (recursive search).
-  - if so, load resources that are found. Resource loader has succeeded. Proceed with game load.
-  - the first unparseable resource that is found ends the process with `ResourceLoadError` and exit code 1.
-  - if no valid resources are found in `resources/` or any listed `location`, fall back to distribution mode.
-- if distribution mode is specified (or if we are falling back from dev mode):
-  - scan the project directory + any listed `location` for `*.pak` files.
-  - the first invalid package file that is detected ends the process with `ResourceLoadError` and exit code 1.
-  - if at least one `*.pak` file is found and at least one valid resource is loaded: Resource loader has succeeded.
-  - if no `*.pak` files are found in the project directory or any listed location: `NoResourcesFoundError` and exit code 1.
-
-Note that a single unloadable resource file or invalid `*.pak` file stops the process and prevents
-any fallback.
+become irrelevant after startup). The game must be restarted for on-disk changes to be reflected in-game.
 
 ## Consumer API
 
 The resource loader exposes functions to retrieve specific resource types:
 
 - `get_image_resource(id)` - returns a `pygame.Surface` object containing image data.
-
-*Terminology note: this function was originally named `get_sprite_resource`. Renamed to
-`get_image_resource` on 2026-10-06 per spec 08 (Title Screen); all "sprite" wording in this
-project's docs and code became "image".*
-
 - `get_sfx_resource(id)` - returns a `pygame.mixer.Sound` object containing audio data.
 - `get_music_resource(id)` - returns raw audio bytes that can be used with `mixer.music.load(io.BytesIO(...))`. This is a client concern, and not something that the resource loader will do. The resource loader simply loads and caches the raw audio bytes.
 - `get_text_resource(id)` - returns a string.
@@ -151,19 +153,14 @@ ID is not present, or if the given ID identifies a resource of the wrong type (e
 
 ## Manifest
 
-Each resource directory has an associated manifest. The manifest contains information about the
-resources contained within that directory, along with their SHA-256 hash. The manifest contains
-a version number so that the resource loader can determine whether the resource package is in
-a format that the game code can understand.
+Resource directories have no explicit manifest file associated with them. The contents
+of a resource directory are determined dynamically during the initial resource load,
+using a recursive search looking for any of our acceptable file extensions.
 
-- in dev mode, this manifest is determined dynamically based on the contents of the directory.
-  Enumerate all candidate resource files recursively (using file extensions from the acceptable
-  resource format list) and compute a unique ID for each found resource. The IDs should be
-  relative to the containing resources directory. Examples: `audio/boom.wav`, `graphics/ship.jpg`, etc.
-  In dev mode, we don't care about `version` or the SHA-256 hash of each item. That is only
-  for distribution mode.
-- in distribution mode, a `manifest.json` file MUST appear in each package. It is a fatal
-  error for this file to be missing or malformed (`ResourceLoadError`).
+Our custom package file format always includes a `manifest.json` entry that contains
+information about the resources contained in the package, along with a SHA-256 hash
+of each entry. If a `.pak` file contains no `manifest.json` entry, raise `ResourceLoadError`.
+If the `manifest.json` entry is present but malformed/empty, raise `ResourceLoadError`.
 
 ### manifest.json format
 
@@ -193,8 +190,7 @@ refuses to interpret a package format it does not understand; this is a fatal
 load error (exit code 1), like all `ResourceError` subtypes.
 
 If a manifest entry has an unrecognized extension, raise `ResourceLoadError`.
-For example: `"id": "audio/sfx/hello.rar"` is invalid. In dev mode, invalid extensions
-are silently skipped. But in distribution mode, these are considered fatal errors.
+For example: `"id": "audio/sfx/hello.rar"` is invalid.
 
 It is not an error if a resource entry has unrecognized keys. For example:
 
@@ -213,12 +209,14 @@ It is not an error if a resource entry has unrecognized keys. For example:
 
 Just ignore the unrecognized key and proceed.
 
-If two entries in the manifest have the same ID: `ResourceLoadError`.
+If two entries in the same manifest have the same ID: `ResourceLoadError`.
 
 ## Identifying resources
 
-Internally, each resource has a unique id, driven by its file location (in dev mode) or by its `id` field
-(in distribution mode). This id is never an absolute path.
+Internally, each resource has a unique id, driven by its file location (if loaded from a directory)
+or by its `id` field (if loaded from a package file). This id is never an absolute path. The game
+uses this id internally to identify and request the resource in question. The game code never uses
+a filesystem path to identify a resource.
 
 ### Distinguishing music from sound effects
 
@@ -226,84 +224,87 @@ By convention, the directory structure of the resources is used to make this dis
 in `audio/music/` will be considered a music file, and any audio resource in any other directory will be
 considered a sound effect. This is important not only for the consumer API (i.e. `get_sfx_resource()` versus
 `get_music_resource()`, but also for the way the resources are cached in memory - sound effects are
-cached as a `pygame.mixer.Sound` object, which music files have their raw bytes cached instead.
+cached as a `pygame.mixer.Sound` object, while music files have their raw bytes cached instead.
 
 ## Configuration
 
-A top-level configuration key `resources` is defined by this spec. This configuration field can explicitly set
-a mode to be used ("dev" or "distribution"), along with the location of resources to be loaded.
-If "mode" is any value other than "dev" or "distribution", raise `InvalidConfigError` with a warning
-log message and assume "dev". If "mode" is missing entirely, assume "dev" with no log warning.
+A top-level configuration key `resources` is defined by this spec. This key contains the list
+of resource locations to be scanned at startup, either directories or package files.
 
-The simplest example for "dev" mode assumes a single resource location of `resources/`, relative
-to the project directory:
+The `resources/` subdirectory within the game directory is always implied. Therefore, the simplest
+possible `resources` entry is an empty object:
 
 ```json
 {
+  "resources": {}
+}
+```
+
+This is equivalent to the following:
+```json
+{
   "resources": {
-    "mode": "dev"
+    "location": []
   }
 }
 ```
 
-If the `resources` key is missing in the game config, or if the game config itself is missing,
-this is also the default (dev mode with a single relative resources directory).
+It is also equivalent to the following:
+```json
+{
+  "resources": {
+    "location": [ "resources/" ]
+  }
+}
+```
 
-To explicitly set "dev" mode and add additional resource directories to be scanned:
+Since the `resources` key itself is optional, it is also equivalent to the following:
+
+```json
+{
+}
+```
+
+If the given path for a `location` entry is relative, it is always relative to the game's directory.
+But absolute directories can also be specified:
 
 ```json
 {
   "resources": {
-    "mode": "dev",
     "location": [ "resources/", "/home/user/custom_assets/" ]
   }
 }
 ```
 
-Note that `resources/` is always scanned, even if omitted. It is not an error to omit `"resources/"`.
-
-For distribution mode, if `location` is omitted, the project directory will be scanned for `*.pak` files:
+The `location` array can contain items pointing to directories, or `.pak` files, or both:
 
 ```json
 {
   "resources": {
-    "mode": "distribution"
+    "location": [ 
+      "/home/user/custom_assets/", 
+      "/home/user/ExtraShips.pak",
+      "/home/user/ExtraSfx.pak",
+      "/home/user/additional_assets/"
+    ]
   }
 }
 ```
 
-This is equivalent to the following:
+Each `location` entry is scanned in the order that it appears in this array!
+Ordering is important, given the ability to "override" resources found earlier in the search.
 
-```json
-{
-  "resources": {
-    "mode": "distribution",
-    "location": [ "." ]
-  }
-}
-```
+The model shape for `location` is `location: list[str], default []`.
+Specifying a malformed `location` entry (for example, an array entry that is not a string)
+will raise `InvalidConfigError` as per spec 01, and the entire game config falls back to
+defaults, with a warning logged.
 
-The user can specify additional directories to be scanned for `*.pak` files:
-
-```json
-{
-  "resources": {
-    "mode": "distribution",
-    "location": [ ".", "/home/user/custom_assets/" ]
-  }
-}
-```
-
-Note that the resource loader scans for individual asset files OR `*.pak` files, never both.
-
-Note that `"."` is always scanned, even if not explicitly listed in `location`. It is not
-an error to omit `"."`. Note also that `.` is relative to the project directory, NOT the
-user's current working directory.
+Unexpected keys in the `resources` key are rejected. Only the `location` key is expected.
 
 ### A note about relative paths
 
-Any relative path specified in any `location` entry is **relative to the project directory**,
-not to the user's current working directory. The project directory is the directory where
+Any relative path specified in any `location` entry is **relative to the game directory**,
+not to the user's current working directory. The game directory is the directory where
 the game script resides. So, if the game was installed in `/home/user/DustToDominion`, and
 a `location` key specifies `.` or `resources/`, then it is relative to `/home/user/DustToDominion`,
 regardless of where the user launched the game from.
@@ -316,7 +317,8 @@ The `*.pak` format is just a renamed `zip` file with some extremely basic securi
 - Each resource file will be key-xor encrypted with a hard-coded key. This is not meant to stop a determined attacker, but rather to prevent casual browsing of game resources which may be licensed from a third party and therefore not ours to give away.
 - Package files must be extracted in-memory by the resource loader! Do not extract to a temporary directory.
 - The goal is to deter casual browsing of game assets.
-- For this reason, game assets will NOT be committed to GitHub. The intention is to distribute package files with the game installer.
+- For this reason, some game assets will NOT be committed to GitHub. The intention is to distribute package files
+  with the game installer, along with modified game config to explicitly include those package files in the startup resource search path.
 - Package files might contain entries that are not explicitly listed in the manifest. This is not an error - just ignore them.
 - Entry names must contain no path separators outside the expected tree! For example, an entry named `/etc/badfile.conf`
   should raise a `ResourceLoadError`. The "expected tree" is based on the containing resources directory. For example,
@@ -347,7 +349,7 @@ unreadable.
 
 ### New custom tool - packager
 
-A new custom Python script in the `tools` directory will be added:
+A custom Python script in the `tools` directory allows the user to create and inspect package files:
 - `python3 tools/packager create --source resources --output myResources.pak` - packages all resources in `resources/` and creates a `myResources.pak` file in the current directory.
 - `python3 tools/packager inspect --source myResources.pak` - examines `myResources.pak` and reports on number of resources contained and whether all SHA hashes match. Reports any problems around malformed/empty/missing files.
 
@@ -372,15 +374,15 @@ what the game itself uses:
 
 The packager should then be invoked on the top-level `resources` directory, such that IDs like `audio/sfx/soundfile.wav` are
 computed. This is not a hard requirement - merely a recommendation so that resource IDs remain consistent. Neither the game
-nor the packager will complain if an audio resource is not contained within a directory named `audio`, for example. However, be aware that storing music resources in any directory other than `audio/music/` will result in larger memory overhead (the `Sound` object will be cached in memory instead of the raw audio bytes in that case - this is not an error, just memory wastage).
+nor the packager will complain if an audio resource is not contained within a directory named `audio`, for example. However, be aware that storing music resources in any directory other than `audio/music/` will result in larger memory overhead (the `Sound` object will be cached in memory instead of the raw audio bytes in that case - this is not an error, just wasted memory).
 
-Note: invalid resources cannot be packaged! The packager tool must ensure that each found resource is loadable
-before packaging it. The first found resource that cannot be successfully parsed should log an error to stderr
-and exit with code 1.
+Note: invalid resources cannot be packaged! The packager tool ensures that each found resource is loadable
+before packaging it. The first found resource that cannot be successfully parsed logs an error to stderr
+and exits with code 1.
 
 Note: a file named `manifest.json` in the source directory cannot be packaged
 (the name is reserved for the package manifest, see The pak format). The packager
-must treat this as a fatal error: log an error to stderr and exit with code 1.
+treats this as a fatal error: log an error to stderr and exit with code 1.
 
 ### Verifying package integrity
 
@@ -413,29 +415,32 @@ Notes for font validation:
   Attempting to access `.style_name` on that poisoned Font object can segfault the entire process.
   So, a magic-number header check will have to suffice: TTF files begin with `\x00\x01\x00\x00`.
 
-### Resolving duplicate resource IDs
-
-When loading from multiple locations, it is entirely possible that two or more resources may
-share the same ID. This is not an error. Log as a warning and continue. The most recently-loaded
-resource is retained, and any earlier one is discarded. The user can control which "wins" by
-modifying the order of `location` entries in their configuration, to put more desirable entries later
-in the list.
-
-In distribution mode, because we scan directories for `*.pak` files, it's possible that two package
-files in the same directory may contain resources with the same ID. For this reason, package files
-should be scanned alphabetically by their package filenames, with most-recently-loaded resources winning.
-This allows deterministic collision resolution. This is not an error. Log a warning and continue.
-
 ## Testing
 
-Unit tests should cover both modes thoroughly:
-- in dev mode, the happy path is that one or more game resources are found and loaded.
-- in dev mode, unhappy paths include: malformed resources (`ResourceLoadError`, exit code 1),
-  no resources present with no `*.pak` files present (`NoResourcesFoundError` and exit code 1).
-- in distribution mode, the happy path is at least one `*.pak` file present with at least one resource.
-- in distribution mode, the unhappy paths include: no `*.pak` files present
-  (`NoResourcesFoundError` and exit code 1), a package file exists but is empty or otherwise
-  invalid (`ResourceLoadError` and exit code 1).
+- given at least one valid resource in `resources/`, and an empty `resources` config key, the resource scan succeeds.
+- given an empty/missing `resources/` directory, and at least one valid resource in a named `location` entry, the resource scan succeeds.
+- given an empty `resources/` directory and an empty `resources` key, `NoResourcesFoundError` is raised.
+- the `resources/` subdirectory in the game directory is scanned even if not explicitly mentioned in the `resources` config.
+- if the `resources/` subdirectory does not exist, no error is raised (as long as at least one valid resource is found elsewhere in the search).
+- if `location` points at a non-existent file/directory, `ResourceLoadError` is raised.
+- if `location` points at a valid `.pak` file, resources are loaded from that package.
+- if `location` points at a directory that contains `*.pak` files, those files are skipped (wrong extension for our resource search).
+- if `location` points to a directory that contains `manifest.json`, that file is loaded as a Json resource with no error.
+- if `location` points at a `.pak` file whose `manifest.json` has no `version` key, `UnsupportedResourceVersionError` is raised.
+- if `location` points at a `.pak` file whose `manifest.json` has a `version` other than `1.0`, `UnsupportedResourceVersionError` is raised.
+- if `location` points at a directory or package file that cannot be read, `ResourceLoadError` is raised.
+  - Implementation note: if the test suite is run as root, `chmod 000` is not sufficient to produce an unreadable file/directory. In order to keep the test suite hermetic, an unreadable file/directory may have to be simulated some other way.
+- if a given `location` directory is empty, no error is raised (as long as at least one valid resource is found elsewhere in the search).
+- if `location` points to an existing file that does not have a `.pak` extension, `ResourceLoadError` is raised.
+- a malformed `location` entry (for example, a non-string value) results in the `resources` config being ignored. The entire game config falls back to defaults, as per spec 01.
+- if `resources/` contains a malformed resource (zero-length audio file, for example), `ResourceLoadError` is raised.
+- if two resources in the same named `.pak` file have the same id, `ResourceLoadError` is raised.
+- Resources found during the search "override" already-loaded resources if their resolved id is an exact match.
+  - for example, given a file in the game directory: `resources/graphics/test.png`, and given a `location` entry of `/some/path/` which contains a valid file `graphics/test.png`, the original `test.png` from the game's resource directory should be dropped (with a log warning) in favor of the one in the `/some/path`.
+  - this override should also work if a `location` entry specifies a `.pak` file that contains `graphics/test.png`.
+- a successful resource scan logs an informational summary with the net count of distinct
+  resources in memory and a parenthetical override count (for example, a scan that loads
+  4 resources of which 1 replaced an earlier one logs counts of 3 and 1).
 - the packager tool needs comprehensive tests to exercise the packaging and inspection features.
   - creation happy path: valid resources can be packaged.
   - creation unhappy path: invalid resources can NOT be packaged (log error on stderr and exit code 1)
@@ -445,9 +450,9 @@ Unit tests should cover both modes thoroughly:
   - inspection unhappy path: invalid packages report an error on stderr and exit code 1.
 - pygame initialization: failing unrelated modules (e.g. joystick, midi) must
   not abort startup; a failing display or mixer must abort with exit code 1.
-- In both modes, a valid `.ttf` font file can be loaded as a resource.
-- In both modes, a zero-byte `.ttf` font file is rejected as invalid.
-- In both modes, an invalid `.ttf` file (wrong header) is rejected as invalid.
+- A valid `.ttf` font file can be loaded as a resource, either from a resource directory or from a `.pak` file.
+- A zero-byte `.ttf` font file is rejected as invalid, regardless of where it was loaded from.
+- An invalid `.ttf` file (wrong header) is rejected as invalid, regardless of where it was loaded from.
 - Theme and font id accessors (added 2026-10-06 per spec 08: Title Screen):
   - `get_theme_resource_ids` with no resources in `themes/` returns a list of size 1 with item "(Default theme)".
   - `get_font_resource_ids` with no resources in `fonts/` returns a list of size 1 with item "(System default)".
@@ -458,26 +463,17 @@ Unit tests should cover both modes thoroughly:
 
 ## Acceptance criteria
 
-- Can the game be explicitly started in either mode, if both `resources` and `*.pak` files are present?
+- Can the game successfully start as long as at least one valid resource is found on the search path?
+- Can a resource be "overridden" by a resource with an identical id found later in the resource search path?
 - Does the consumer API return the expected resources after a successful startup?
-- Does the game correctly default to dev mode if both `resources` and `*.pak` are present?
-- Does the game correctly exit with status 1 if neither `resources` nor `*.pak` are present?
 - If given a `*.pak` file with invalid contents (no resources present, SHA-256 mismatch, resource that can't be loaded),
   do we get a meaningful error log message and exit code 1, as expected?
-- Do the fallback paths work as expected? Given "dev" mode is requested but `resources/` is empty, does it
-  use a valid `*.pak` file sitting in the project directory automatically?
+- Are `location` entries scanned in config order, with later entries winning id collisions?
 - Can the packager tool create a valid pak file given example resources, and then report its integrity?
 - Do resource load errors output a descriptive error message, and prevent the game from starting, as expected?
 - Does the consumer API return None as expected for invalid IDs?
-- Does an unexpected "mode" value in the game config file log a warning and proceed with dev mode?
+- If the game is started with empty/missing `resources` config, is the game's `resources/` subdirectory still scanned?
 - Does `get_font_resource(id,size)` return a Font object, given a valid resource id?
-
-## Open questions (all resolved)
-
-1. Should all properties of all resource types be defined now? Ship stats might be considerable. Should
-   we defer those details to a future spec doc specific to ships? Or should this document contain all
-   schema details for all supported resource types? **Resolved**: defer specific properties to a future
-   specification. The resource loader does not know or care about them - we simply load raw resources here.
 
 ## Dev plan
 
@@ -501,4 +497,13 @@ The spec is too large to implement all at once. The following staged dev plan is
 6. Amendment per spec 08 (Title Screen): rename `get_sprite_resource` to `get_image_resource` and
    change all "sprite" wording to "image" (docs, `game_constants.py`, `pak.py`, tests); add
    `get_theme_resource_ids` and `get_font_resource_ids` to the consumer API. **Completed 2026-10-06**
+7. Amendment on 2026-10-10: dropped the concept of "dev mode" and "distribution mode". The `location`
+   entry in the `resources` config key now contains a list of resource directories and package files.
+   Simplify the resource loading scan accordingly (no more searching for `*.pak` files within a
+   given location). Update tests accordingly. If all tests pass and all acceptance criteria
+   have been met, flip the document back to `active` status (was demoted to `proposed` as this
+   amendment is nontrivial). There is deliberately no migration path for existing game config
+   files - the game is still very early in development, so breaking changes are acceptable.
+   Users are responsible for migrating their config files to the new format.
+   **Completed 2026-10-10** (all 619 tests pass; document flipped back to `active`)
 

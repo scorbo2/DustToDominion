@@ -9,7 +9,7 @@ warning, and the game proceeds with default values.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Literal, Mapping
+from typing import Any, Mapping
 
 from loguru import logger
 from pydantic import BaseModel, ConfigDict, Field
@@ -27,19 +27,26 @@ GAME_CONFIG_FILENAME = "game.json"
 class ResourcesConfig(BaseModel):
     """The ``resources`` section of game.json (spec 03: Configuration).
 
-    ``mode`` accepts only ``dev`` or ``distribution``. Any other value is a
-    validation error, which ``load_game_config`` turns into a warning plus
-    the default config - i.e. dev mode (spec 03). ``location`` entries may be
-    relative; they are resolved against the *project* directory (where the
-    game script resides), not the current working directory (spec 03: a note
-    about relative paths). Resolving them is the resource loader's job, not
-    this model's.
+    ``location`` is the ordered resource search path: each entry is a
+    resource directory or a ``.pak`` package file, scanned in the order
+    listed, with later entries overriding earlier ones by resource ID
+    (spec 03: Resource scanning). The game's ``resources/`` subdirectory
+    is always implied first, so an empty section (or no section at all)
+    is the default. Entries may be relative; they are resolved against
+    the *game* directory (where the game script resides), not the current
+    working directory (spec 03: a note about relative paths). Resolving
+    them is the resource loader's job, not this model's.
+
+    Only ``location`` is expected: any other key - including a legacy
+    ``mode`` key from before the flat search path - is rejected, which
+    ``load_game_config`` turns into a warning plus whole-config defaults
+    (spec 01; spec 03 dev plan stage 7: no migration path for existing
+    config files).
     """
 
     model_config = ConfigDict(extra="forbid")
 
-    mode: Literal["dev", "distribution"] = "dev"
-    location: list[str] | None = None
+    location: list[str] = Field(default_factory=list)
 
 
 class AudioConfig(BaseModel):

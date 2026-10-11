@@ -59,8 +59,8 @@ DEFAULT_VOLUMES = {
 
 @pytest.fixture
 def project(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    """A fake project directory (same pattern as the resource loader tests)."""
-    monkeypatch.setattr(resource_loader, "project_directory", lambda: tmp_path)
+    """A fake game directory (same pattern as the resource loader tests)."""
+    monkeypatch.setattr(resource_loader, "game_directory", lambda: tmp_path)
     return tmp_path
 
 
@@ -95,7 +95,7 @@ def audio_tree(project: Path) -> None:
 
 @pytest.fixture
 def loaded_loader(audio_tree: None, mixer_ready: None) -> ResourceLoader:
-    """A resource loader holding the synthesized audio tree (dev mode)."""
+    """A resource loader holding the synthesized audio tree."""
     loader = ResourceLoader()
     loader.load(ResourcesConfig())
     return loader
