@@ -1,36 +1,30 @@
 """Game resource loading and the consumer API (spec 03: Resource packaging).
 
-All spec 03 loading modes are implemented: dev mode and distribution mode.
+The loader walks one flat, ordered search path (spec 03: Resource
+scanning): the implicit ``resources/`` directory inside the game
+directory - always searched first, not an error if missing - followed by
+every configured ``location`` entry in config order. A location entry is
+either a directory (recursively scanned for files whose extension is in
+``game_constants.SUPPORTED_RESOURCE_EXTENSIONS``, case-sensitive, each
+loaded under an ID relative to that directory) or a ``.pak`` package
+file (loaded in-memory via ``dtd.pak``, including manifest, SHA-256,
+and decode validation). A location entry that does not exist, cannot be
+read, or is a file without the ``.pak`` extension raises
+``ResourceLoadError``; an existing but empty directory is silently
+skipped. ``.pak`` files found *inside* a directory location are not
+auto-discovered - each package must be its own location entry.
 
-Dev mode: the loader scans the default ``resources/`` directory (always,
-even if omitted from config) plus every configured ``location`` directory,
-recursively, for files whose extension is in
-``game_constants.SUPPORTED_RESOURCE_EXTENSIONS`` (case-sensitive), and
-loads each one into memory under an ID relative to its containing directory
-(e.g. ``audio/sfx/boom.wav``). Unsupported extensions are silently skipped
-(spec 03: no log warning). The first resource that cannot be loaded raises
-``ResourceLoadError`` (fatal, exit code 1 at the caller).
+A resource ID that is already in use is silently replaced by the later
+resource, with a log warning (spec 03: Resource scanning) - this is the
+intended way for users to override shipped game resources, and config
+order decides the winner. If the scan completes without finding a single
+resource, ``NoResourcesFoundError`` is raised (fatal, exit code 1 at
+the caller).
 
-Distribution mode: the loader scans the project directory (always, even if
-``location`` is omitted) plus every configured ``location`` directory for
-``*.pak`` package files, and loads each one in-memory via ``dtd.pak``
-(including manifest, SHA-256, and decode validation). The scan is NOT
-recursive: pak files sit at the top level of each scanned directory (spec 03
-says "scan ... for *.pak files" without the recursive language dev mode
-gets). Package files load in alphabetical order by filename so duplicate-ID
-collisions resolve deterministically (spec 03: Resolving duplicate resource
-IDs). The first invalid package file raises ``ResourceLoadError`` (fatal,
-exit code 1 at the caller).
-
-Mode selection (spec 03: Determining mode): a dev-mode scan that finds no
-valid resources at all falls back to distribution mode. A resource or
-package that fails to LOAD is fatal and prevents any fallback. A
-distribution-mode scan that finds no ``*.pak`` files at all raises
-``NoResourcesFoundError`` (fatal, exit code 1 at the caller).
-
-Both modes decode resources through the shared ``pak.load_resource_from_bytes``
-and cache them in one shared ``pak.ResourceStore``, so dev mode and
-distribution mode cannot interpret a resource format differently.
+All resources - from directories and packages alike - decode through
+the shared ``pak.load_resource_from_bytes`` and cache in one shared
+``pak.ResourceStore``, so no two parts of the search can interpret a
+resource format differently.
 
 pygame-ce gotcha for in-memory audio (verified against 2.5.8):
 ``pygame.mixer.Sound(buffer=...)`` treats the object as RAW PCM in the
@@ -54,16 +48,16 @@ from dtd.errors import NoResourcesFoundError, ResourceLoadError
 from dtd.game_config import ResourcesConfig
 
 
-def project_directory() -> Path:
-    """The project directory: the parent of the ``src`` directory that
+def game_directory() -> Path:
+    """The game directory: the parent of the ``src`` directory that
     contains this package (spec 03: a note about relative paths).
 
     Every relative ``location`` entry resolves against this directory, never
     against the current working directory - the game must behave the same no
     matter where the user launches it from.
     """
-    # This file lives at <project>/src/dtd/resource_loader.py, so two levels
-    # up is src/ and one more is the project directory itself.
+    # This file lives at <game>/src/dtd/resource_loader.py, so two levels
+    # up is src/ and one more is the game directory itself.
     return Path(__file__).resolve().parent.parent.parent
 
 
@@ -96,20 +90,18 @@ class ResourceLoader:
     # startup entry point (spec 03)
     # ------------------------------------------------------------------ #
     def load(self, config: ResourcesConfig | None) -> None:
-        """Load all game resources (spec 03).
+        """Load all game resources (spec 03: Resource scanning).
 
-        A ``None`` config means dev mode with only the default ``resources/``
-        directory (spec 03: Configuration).
-
-        Dev mode falls back to distribution mode only when it finds no
-        valid resources at all; a resource that fails to LOAD is fatal and
-        prevents any fallback (spec 03: Determining mode).
+        A ``None`` config means the default search path: the implicit
+        ``resources/`` directory only (spec 03: Configuration).
 
         Raises:
-            NoResourcesFoundError: distribution mode (explicitly, or via the
-                dev-mode fallback) found no ``*.pak`` files at all (spec 03:
-                Determining mode; fatal, exit code 1 at the caller).
-            ResourceLoadError: the first resource or package file that
+            NoResourcesFoundError: the scan completed without finding a
+                single resource (spec 03; fatal, exit code 1 at the
+                caller).
+            ResourceLoadError: a ``location`` entry that does not exist,
+                cannot be read, or is a file without the ``.pak``
+                extension; or the first resource or package file that
                 cannot be loaded (spec 03: fatal, exit code 1 at the
                 caller).
             UnsupportedResourceVersionError: a package file's manifest
@@ -117,18 +109,7 @@ class ResourceLoader:
                 Manifest errors; fatal, exit code 1 at the caller).
         """
         effective_config = config or ResourcesConfig()
-        if effective_config.mode == "distribution":
-            self._load_distribution_mode(effective_config)
-            return
-        try:
-            self._load_dev_mode(effective_config)
-        except NoResourcesFoundError:
-            # The dev scan only raises this when zero candidate files
-            # existed, so nothing was cached and the fallback starts from a
-            # clean slate. (A load failure would have raised
-            # ResourceLoadError instead, which per spec 03 prevents any
-            # fallback.)
-            self._load_distribution_mode(effective_config)
+        self._load_search_path(effective_config)
 
     # ------------------------------------------------------------------ #
     # consumer API (spec 03)
@@ -222,102 +203,142 @@ class ResourceLoader:
         )
 
     # ------------------------------------------------------------------ #
-    # distribution mode loading (spec 03)
+    # flat ordered search path (spec 03: Resource scanning)
     # ------------------------------------------------------------------ #
-    def _load_distribution_mode(self, config: ResourcesConfig) -> None:
-        """Scan distribution-mode locations for ``*.pak`` files and load all.
+    def _load_search_path(self, config: ResourcesConfig) -> None:
+        """Walk the search path in order and load everything it yields.
 
-        The project directory (".") is always scanned first, even if omitted
-        from ``location`` (spec 03). The scan is NOT recursive: pak files
-        are expected at the top level of each scanned directory. Package
-        files load in alphabetical order by filename within each location,
-        so duplicate-ID collisions resolve deterministically (spec 03:
-        Resolving duplicate resource IDs). The first invalid package file is
-        fatal and prevents any fallback (spec 03: Determining mode).
+        The implicit ``resources/`` directory is always scanned first,
+        then each ``location`` entry in config order (spec 03). Later
+        resources override earlier ones by ID - with a log warning -
+        which is why the walk order must never be reordered. A successful
+        scan ends with an informational summary: the net count of distinct
+        resources in memory and the override count within them (spec 03:
+        Resource scanning).
 
         Raises:
-            NoResourcesFoundError: no ``*.pak`` files at all (spec 03:
-                Determining mode; fatal, exit code 1 at the caller).
-            ResourceLoadError: the first package file that cannot be loaded
-                (spec 03: fatal, exit code 1 at the caller).
-            UnsupportedResourceVersionError: a package file's manifest
-                declares a version this build cannot load (spec 03:
-                Manifest errors; fatal, exit code 1 at the caller).
+            NoResourcesFoundError: the scan completed without finding a
+                single resource (spec 03; fatal, exit code 1 at the
+                caller).
+            ResourceLoadError / UnsupportedResourceVersionError: as
+                documented on ``load``.
         """
-        locations = _distribution_mode_locations(config)
-        pak_files = _scan_pak_files(locations)
-        if not pak_files:
-            # Spec 03: a distribution-mode scan with no *.pak files anywhere
-            # has nothing to load - fatal at the caller.
-            scanned = ", ".join(str(location) for location in locations)
-            raise NoResourcesFoundError(
-                f"no *.pak package files found in distribution mode (scanned: {scanned})"
-            )
-        loaded = 0
-        for pak_path in pak_files:
-            # load_pak does the in-memory extraction plus all validation
-            # (manifest, SHA-256, decode) and raises ResourceLoadError (or
-            # UnsupportedResourceVersionError) on the first problem
-            # (spec 03: The pak format).
-            loaded_pak = pak.load_pak(pak_path)
-            # Duplicate IDs across packages are NOT an error: the most
-            # recently loaded package wins, with a log warning (spec 03:
-            # Resolving duplicate resource IDs) - handled by store().
-            for type_name, resource_id, value in loaded_pak.items():
-                self._store.store(type_name, resource_id, value)
-            loaded += loaded_pak.resource_count
-        logger.info(
-            "loaded {} resource(s) from {} package file(s) in distribution mode",
-            loaded,
-            len(pak_files),
+        loaded, overridden = self._load_resource_directory(
+            game_directory() / game_constants.DEFAULT_RESOURCE_DIRNAME
         )
-
-    # ------------------------------------------------------------------ #
-    # dev mode loading (spec 03)
-    # ------------------------------------------------------------------ #
-    def _load_dev_mode(self, config: ResourcesConfig) -> None:
-        """Scan dev-mode locations in order and load every candidate file.
-
-        The default ``resources/`` directory is always scanned first, even if
-        omitted from ``location`` (spec 03). Within a location, files load in
-        sorted ID order (deterministic); across locations, later entries win
-        ID collisions (spec 03: Resolving duplicate resource IDs).
-
-        Raises:
-            NoResourcesFoundError: no candidate files at all. The caller
-                (load) turns this into the distribution-mode fallback
-                (spec 03: Determining mode).
-            ResourceLoadError: the first resource that cannot be loaded
-                (spec 03: fatal, exit code 1 at the caller).
-        """
-        locations = _dev_mode_locations(config)
-        loaded = 0
-        for root in locations:
-            for path in _scan_resource_files(root):
-                # The ID is relative to the containing resource directory and
-                # normalized to forward slashes (spec 03: Dev mode).
-                resource_id = path.relative_to(root).as_posix()
-                self._load_resource_file(path, resource_id)
-                loaded += 1
+        for location in _resolve_location_entries(config):
+            entry_loaded, entry_overridden = self._load_location_entry(location)
+            loaded += entry_loaded
+            overridden += entry_overridden
         if loaded == 0:
-            scanned = ", ".join(str(location) for location in locations)
+            # Every source that exists was empty: zero resources anywhere
+            # in the search path (spec 03).
             raise NoResourcesFoundError(
-                f"no resources found in dev mode (scanned: {scanned})"
+                "no resources found in the resource search path"
             )
         logger.info(
-            "loaded {} resource(s) in dev mode from: {}",
-            loaded,
-            ", ".join(str(location) for location in locations),
+            "loaded {} resource(s) total (including {} override(s)) "
+            "from the resource search path",
+            loaded - overridden,
+            overridden,
         )
 
-    def _load_resource_file(self, path: Path, resource_id: str) -> None:
-        """Load one dev-mode resource from disk and cache it under its ID.
+    def _load_location_entry(self, location: Path) -> tuple[int, int]:
+        """Load one ``location`` entry: a resource directory or a pak file.
 
-        The decode itself is delegated to ``pak.load_resource_from_bytes`` -
-        the same decoder distribution mode and the packager use - so both
-        modes cannot interpret a resource format differently. The music
-        vs. sound-effect split (spec 03: audio under ``audio/music/`` is
-        music) is applied there, by ID.
+        Returns ``(loaded, overridden)`` counts for this entry. A
+        directory named with a ``.pak`` extension is treated as a
+        directory - extensions only classify files (spec 03: Edge cases).
+
+        Raises:
+            ResourceLoadError: the entry does not resolve to an existing
+                directory or file, cannot be read, or is a file without
+                the ``.pak`` extension (spec 03).
+            UnsupportedResourceVersionError: as documented on ``load``.
+        """
+        if location.is_dir():
+            return self._load_resource_directory(location)
+        if not location.is_file():
+            raise ResourceLoadError(
+                f"resource location {location} does not exist"
+            )
+        if location.suffix != game_constants.PAK_FILE_EXTENSION:
+            raise ResourceLoadError(
+                f"resource location {location} is a file without the "
+                f"{game_constants.PAK_FILE_EXTENSION} extension"
+            )
+        return self._load_pak_file(location)
+
+    def _load_resource_directory(self, root: Path) -> tuple[int, int]:
+        """Recursively scan one resource directory and load every candidate.
+
+        A missing directory is not an error (spec 03: the implicit
+        ``resources/`` directory may be absent, and an empty location is
+        silently skipped). Files load in sorted ID order so load order -
+        and therefore which resource wins an ID collision - is
+        deterministic. Unsupported extensions are silently skipped.
+
+        Returns ``(loaded, overridden)`` counts for this directory.
+
+        Raises:
+            ResourceLoadError: the directory cannot be read, or the first
+                resource that cannot be loaded (spec 03).
+        """
+        if not root.is_dir():
+            return 0, 0
+        loaded = 0
+        overridden = 0
+        for path in _scan_resource_files(root):
+            # The ID is relative to the containing resource directory and
+            # normalized to forward slashes (spec 03: Resource scanning).
+            resource_id = path.relative_to(root).as_posix()
+            if self._load_resource_file(path, resource_id):
+                overridden += 1
+            loaded += 1
+        return loaded, overridden
+
+    def _load_pak_file(self, pak_path: Path) -> tuple[int, int]:
+        """Load one package file and merge its resources into the store.
+
+        ``pak.load_pak`` does the in-memory extraction plus all validation
+        (manifest, SHA-256, decode) and raises ``ResourceLoadError`` (or
+        ``UnsupportedResourceVersionError``) on the first problem
+        (spec 03: The pak format). ID collisions with earlier resources
+        are resolved by ``store``: the later resource wins, with a log
+        warning (spec 03: Resource scanning).
+
+        Returns ``(loaded, overridden)`` counts for this package.
+
+        Raises:
+            ResourceLoadError: the package cannot be read or the first
+                invalid entry (spec 03).
+            UnsupportedResourceVersionError: as documented on ``load``.
+        """
+        try:
+            loaded_pak = pak.load_pak(pak_path)
+        except OSError as exc:
+            # An unreadable package file (permissions, vanished between
+            # check and open) is a load failure, not a crash (spec 03).
+            raise ResourceLoadError(
+                f"could not read package file {pak_path}: {exc}"
+            ) from exc
+        overridden = 0
+        for type_name, resource_id, value in loaded_pak.items():
+            if self._store.store(type_name, resource_id, value):
+                overridden += 1
+        return loaded_pak.resource_count, overridden
+
+    def _load_resource_file(self, path: Path, resource_id: str) -> bool:
+        """Load one resource file from disk and cache it under its ID.
+
+        The decode itself is delegated to ``pak.load_resource_from_bytes``
+        - the same decoder the pak loader and the packager use - so no
+        two parts of the search can interpret a resource format
+        differently. The music vs. sound-effect split (spec 03: audio
+        under ``audio/music/`` is music) is applied there, by ID.
+
+        Returns ``True`` if this resource replaced an earlier one with the
+        same ID (an override), ``False`` otherwise.
 
         Raises:
             ResourceLoadError: the file cannot be read or parsed (spec 03:
@@ -332,7 +353,7 @@ class ResourceLoader:
                 f"could not load resource {resource_id!r}: {exc}"
             ) from exc
         type_name, value = pak.load_resource_from_bytes(resource_id, data)
-        self._store.store(type_name, resource_id, value)
+        return self._store.store(type_name, resource_id, value)
 
 
 # ---------------------------------------------------------------------- #
@@ -358,86 +379,58 @@ def _ids_with_leading_sentinel(
 
 
 # ---------------------------------------------------------------------- #
-# location scanning helpers (spec 03: Dev mode / Distribution mode)
+# location scanning helpers (spec 03: Resource scanning)
 # ---------------------------------------------------------------------- #
-def _scan_locations(config: ResourcesConfig, default_root: Path) -> list[Path]:
-    """The directories to scan, in load order, for either mode (spec 03).
+def _resolve_location_entries(config: ResourcesConfig) -> list[Path]:
+    """The configured ``location`` entries as paths, in config order.
 
-    ``default_root`` is always scanned first, even if omitted from
-    ``location`` (``resources/`` in dev mode, the project directory in
-    distribution mode). Configured locations follow in config order. Relative
-    entries resolve against the project directory, never the CWD (spec 03:
-    a note about relative paths). A location already present is scanned
-    exactly once (deduplicated by resolved path).
+    Relative entries resolve against the game directory, never the CWD
+    (spec 03: a note about relative paths). The implicit ``resources/``
+    directory is always scanned first, so an entry pointing at it (or at
+    any path already scheduled) is dropped: spec 03 calls
+    ``location: ["resources/"]`` equivalent to an empty list, and a
+    second scan of the same tree would only re-load identical files and
+    log spurious override warnings.
     """
-    project_dir = project_directory()
-    locations: list[Path] = [default_root]
-    seen = {default_root.resolve()}
-    for entry in config.location or []:
-        location = Path(entry).expanduser()
-        if not location.is_absolute():
-            location = project_dir / location
-        resolved = location.resolve()
+    game_dir = game_directory()
+    seen = {(game_dir / game_constants.DEFAULT_RESOURCE_DIRNAME).resolve()}
+    entries: list[Path] = []
+    for raw_entry in config.location:
+        entry = Path(raw_entry).expanduser()
+        if not entry.is_absolute():
+            entry = game_dir / entry
+        resolved = entry.resolve()
         if resolved in seen:
             continue
         seen.add(resolved)
-        locations.append(resolved)
-    return locations
-
-
-def _dev_mode_locations(config: ResourcesConfig) -> list[Path]:
-    """Dev-mode scan roots: the default ``resources/`` dir, then locations."""
-    return _scan_locations(
-        config, project_directory() / game_constants.DEFAULT_RESOURCE_DIRNAME
-    )
-
-
-def _distribution_mode_locations(config: ResourcesConfig) -> list[Path]:
-    """Distribution-mode scan roots: the project dir ("."), then locations."""
-    return _scan_locations(config, project_directory())
-
-
-def _scan_pak_files(locations: list[Path]) -> list[Path]:
-    """All ``*.pak`` files across ``locations``, in load order.
-
-    NOT recursive: only the top level of each directory is scanned (spec 03
-    describes a recursive scan for dev mode, but only "scan ... for *.pak
-    files" for distribution mode - pak files are expected to sit at the top
-    level of each scanned directory). Within a location, files sort
-    alphabetically by name; locations are scanned in the order given, so a
-    file reachable through several location entries (e.g. an explicit ".")
-    is loaded exactly once.
-    """
-    seen: set[Path] = set()
-    pak_files: list[Path] = []
-    for root in locations:
-        if not root.is_dir():
-            continue
-        for path in sorted(
-            root.glob(f"*{game_constants.PAK_FILE_EXTENSION}"),
-            key=lambda candidate: candidate.name,
-        ):
-            if not path.is_file():
-                continue
-            resolved = path.resolve()
-            if resolved in seen:
-                continue
-            seen.add(resolved)
-            pak_files.append(path)
-    return pak_files
+        entries.append(resolved)
+    return entries
 
 
 def _scan_resource_files(root: Path) -> list[Path]:
     """Candidate resource files under ``root``, sorted by the ID each gets.
 
     Files whose extension is not in the supported list are silently skipped
-    (spec 03: no log warning in dev mode). Extension matching is
-    case-sensitive, so ``foo.JPG`` is not a resource. A missing root simply
-    yields nothing. The sorted order makes load order - and therefore which
-    resource "wins" a duplicate ID - deterministic.
+    (spec 03: no log warning). Extension matching is case-sensitive, so
+    ``foo.JPG`` is not a resource - and ``.pak`` is not a supported
+    extension, so package files inside a directory location are skipped
+    too: each package must be its own location entry (spec 03: Edge
+    cases). The sorted order makes load order - and therefore which
+    resource wins an ID collision - deterministic.
+
+    Raises:
+        ResourceLoadError: ``root`` cannot be read (spec 03). Note that
+        ``Path.rglob`` swallows ``PermissionError`` from the directory it
+        walks (a CPython pathlib quirk), so readability is probed with an
+        explicit ``iterdir`` first; an unreadable *nested* subdirectory
+        is silently skipped, mirroring rglob's own behavior.
     """
-    if not root.is_dir():
-        return []
+    try:
+        list(root.iterdir())
+    except OSError as exc:
+        raise ResourceLoadError(
+            f"could not read resource directory {root}: {exc}"
+        ) from exc
     candidates = [
         path
         for path in root.rglob("*")
