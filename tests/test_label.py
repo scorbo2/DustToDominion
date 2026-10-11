@@ -1,14 +1,17 @@
 """Unit tests for the ``Label`` widget (spec 10).
 
-Stage 4-5 coverage (spec 10 Dev plan): defaults - auto-scale with the
+Stage 4-6 coverage (spec 10 Dev plan): defaults - auto-scale with the
 zero-glyph margin, left alignment, vertical centering, opaque rect
 fill, border rendering, and the full state-color matrix (normal /
-selected / disabled; hover ignored in every state) - plus
-``set_font_point_size``: pinned design-space sizes (floor conversion),
-clipping of oversized pinned text, and the invalid-value/None
-auto-scale fallbacks. The remaining mutator stubs are pinned as no-ops
-until their stages (6-7) land and replace those tests with real
-behavior tests.
+selected / disabled; hover ignored in every state);
+``set_font_point_size`` - pinned design-space sizes (floor
+conversion), clipping of oversized pinned text, and the
+invalid-value/None auto-scale fallbacks; and ``set_text_centered`` -
+horizontal centering for auto-scaled and pinned text alike,
+both-sides clipping of oversized centered text, the toggle back to
+left-alignment, and same-value no-ops. The remaining mutator stubs
+are pinned as no-ops until stage 7 lands and replaces those tests
+with real behavior tests.
 
 The margin-aware auto-scale search itself is pinned in
 test_text_layout.py (specs 07/10); the tests here prove Label
@@ -706,6 +709,138 @@ class TestLabelFixedPointSize:
         assert len(set(requested_sizes)) > 1
 
 
+class TestLabelTextCentering:
+    def test_set_text_centered_with_true_should_center_auto_scaled_text(
+        self, font_ready: None
+    ) -> None:
+        # GIVEN a 400x100 Label with short auto-scaled text, centering
+        # requested (spec 10: set_text_centered):
+        theme = _theme(TEST_THEME_JSON)
+        requested_sizes = _font_size_spy(theme)
+        label, ui = _label_ui(pygame.Rect(0, 0, 400, 100), theme, text="OK")
+        label.set_text_centered(True)
+
+        # WHEN the UI draws,
+        screen = _draw(ui)
+
+        # THEN the ink sits inside the surface blitted at the horizontal
+        # center of the inner rect (and still vertically centered):
+        chosen = max(
+            size for size in set(requested_sizes) if _margin_rule(theme, "OK", size, 400, 100)
+        )
+        font = theme.get_font(chosen)
+        text_w, text_h = font.size("OK")
+        expected_x = (400 - text_w) // 2
+        expected_y = (100 - text_h) // 2
+        bbox = _ink_bbox(screen, (0, 0, 400, 100), _is_red_ink)
+        assert bbox is not None
+        bx, by, bw, bh = bbox
+        assert bx >= expected_x and bx + bw <= expected_x + text_w
+        assert by >= expected_y and by + bh <= expected_y + text_h
+
+        # Centering pin: the ink must NOT hug the left margin the way
+        # the default left-alignment does.
+        left_aligned_limit = font.size("0")[1] // 2 + _left_bearing(font, "OK") + 2
+        assert bx > left_aligned_limit
+
+    def test_set_text_centered_with_true_should_center_pinned_text(
+        self, font_ready: None
+    ) -> None:
+        # GIVEN a 400x100 Label with 20pt pinned text, centering
+        # requested (centering applies to pinned sizes alike):
+        theme = _theme(TEST_THEME_JSON)
+        label, ui = _label_ui(pygame.Rect(0, 0, 400, 100), theme, text="OK")
+        label.set_font_point_size(20)
+        label.set_text_centered(True)
+
+        # WHEN the UI draws,
+        screen = _draw(ui)
+
+        # THEN the ink sits inside the centered surface rect:
+        font = theme.get_font(20)
+        text_w, text_h = font.size("OK")
+        expected_x = (400 - text_w) // 2
+        expected_y = (100 - text_h) // 2
+        bbox = _ink_bbox(screen, (0, 0, 400, 100), _is_red_ink)
+        assert bbox is not None
+        bx, by, bw, bh = bbox
+        assert bx >= expected_x and bx + bw <= expected_x + text_w
+        assert by >= expected_y and by + bh <= expected_y + text_h
+
+    def test_centered_text_wider_than_inner_rect_should_clip_on_both_sides(
+        self, font_ready: None
+    ) -> None:
+        # GIVEN a 100x100 Label with 60pt text far wider than the rect,
+        # centering requested ("prefer centered" - overflow clips
+        # equally on both sides, spec 10: Label layout):
+        theme = _theme(TEST_THEME_JSON)
+        text = "M" * 8
+        assert theme.get_font(60).size(text)[0] > 100  # premise: it overflows
+        label, ui = _label_ui(pygame.Rect(0, 0, 100, 100), theme, text=text)
+        label.set_font_point_size(60)
+        label.set_text_centered(True)
+
+        # WHEN the UI draws,
+        screen = _draw(ui)
+
+        # THEN ink reaches both extreme columns - the text is cut on
+        # each side, not merely at the right edge as left-alignment
+        # would cut it:
+        assert _any_pixel_differs(screen, pygame.Rect(0, 0, 1, 100), NORMAL_BG)
+        assert _any_pixel_differs(screen, pygame.Rect(99, 0, 1, 100), NORMAL_BG)
+        # ...and nothing at all renders outside the rect:
+        outside = [
+            screen.get_at((x, y))
+            for x in range(100, 110)
+            for y in range(0, 110)
+        ] + [screen.get_at((x, y)) for x in range(0, 110) for y in range(100, 110)]
+        assert all(pixel == BLACK for pixel in outside)
+
+    def test_set_text_centered_with_false_should_return_to_left_alignment(
+        self, font_ready: None
+    ) -> None:
+        # GIVEN a Label that was centered and then left-aligned again
+        # (spec 10: Testing - can a Label's text be left-aligned again):
+        theme = _theme(TEST_THEME_JSON)
+        requested_sizes = _font_size_spy(theme)
+        label, ui = _label_ui(pygame.Rect(0, 0, 400, 100), theme, text="OK")
+        label.set_text_centered(True)
+        label.set_text_centered(False)
+
+        # WHEN the UI draws,
+        screen = _draw(ui)
+
+        # THEN the ink hugs the left margin again, as by default:
+        chosen = max(
+            size for size in set(requested_sizes) if _margin_rule(theme, "OK", size, 400, 100)
+        )
+        font = theme.get_font(chosen)
+        margin = font.size("0")[1] // 2
+        bbox = _ink_bbox(screen, (0, 0, 400, 100), _is_red_ink)
+        assert bbox is not None
+        assert bbox[0] >= margin
+        assert bbox[0] <= margin + _left_bearing(font, "OK") + 2
+
+    def test_set_text_centered_with_same_value_should_be_a_no_op(
+        self, font_ready: None
+    ) -> None:
+        # GIVEN a Label whose centering was requested once and drawn:
+        _, ui = _label_ui(pygame.Rect(0, 0, 400, 100), _theme(TEST_THEME_JSON), text="OK")
+        label = ui.widgets[0]
+        label.set_text_centered(True)
+        baseline = _draw(ui).copy()
+
+        # WHEN the same value is set again and the UI redraws (spec 10:
+        # Testing - subsequent calls with the same value are no-ops),
+        label.set_text_centered(True)
+        screen = _draw(ui)
+
+        # THEN the rendering is unchanged:
+        for x in range(0, 400, 7):
+            for y in range(0, 100, 5):
+                assert screen.get_at((x, y)) == baseline.get_at((x, y))
+
+
 class TestLabelMutatorStubs:
     def test_stubbed_mutators_should_not_change_rendering_yet(
         self, font_ready: None
@@ -717,11 +852,9 @@ class TestLabelMutatorStubs:
         )
         baseline = _draw(ui).copy()
 
-        # WHEN every remaining stage-4 stub mutator is invoked with
-        # valid values (spec 10 Dev plan stages 6-7 implement them for
-        # real),
+        # WHEN the remaining stub mutators are invoked with valid
+        # values (spec 10 Dev plan stage 7 implements them for real),
         label = ui.widgets[0]
-        label.set_text_centered(True)
         label.set_opaque(False)
         label.set_border_width(30)
 
@@ -729,7 +862,7 @@ class TestLabelMutatorStubs:
         screen = _draw(ui)
 
         # THEN the rendering is unchanged - the stubs are honest no-ops
-        # until their stages land:
+        # until their stage lands:
         for x in range(0, 400, 7):
             for y in range(0, 100, 5):
                 assert screen.get_at((x, y)) == baseline.get_at((x, y))

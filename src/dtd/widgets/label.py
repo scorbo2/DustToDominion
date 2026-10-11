@@ -26,17 +26,18 @@ implements what):
   ``set_font_point_size`` pins an exact design-space point size
   instead (converted to pixels with the current window scale, floored);
   pinned text that is too large simply clips.
-- Text is left-aligned at the margin and always vertically centered
-  (spec 10: Label layout).
+- Text is left-aligned at the margin by default, or horizontally
+  centered within the inner rect when ``set_text_centered(True)`` is
+  called; it is always vertically centered (spec 10: Label layout).
 - Labels ignore the mouse entirely: no hover response (the ``*Hover``
   theme colors are never used) and no click handling. Selection and
   disabling are cosmetic only, and "disabled" outranks "selected"
   through the shared ``state_colors`` precedence (spec 04, as noted by
   spec 10).
 
-Pending spec 10 dev stages: text centering (stage 6), opacity toggling
-and border-width mutation (stage 7). The remaining mutators below are
-deliberate no-op stubs until their stage lands.
+Pending spec 10 dev stages: opacity toggling and border-width
+mutation (stage 7). The remaining mutators below are deliberate no-op
+stubs until their stage lands.
 """
 from __future__ import annotations
 
@@ -72,6 +73,10 @@ class Label(Widget):
         # (spec 10: set_font_point_size). No constructor argument:
         # auto-scale is the default.
         self._font_point_size: int | None = None
+        # Horizontal preference: left-align at the margin (False, the
+        # default) or center within the inner rect (spec 10:
+        # set_text_centered). No constructor argument.
+        self._text_centered = False
 
     # -- cosmetics (spec 10: Label options) ---------------------------------
 
@@ -100,16 +105,20 @@ class Label(Widget):
             return
         self._font_point_size = size
 
-    # Remaining mutators are deliberate no-op stubs until their dev
-    # stage lands; the defaults they will eventually change
-    # (left-align, opaque) are what the draw path implements today.
-
     def set_text_centered(self, is_centered: bool) -> None:
-        """Prefer centered text when it is narrower than the rect.
+        """Prefer centered text within the inner rect.
 
-        Stub: implemented in spec 10 dev stage 6. Labels left-align by
-        default (spec 10: Label layout).
+        Labels left-align at the margin by default; ``True`` centers
+        the text horizontally instead (spec 10: Label layout). Text
+        wider than the inner rect clips equally on both sides -
+        "prefer" is the spec's word. Layout happens at draw time, so
+        repeated calls with the same value are no-ops by construction.
         """
+        self._text_centered = bool(is_centered)
+
+    # Remaining mutators are deliberate no-op stubs until their dev
+    # stage lands; the defaults they will eventually change (opaque
+    # fill, border width) are what the draw path implements today.
 
     def set_opaque(self, is_opaque: bool) -> None:
         """Toggle filling the rect with the state's background color.
@@ -203,9 +212,18 @@ class Label(Widget):
             size = max(1, int(self._font_point_size * scale.scale))
         font = theme.get_font(size)
         surface = font.render(text, True, fg)
-        # Left edge sits at the margin of the *effective* size - pinned
-        # or chosen alike (spec 10: Margin); vertical centering is
-        # identical with or without the margin, since it is symmetric.
-        x = zero_glyph_margin(font)
+        if self._text_centered:
+            # Centering inside the margin-shrunk box and inside the
+            # full inner rect are the same point - the margin is
+            # symmetric - so one formula covers both (spec 10: Label
+            # layout). Text wider than the rect gets a negative x and
+            # clips equally on both sides.
+            x = (inner.get_width() - surface.get_width()) // 2
+        else:
+            # Left edge sits at the margin of the *effective* size -
+            # pinned or chosen alike (spec 10: Margin).
+            x = zero_glyph_margin(font)
+        # Vertical centering is identical with or without the margin,
+        # since it is symmetric (spec 10: always vertically centered).
         y = (inner.get_height() - surface.get_height()) // 2
         inner.blit(surface, (x, y))

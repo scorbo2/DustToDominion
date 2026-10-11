@@ -257,6 +257,18 @@ calculations should take this into account.
    tests/test_label.py; ChoiceList's pixel tests passed unchanged. Full suite green
    at 733 tests.)
 6. Implement `set_text_centered()` to allow centering label text.
+   **Completed 2026-10-11** (`Label.set_text_centered` stores the
+   preference; `_draw_text` centers with `(inner.w - surface.w) // 2` -
+   identical whether the size was chosen or pinned. Note: centering
+   inside the margin-shrunk box and inside the full inner rect are the
+   same point, since the margin is symmetric; oversized centered text
+   gets a negative x and clips equally on both sides at the inner
+   boundary. Same-value calls are no-ops by construction (layout
+   happens at draw time). 5 new tests in tests/test_label.py: centered
+   auto-scaled and pinned placement, both-sides clipping (ink reaches
+   both extreme columns, unlike left-alignment's single-edge cut),
+   toggle back to left-alignment, and the same-value no-op pin. Full
+   suite green at 738 tests.)
 7. Implement `set_opaque()` to allow toggling rect-filling, and `set_border_width()`
    to enable/disable border display.
 8. Implement the spec 08 changes to modify TitleScreen to use the new Label widget
