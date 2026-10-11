@@ -247,6 +247,15 @@ calculations should take this into account.
    radius, ignored mouse events, and the stub no-ops. Full suite green at 724 tests.)
 5. Implement `set_font_point_size()` to allow disabling auto-scale in favor of fixed
    font point size.
+   **Completed 2026-10-11** (`Label.set_font_point_size` validates like Button's
+   spec 09 twin - bool/non-int/non-positive warn and fall back to auto-scale, None
+   re-enables silently; pinned sizes convert design points to pixels with floor and
+   clip at the inner rect, with margin placement applying to the effective size
+   pinned or chosen alike. Also hoisted the duplicated `_MARGIN_FITS` constants from
+   label.py and choice_list.py into `text_layout.ZERO_GLYPH_MARGIN_FITS` - one
+   definition for the margin rule, ready for the upcoming Checkbox. 9 new tests in
+   tests/test_label.py; ChoiceList's pixel tests passed unchanged. Full suite green
+   at 733 tests.)
 6. Implement `set_text_centered()` to allow centering label text.
 7. Implement `set_opaque()` to allow toggling rect-filling, and `set_border_width()`
    to enable/disable border display.

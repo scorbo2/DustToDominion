@@ -60,17 +60,7 @@ import pygame
 from dtd import game_constants
 from dtd.audio import get_audio_manager
 from dtd.ui import Scale, Theme, Widget, current_scale, state_colors
-from dtd.widgets.text_layout import (
-    largest_fitting_size,
-    margin_fit_predicate,
-    zero_glyph_margin,
-)
-
-#: The spec 07 fit rule: rendered glyph extent plus the `0`-height margin
-#: on all four sides, shared with Label via text_layout (spec 07, as
-#: amended by spec 10). Built once; the margin itself is re-derived per
-#: candidate size inside the predicate.
-_MARGIN_FITS = margin_fit_predicate(zero_glyph_margin)
+from dtd.widgets.text_layout import ZERO_GLYPH_MARGIN_FITS, largest_fitting_size
 
 
 def sanitize_choices(raw: list) -> list[str]:
@@ -390,7 +380,9 @@ class ChoiceList(Widget):
             return
         # The shared margin-aware search; the default fallback of 1 matches
         # the clip-at-size-1 rule above (spec 07, as amended by spec 10).
-        font_size = largest_fitting_size(theme, item, area.w, area.h, fits=_MARGIN_FITS)
+        font_size = largest_fitting_size(
+            theme, item, area.w, area.h, fits=ZERO_GLYPH_MARGIN_FITS
+        )
         text_surface = theme.get_font(font_size).render(item, True, fg)
         dest = pygame.Rect(
             area.centerx - text_surface.get_width() // 2,
@@ -421,7 +413,8 @@ class ChoiceList(Widget):
             # fit even at size 1 is not drawn at all (spec 07, as
             # amended by spec 10).
             font_size = largest_fitting_size(
-                theme, glyph, square.w, square.h, fits=_MARGIN_FITS, fallback=None
+                theme, glyph, square.w, square.h,
+                fits=ZERO_GLYPH_MARGIN_FITS, fallback=None,
             )
             if font_size is None:
                 continue

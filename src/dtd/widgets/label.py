@@ -23,6 +23,9 @@ implements what):
   shared ``text_layout`` module - the same margin-aware rule ChoiceList
   uses (spec 10: Label layout / Margin; spec 07, as amended by
   spec 10). Text never wraps; text that cannot fit at size 1 clips.
+  ``set_font_point_size`` pins an exact design-space point size
+  instead (converted to pixels with the current window scale, floored);
+  pinned text that is too large simply clips.
 - Text is left-aligned at the margin and always vertically centered
   (spec 10: Label layout).
 - Labels ignore the mouse entirely: no hover response (the ``*Hover``
@@ -31,27 +34,21 @@ implements what):
   through the shared ``state_colors`` precedence (spec 04, as noted by
   spec 10).
 
-Pending spec 10 dev stages: fixed point sizes (stage 5), text
-centering (stage 6), opacity toggling and border-width mutation
-(stage 7). The mutators below are deliberate no-op stubs until their
-stage lands.
+Pending spec 10 dev stages: text centering (stage 6), opacity toggling
+and border-width mutation (stage 7). The remaining mutators below are
+deliberate no-op stubs until their stage lands.
 """
 from __future__ import annotations
 
 import pygame
+from loguru import logger
 
-from dtd.ui import Theme, Widget, current_scale, state_colors
+from dtd.ui import Scale, Theme, Widget, current_scale, state_colors
 from dtd.widgets.text_layout import (
+    ZERO_GLYPH_MARGIN_FITS,
     largest_fitting_size,
-    margin_fit_predicate,
     zero_glyph_margin,
 )
-
-#: The spec 10 fit rule: rendered glyph extent plus the `0`-height
-#: margin on all four sides of the inner rect. Identical to ChoiceList's
-#: rule (spec 07, as amended by spec 10) - shared through text_layout so
-#: the two widgets cannot drift apart.
-_MARGIN_FITS = margin_fit_predicate(zero_glyph_margin)
 
 
 class Label(Widget):
@@ -71,18 +68,41 @@ class Label(Widget):
         super().__init__(rect)
         self.text = text
         self.border_width = border_width
+        # Design-space point size for the text, or None for auto-scale
+        # (spec 10: set_font_point_size). No constructor argument:
+        # auto-scale is the default.
+        self._font_point_size: int | None = None
 
     # -- cosmetics (spec 10: Label options) ---------------------------------
-    # Deliberate no-op stubs until their dev stage lands; the defaults
-    # they will eventually change (auto-scale, left-align, opaque) are
-    # what the draw path implements today.
 
     def set_font_point_size(self, size: int | None) -> None:
-        """Pin a design-space point size, or ``None`` for auto-scale.
+        """Pin the text to a design-space point size, or auto-scale.
 
-        Stub: implemented in spec 10 dev stage 5. Labels auto-scale by
-        default (spec 10: Label options).
+        ``None`` (the default) auto-scales the text to the inner rect;
+        a positive integer renders it at exactly that point size,
+        converted to pixels with the current window scale (floored),
+        clipped at the inner rect boundary when too large. Non-integer
+        and non-positive values are treated as ``None`` with a log
+        warning (spec 10: Label options).
         """
+        if size is None:
+            self._font_point_size = None
+            return
+        # bool is an int subclass but never a meaningful point size -
+        # same rejection as Button (spec 09) and the Theme's
+        # cornerRadius parsing.
+        if isinstance(size, bool) or not isinstance(size, int) or size <= 0:
+            logger.warning(
+                "label.set_font_point_size: invalid value {!r}; using auto-scale",
+                size,
+            )
+            self._font_point_size = None
+            return
+        self._font_point_size = size
+
+    # Remaining mutators are deliberate no-op stubs until their dev
+    # stage lands; the defaults they will eventually change
+    # (left-align, opaque) are what the draw path implements today.
 
     def set_text_centered(self, is_centered: bool) -> None:
         """Prefer centered text when it is narrower than the rect.
@@ -131,7 +151,7 @@ class Label(Widget):
             # A sub-surface shares the overlay's pixels, so blits onto it
             # clip exactly at the inner rect boundary (spec 10: inner
             # rect) - the same trick Button and ChoiceList use.
-            self._draw_text(overlay.subsurface(inner), theme, fg)
+            self._draw_text(overlay.subsurface(inner), theme, fg, scale)
         surf.blit(overlay, rect.topleft)
 
     def _state_colors(self, theme: Theme) -> tuple[pygame.Color, pygame.Color]:
@@ -148,28 +168,44 @@ class Label(Widget):
         text = (self.text or "").strip()
         return text or None
 
-    def _draw_text(self, inner: pygame.Surface, theme: Theme, fg: pygame.Color) -> None:
+    def _draw_text(
+        self,
+        inner: pygame.Surface,
+        theme: Theme,
+        fg: pygame.Color,
+        scale: Scale,
+    ) -> None:
         """Render the label left-aligned at the margin, vertically centered.
 
-        Auto-scale only at this stage (spec 10 dev stage 4); a fixed
-        point size arrives in stage 5. The margin shrinks the *layout*
-        box but never the *clip* box: text that cannot fit at size 1
-        clips at the inner rect boundary (spec 10: Label layout /
-        Margin).
+        The margin shrinks the *layout* box but never the *clip* box:
+        text that cannot fit at size 1 clips at the inner rect boundary
+        (spec 10: Label layout / Margin). A pinned point size skips the
+        search entirely and simply clips when too large (spec 10:
+        set_font_point_size).
         """
         text = self._text_to_draw()
         if text is None:
             return
-        # The margin-aware search shared with ChoiceList (spec 10:
-        # Margin); the default fallback of 1 is the clip-at-size-1 rule.
-        size = largest_fitting_size(
-            theme, text, inner.get_width(), inner.get_height(), fits=_MARGIN_FITS
-        )
+        if self._font_point_size is None:
+            # The margin-aware search shared with ChoiceList (spec 10:
+            # Margin); the default fallback of 1 is the clip-at-size-1
+            # rule.
+            size = largest_fitting_size(
+                theme,
+                text,
+                inner.get_width(),
+                inner.get_height(),
+                fits=ZERO_GLYPH_MARGIN_FITS,
+            )
+        else:
+            # Design-space point size -> pixels, floored (spec 10:
+            # set_font_point_size).
+            size = max(1, int(self._font_point_size * scale.scale))
         font = theme.get_font(size)
         surface = font.render(text, True, fg)
-        # Left edge sits at the margin of the *chosen* size (spec 10:
-        # Margin); vertical centering is identical with or without the
-        # margin, since it is symmetric.
+        # Left edge sits at the margin of the *effective* size - pinned
+        # or chosen alike (spec 10: Margin); vertical centering is
+        # identical with or without the margin, since it is symmetric.
         x = zero_glyph_margin(font)
         y = (inner.get_height() - surface.get_height()) // 2
         inner.blit(surface, (x, y))

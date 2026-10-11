@@ -83,6 +83,13 @@ def margin_fit_predicate(margin: MarginFn) -> FitPredicate:
     return fits
 
 
+#: The margin rule shared by ChoiceList and Label (specs 07/10) as a
+#: ready-made predicate: the "half the height of `0`" margin on all four
+#: sides. Defined once here so the widgets cannot drift apart - and the
+#: upcoming Checkbox will use this same one.
+ZERO_GLYPH_MARGIN_FITS = margin_fit_predicate(zero_glyph_margin)
+
+
 def largest_fitting_size(
     theme: Theme,
     text: str,
@@ -97,8 +104,7 @@ def largest_fitting_size(
     Rendered width grows monotonically with font size, so a binary
     search over [1, min(available dimensions)] is sound. The default
     predicate is Button's line-height rule (spec 09); pass
-    ``margin_fit_predicate(zero_glyph_margin)`` for the
-    margin-aware rule (specs 07/10).
+    ``ZERO_GLYPH_MARGIN_FITS`` for the margin-aware rule (specs 07/10).
 
     ``fallback`` is returned when even point size 1 does not fit:
     callers that clip at size 1 (Button, Label, ChoiceList item text)

@@ -1,11 +1,14 @@
 """Unit tests for the ``Label`` widget (spec 10).
 
-Stage 4 coverage (spec 10 Dev plan): defaults only - auto-scale with
-the zero-glyph margin, left alignment, vertical centering, opaque rect
+Stage 4-5 coverage (spec 10 Dev plan): defaults - auto-scale with the
+zero-glyph margin, left alignment, vertical centering, opaque rect
 fill, border rendering, and the full state-color matrix (normal /
-selected / disabled; hover ignored in every state). The mutator stubs
-are pinned as no-ops until their stages (5-7) land and replace those
-tests with real behavior tests.
+selected / disabled; hover ignored in every state) - plus
+``set_font_point_size``: pinned design-space sizes (floor conversion),
+clipping of oversized pinned text, and the invalid-value/None
+auto-scale fallbacks. The remaining mutator stubs are pinned as no-ops
+until their stages (6-7) land and replace those tests with real
+behavior tests.
 
 The margin-aware auto-scale search itself is pinned in
 test_text_layout.py (specs 07/10); the tests here prove Label
@@ -20,6 +23,7 @@ from __future__ import annotations
 
 import pygame
 import pytest
+from loguru import logger
 
 from dtd.resource_loader import ResourceLoader
 from dtd.ui import Theme, UIManager
@@ -129,6 +133,13 @@ def _ink_bbox(
     if not xs:
         return None
     return (min(xs), min(ys), max(xs) - min(xs) + 1, max(ys) - min(ys) + 1)
+
+
+def _warning_records() -> tuple[list[str], int]:
+    """Capture loguru WARNING+ messages into a list (see test_ui.py)."""
+    records: list[str] = []
+    sink_id = logger.add(lambda message: records.append(str(message)), level="WARNING")
+    return records, sink_id
 
 
 def _left_bearing(font: pygame.font.Font, text: str) -> int:
@@ -573,6 +584,128 @@ class TestLabelMouse:
         assert screen.get_at((200, 50)) == NORMAL_BG
 
 
+class TestLabelFixedPointSize:
+    def test_set_font_point_size_with_positive_size_should_render_at_that_size(
+        self, font_ready: None
+    ) -> None:
+        # GIVEN a 400x100 Label whose text is pinned to 20pt at the
+        # design resolution (scale 1):
+        theme = _theme(TEST_THEME_JSON)
+        requested_sizes = _font_size_spy(theme)
+        label, ui = _label_ui(pygame.Rect(0, 0, 400, 100), theme, text="OK")
+        label.set_font_point_size(20)
+
+        # WHEN the UI draws,
+        screen = _draw(ui)
+
+        # THEN the font is requested at exactly 20px - no auto-scale
+        # search at all (spec 10: set_font_point_size):
+        assert set(requested_sizes) == {20}
+
+        # THEN the pinned text is still placed at the margin and
+        # vertically centered like auto-scaled text (spec 10: Margin
+        # applies at the *effective* size):
+        font = theme.get_font(20)
+        text_w, text_h = font.size("OK")
+        margin = font.size("0")[1] // 2
+        expected_x = margin
+        expected_y = (100 - text_h) // 2
+        bbox = _ink_bbox(screen, (0, 0, 400, 100), _is_red_ink)
+        assert bbox is not None
+        bx, by, bw, bh = bbox
+        assert bx >= expected_x and bx + bw <= expected_x + text_w
+        assert by >= expected_y and by + bh <= expected_y + text_h
+        assert bx <= expected_x + _left_bearing(font, "OK") + 2
+
+    def test_set_font_point_size_should_convert_design_points_to_pixels_with_floor(
+        self, font_ready: None
+    ) -> None:
+        # GIVEN a 1280x720 window (scale 2/3) and text pinned to 25
+        # design-space points:
+        pygame.display.set_mode((1280, 720))
+        theme = _theme(TEST_THEME_JSON)
+        requested_sizes = _font_size_spy(theme)
+        label, ui = _label_ui(pygame.Rect(0, 0, 600, 150), theme, text="OK")
+        label.set_font_point_size(25)
+
+        # WHEN the UI draws,
+        _draw(ui)
+
+        # THEN the requested pixel size is floor(25 * 2/3) = 16
+        # (spec 10: design-space point size, rounding=floor):
+        assert set(requested_sizes) == {16}
+
+    def test_fixed_size_text_too_large_should_clip_at_inner_rect_boundary(
+        self, font_ready: None
+    ) -> None:
+        # GIVEN a 100x100 border-less Label with 60pt text far too
+        # large for it (inner rect == rect here):
+        pygame.display.set_mode((1920, 1080))
+        label, ui = _label_ui(pygame.Rect(0, 0, 100, 100), _theme(TEST_THEME_JSON), text="OK OK")
+        label.set_font_point_size(60)
+
+        # WHEN the UI draws (must not raise),
+        screen = _draw(ui)
+
+        # THEN clipped ink is present inside the rect...
+        assert _any_pixel_differs(screen, pygame.Rect(0, 0, 100, 100), NORMAL_BG)
+        # ...and nothing at all renders outside it (spec 10: text too
+        # large to display is clipped at the inner rect boundary):
+        outside = [
+            screen.get_at((x, y))
+            for x in range(100, 110)
+            for y in range(0, 110)
+        ] + [screen.get_at((x, y)) for x in range(0, 110) for y in range(100, 110)]
+        assert all(pixel == BLACK for pixel in outside)
+
+    def test_set_font_point_size_with_none_should_re_enable_auto_scale_without_warning(
+        self, font_ready: None
+    ) -> None:
+        # GIVEN a Label whose text was pinned to 50pt:
+        theme = _theme(TEST_THEME_JSON)
+        label, ui = _label_ui(pygame.Rect(0, 0, 400, 100), theme, text="OK")
+        label.set_font_point_size(50)
+
+        # WHEN None is applied (and the UI redraws),
+        records, sink_id = _warning_records()
+        try:
+            label.set_font_point_size(None)
+        finally:
+            logger.remove(sink_id)
+        requested_sizes = _font_size_spy(theme)
+        _draw(ui)
+
+        # THEN no warning was logged and the auto-scale search is back -
+        # it probes multiple sizes instead of one fixed size (spec 10:
+        # set_font_point_size):
+        assert records == []
+        assert len(set(requested_sizes)) > 1
+
+    @pytest.mark.parametrize("invalid_size", [0, -5, 12.5, "big", True])
+    def test_set_font_point_size_with_invalid_value_should_warn_and_use_auto_scale(
+        self, font_ready: None, invalid_size: object
+    ) -> None:
+        # GIVEN a Label whose text was pinned to 50pt:
+        theme = _theme(TEST_THEME_JSON)
+        label, ui = _label_ui(pygame.Rect(0, 0, 400, 100), theme, text="OK")
+        label.set_font_point_size(50)
+
+        # WHEN an invalid value is applied (and the UI redraws):
+        records, sink_id = _warning_records()
+        try:
+            label.set_font_point_size(invalid_size)  # type: ignore[arg-type]
+        finally:
+            logger.remove(sink_id)
+        requested_sizes = _font_size_spy(theme)
+        _draw(ui)
+
+        # THEN a warning was logged and auto-scale is back in effect -
+        # the search probes multiple sizes instead of one fixed size
+        # (spec 10: set_font_point_size invalid values):
+        assert any("set_font_point_size" in record for record in records)
+        assert len(set(requested_sizes)) > 1
+
+
 class TestLabelMutatorStubs:
     def test_stubbed_mutators_should_not_change_rendering_yet(
         self, font_ready: None
@@ -584,10 +717,10 @@ class TestLabelMutatorStubs:
         )
         baseline = _draw(ui).copy()
 
-        # WHEN every stage-4 stub mutator is invoked with valid values
-        # (spec 10 Dev plan stages 5-7 implement them for real),
+        # WHEN every remaining stage-4 stub mutator is invoked with
+        # valid values (spec 10 Dev plan stages 6-7 implement them for
+        # real),
         label = ui.widgets[0]
-        label.set_font_point_size(20)
         label.set_text_centered(True)
         label.set_opaque(False)
         label.set_border_width(30)
@@ -595,8 +728,8 @@ class TestLabelMutatorStubs:
         # WHEN the UI redraws,
         screen = _draw(ui)
 
-        # THEN the rendering is byte-for-byte unchanged - the stubs are
-        # honest no-ops until their stages land:
+        # THEN the rendering is unchanged - the stubs are honest no-ops
+        # until their stages land:
         for x in range(0, 400, 7):
             for y in range(0, 100, 5):
                 assert screen.get_at((x, y)) == baseline.get_at((x, y))
