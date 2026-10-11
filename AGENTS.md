@@ -11,6 +11,7 @@ This is a **spec-driven project**: `docs/README.md` and `docs/00-project-overvie
 - Every spec must have a `Testing` section that clearly describes test coverage for the specification.
 - If a `proposed` spec is longer than 250 lines of text, it MUST have a "Dev plan" section with a staged implementation plan.
 - If a spec contains an "Amendments to previous spec docs" section, it MUST have a "Dev plan" section with those amendments as stage 1.
+- If a spec is being amended directly, it MUST either create a Dev plan section if none existed, or append new stages to the existing plan.
 - Every spec should have `Configuration` and `Acceptance criteria` sections. `proposed` specs may carry `Open questions`, but all must be answered before the status flips to `active`.
 - A feature is not complete without reasonably comprehensive unit tests.
 

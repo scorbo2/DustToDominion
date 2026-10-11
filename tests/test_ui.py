@@ -60,6 +60,25 @@ def _expected_fallback_name() -> str | None:
     return next((name for name in names if "mono" in name), None)
 
 
+def _loader_resolving_fonts(
+    marker: pygame.font.Font, *resource_ids: str
+) -> ResourceLoader:
+    """A loader stub resolving exactly the given font ids.
+
+    Spec 04: Core UI Resources are optional, and its Testing section
+    requires synthesized loaders - these tests must never depend on the
+    repo's resources/ directory.
+    """
+
+    def get_font_resource(resource_id: str, size: int) -> pygame.font.Font | None:
+        return marker if resource_id in resource_ids else None
+
+    loader = ResourceLoader()
+    loader.get_json_resource = lambda resource_id: None
+    loader.get_font_resource = get_font_resource
+    return loader
+
+
 def _render_signature(font: pygame.font.Font) -> bytes:
     """Pixel output of a fixed probe string - a font fingerprint."""
     surface = font.render("Dust to Dominion 0123456789", True, (255, 255, 255))
@@ -374,7 +393,8 @@ class TestThemeFontResolution:
     def test_with_unresolvable_font_id_should_warn_and_use_fallback(
         self, font_ready: None
     ) -> None:
-        # GIVEN a font id the loader cannot resolve:
+        # GIVEN a font id the loader cannot resolve, and no core default
+        # font either (the stub resolves nothing at all):
         records, sink_id = _warning_records()
         theme = _build_theme(font_value="fonts/missing.ttf")
 
@@ -387,14 +407,52 @@ class TestThemeFontResolution:
     def test_with_blank_or_default_font_value_should_use_fallback(
         self, font_ready: None, value: str
     ) -> None:
-        # GIVEN no configured font:
+        # GIVEN no configured font, and a loader where even the core
+        # default font id fails to resolve (all UI resources are optional):
         records, sink_id = _warning_records()
         theme = _build_theme(font_value=value)
 
-        # THEN the fallback applies silently - "default" is a legal value,
-        # not an error (spec 04):
+        # THEN the fallback applies silently - "default" is a legal value
+        # and a missing core resource is not an error (spec 04):
         assert records == []
         _assert_uses_fallback(theme)
+        logger.remove(sink_id)
+
+    def test_with_no_configured_font_and_resolvable_core_default_font_should_use_it(
+        self, font_ready: None
+    ) -> None:
+        # GIVEN no configured font, and a loader where only the core
+        # default font resolves (spec 04: Font determination step 2):
+        records, sink_id = _warning_records()
+        marker = pygame.font.Font(None, 7)
+        loader = _loader_resolving_fonts(marker, game_constants.UI_DEFAULT_FONT)
+        theme = Theme("", "", loader)
+
+        # WHEN a widget asks for the font at size 24:
+        font = theme.get_font(24)
+
+        # THEN the core default font is served silently - resolving a
+        # configured core resource is the normal path, not a fallback:
+        assert records == []
+        assert font is marker
+        assert theme.get_font_resource_id() == game_constants.UI_DEFAULT_FONT
+        logger.remove(sink_id)
+
+    def test_with_unresolvable_configured_font_and_resolvable_core_default_font_should_use_it(
+        self, font_ready: None
+    ) -> None:
+        # GIVEN a configured font id that resolves to nothing, but a
+        # resolvable core default font:
+        records, sink_id = _warning_records()
+        marker = pygame.font.Font(None, 7)
+        loader = _loader_resolving_fonts(marker, game_constants.UI_DEFAULT_FONT)
+        theme = Theme("", "fonts/missing.ttf", loader)
+
+        # THEN the configured id still earns its warning (spec 04:
+        # Configuration), and step 2 of the chain serves the core default:
+        assert any("fonts/missing.ttf" in record for record in records)
+        assert theme.get_font(24) is marker
+        assert theme.get_font_resource_id() == game_constants.UI_DEFAULT_FONT
         logger.remove(sink_id)
 
     def test_get_font_should_never_fail_even_with_zero_size(self, font_ready: None) -> None:
@@ -477,16 +535,33 @@ class TestThemeResourceIdAccessors:
     def test_get_font_resource_id_with_no_configured_font_should_return_default_sentinel(
         self, font_ready: None, value: str
     ) -> None:
-        # GIVEN a missing/blank/"default" font value:
+        # GIVEN a missing/blank/"default" font value, and a loader where
+        # even the core default font id fails to resolve:
         theme = _build_theme(font_value=value)
 
-        # THEN the "default" sentinel is reported:
+        # THEN the "default" sentinel is reported - the chain fell
+        # through to a system font:
         assert theme.get_font_resource_id() == game_constants.DEFAULT_FONT_VALUE
+
+    @pytest.mark.parametrize("value", ["", "   ", "default", "fonts/missing.ttf"])
+    def test_get_font_resource_id_with_unresolvable_font_and_resolvable_core_default_should_return_the_core_default_id(
+        self, font_ready: None, value: str
+    ) -> None:
+        # GIVEN a missing/blank/"default"/unresolvable font value, and a
+        # loader where the core default font resolves:
+        marker = pygame.font.Font(None, 7)
+        loader = _loader_resolving_fonts(marker, game_constants.UI_DEFAULT_FONT)
+        theme = Theme("", value, loader)
+
+        # THEN the core default id is reported, not the sentinel - a
+        # chooser can preselect it (spec 04: Font determination):
+        assert theme.get_font_resource_id() == game_constants.UI_DEFAULT_FONT
 
     def test_get_font_resource_id_with_invalid_font_should_return_default_sentinel(
         self, font_ready: None
     ) -> None:
-        # GIVEN a font id the loader cannot resolve:
+        # GIVEN a font id the loader cannot resolve, and no core default
+        # font either (the stub resolves nothing at all):
         theme = _build_theme(font_value="fonts/missing.ttf")
 
         # THEN the sentinel is reported, not the invalid id:

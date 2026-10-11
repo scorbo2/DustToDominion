@@ -22,7 +22,11 @@ from dtd import audio, game_config, resource_loader
 from dtd.audio import AudioManager
 from dtd.errors import ConfigError
 from dtd.game_config import AudioConfig
-from dtd.game_constants import AUDIO_CHANNEL_BUDGET
+from dtd.game_constants import (
+    AUDIO_CHANNEL_BUDGET,
+    AUDIO_CHANNEL_RANGES,
+    GAME_SFX_CHANNEL_COUNT,
+)
 from dtd.game_config import ResourcesConfig
 from dtd.resource_loader import ResourceLoader
 
@@ -31,8 +35,26 @@ SFX_LASER = "audio/sfx/laser.wav"
 SFX_LONG_HIT = "audio/sfx/long_hit.wav"
 MUSIC_THEME = "audio/music/theme.wav"
 MUSIC_AMBIENT = "audio/music/ambient.wav"
-#: 16 distinct ids so the channel budget can be exhausted exactly.
-LOOP_IDS = [f"audio/sfx/loop{i:02d}.wav" for i in range(AUDIO_CHANNEL_BUDGET)]
+#: 12 distinct ids so the reserved game-sfx channel range can be
+#: exhausted exactly (spec 05 amendment: Channel budget).
+LOOP_IDS = [f"audio/sfx/loop{i:02d}.wav" for i in range(GAME_SFX_CHANNEL_COUNT)]
+#: Every config field of a given kind (spec 05 amendment): the runtime
+#: setter rules are identical across categories, so the validation tests
+#: run against all of them.
+VOLUME_FIELDS = ["game_sfx_volume", "ui_sfx_volume", "speech_volume", "music_volume"]
+ENABLED_FIELDS = [
+    "game_sfx_enabled",
+    "ui_sfx_enabled",
+    "speech_enabled",
+    "music_enabled",
+]
+#: The documented default volume per category (spec 05: Configuration).
+DEFAULT_VOLUMES = {
+    "game_sfx_volume": 100,
+    "ui_sfx_volume": 80,
+    "speech_volume": 90,
+    "music_volume": 80,
+}
 
 
 @pytest.fixture
@@ -104,48 +126,6 @@ def _channels_playing(sound: pygame.mixer.Sound) -> list[int]:
     return indices
 
 
-class _ChannelSpy:
-    """Delegates to a real mixer channel but counts ``stop()`` calls.
-
-    ``pygame.mixer.Channel`` is an immutable C type in pygame-ce 2.5.8, so
-    its methods cannot be monkeypatched; wrapping the channels that
-    ``find_channel`` hands out is the observation point instead.
-    """
-
-    def __init__(self, real: pygame.mixer.Channel) -> None:
-        self._real = real
-        self.id = real.id
-        self.stop_count = 0
-
-    def play(self, *args, **kwargs):
-        return self._real.play(*args, **kwargs)
-
-    def stop(self):
-        self.stop_count += 1
-        return self._real.stop()
-
-    def get_busy(self):
-        return self._real.get_busy()
-
-
-def _spy_find_channel(monkeypatch: pytest.MonkeyPatch) -> list[_ChannelSpy]:
-    """Every channel ``find_channel`` returns is wrapped so stop calls
-    can be counted."""
-    spies: list[_ChannelSpy] = []
-    real_find = pygame.mixer.find_channel
-
-    def spy_find(force: bool = False) -> _ChannelSpy | None:
-        channel = real_find(force=force)
-        if channel is None:
-            return None
-        spy = _ChannelSpy(channel)
-        spies.append(spy)
-        return spy
-
-    monkeypatch.setattr(pygame.mixer, "find_channel", spy_find)
-    return spies
-
-
 def _spy_music_load(monkeypatch: pytest.MonkeyPatch) -> list[bytes]:
     """Record the raw bytes each ``mixer.music.load`` call receives."""
     loaded: list[bytes] = []
@@ -206,16 +186,24 @@ def _config_payload(home: Path) -> dict:
 
 class TestConstructor:
     def test_should_set_channel_budget_to_specified_constant(self, audio_manager: None) -> None:
-        # Spec 05: Channel budget - the mixer gets a 16-channel pool at
-        # construction (which happens at startup, after mixer.init).
+        # Spec 05 (amendment): the mixer gets a 16-channel pool at
+        # construction (which happens at startup, after mixer.init), and
+        # that total is derived from the 12/3/1 category counts so the
+        # parts and the whole can never drift apart.
         assert pygame.mixer.get_num_channels() == AUDIO_CHANNEL_BUDGET
         assert AUDIO_CHANNEL_BUDGET == 16
+        assert GAME_SFX_CHANNEL_COUNT == 12
 
     def test_with_null_config_should_use_defaults(self, loaded_loader: ResourceLoader) -> None:
-        # Spec 05: a missing/null audio section means defaults.
+        # Spec 05: a missing/null audio section means defaults - every
+        # category enabled, at its documented default volume.
         manager = AudioManager(loaded_loader, None)
-        assert manager.sfx_enabled is True
-        assert manager.sfx_volume == 100
+        assert manager.game_sfx_enabled is True
+        assert manager.game_sfx_volume == 100
+        assert manager.ui_sfx_enabled is True
+        assert manager.ui_sfx_volume == 80
+        assert manager.speech_enabled is True
+        assert manager.speech_volume == 90
         assert manager.music_enabled is True
         assert manager.music_volume == 80
 
@@ -232,42 +220,197 @@ class TestConstructor:
         assert pygame.mixer.music.get_volume() == _vol(0.5)
 
 
-class TestPlaySfx:
-    def test_when_sfx_disabled_should_be_silent_noop(self, loaded_loader: ResourceLoader) -> None:
-        # Spec 05: invoking play_sfx when sfx_enabled is False does nothing.
-        manager = AudioManager(loaded_loader, AudioConfig(sfx_enabled=False))
-        manager.play_sfx(SFX_BOOM)
+class TestPlayGameSfx:
+    def test_when_game_sfx_disabled_should_be_silent_noop(self, loaded_loader: ResourceLoader) -> None:
+        # Spec 05: invoking play_game_sfx when game_sfx_enabled is False does nothing.
+        manager = AudioManager(loaded_loader, AudioConfig(game_sfx_enabled=False))
+        manager.play_game_sfx(SFX_BOOM)
         assert _busy_channel_indices() == []
 
     def test_with_nonexistent_id_should_be_silent_noop(self, audio_manager: None) -> None:
         # Spec 05: it is not an error if the id does not resolve to an sfx.
-        audio_manager.play_sfx("audio/sfx/does_not_exist.wav")
+        audio_manager.play_game_sfx("audio/sfx/does_not_exist.wav")
         assert _busy_channel_indices() == []
 
     def test_with_valid_id_should_play_at_configured_volume(
         self, loaded_loader: ResourceLoader
     ) -> None:
         # Spec 05: the one-shot plays at the currently configured volume.
-        manager = AudioManager(loaded_loader, AudioConfig(sfx_volume=50))
-        manager.play_sfx(SFX_BOOM)
+        # The volume lives on the channel, not on the Sound, so a Sound
+        # shared with another category stays independent (spec 05:
+        # Adjusting volume).
+        manager = AudioManager(loaded_loader, AudioConfig(game_sfx_volume=50))
+        manager.play_game_sfx(SFX_BOOM)
         sound = loaded_loader.get_sfx_resource(SFX_BOOM)
-        assert sound.get_volume() == _vol(0.5)
-        assert len(_channels_playing(sound)) == 1
+        playing = _channels_playing(sound)
+        assert len(playing) == 1
+        assert pygame.mixer.Channel(playing[0]).get_volume() == _vol(0.5)
+
+    def test_when_no_free_game_channels_should_be_silent_noop(
+        self, audio_manager: None, loaded_loader: ResourceLoader
+    ) -> None:
+        # GIVEN the entire reserved game-sfx range occupied by loops:
+        audio_manager.set_active_loops(frozenset(LOOP_IDS))
+        assert len(_busy_channel_indices()) == GAME_SFX_CHANNEL_COUNT
+
+        # WHEN a one-shot is requested with no free game channel:
+        audio_manager.play_game_sfx(SFX_BOOM)
+
+        # THEN it is a silent no-op - a busy channel is never stolen
+        # (spec 05: Channel budget):
+        assert _channels_playing(loaded_loader.get_sfx_resource(SFX_BOOM)) == []
+        assert len(_busy_channel_indices()) == GAME_SFX_CHANNEL_COUNT
+
+    def test_when_lower_channels_busy_should_pick_lowest_idle_channel(
+        self, audio_manager: None, loaded_loader: ResourceLoader
+    ) -> None:
+        # GIVEN three long one-shots occupying the lowest channels 0-2:
+        long_hit = loaded_loader.get_sfx_resource(SFX_LONG_HIT)
+        audio_manager.play_game_sfx(SFX_LONG_HIT)
+        audio_manager.play_game_sfx(SFX_LONG_HIT)
+        audio_manager.play_game_sfx(SFX_LONG_HIT)
+        assert _channels_playing(long_hit) == [0, 1, 2]
+        # AND a loop occupying the next idle channel (3):
+        audio_manager.set_active_loops(frozenset({SFX_BOOM}))
+        assert _channels_playing(loaded_loader.get_sfx_resource(SFX_BOOM)) == [3]
+
+        # WHEN the loop's channel is freed again:
+        audio_manager.stop_loops()
+
+        # THEN the next one-shot takes the lowest IDLE channel (3) and
+        # never a busy one (spec 05: Channel budget):
+        audio_manager.play_game_sfx(SFX_LONG_HIT)
+        assert _channels_playing(long_hit) == [0, 1, 2, 3]
 
     def test_with_music_typed_id_should_do_nothing(self, audio_manager: None) -> None:
         # Spec 05: a music-typed resource id is not an sfx - nothing happens.
-        audio_manager.play_sfx(MUSIC_THEME)
+        audio_manager.play_game_sfx(MUSIC_THEME)
         assert _busy_channel_indices() == []
 
     def test_when_id_is_active_loop_should_play_one_off_alongside_loop(
         self, audio_manager: None, loaded_loader: ResourceLoader
     ) -> None:
-        # Spec 05: play_sfx on an active-loop id adds a one-shot on top of
+        # Spec 05: play_game_sfx on an active-loop id adds a one-shot on top of
         # the loop (the loop keeps running).
         sound = loaded_loader.get_sfx_resource(SFX_BOOM)
         audio_manager.set_active_loops(frozenset({SFX_BOOM}))
-        audio_manager.play_sfx(SFX_BOOM)
+        audio_manager.play_game_sfx(SFX_BOOM)
         assert len(_channels_playing(sound)) == 2
+
+
+class TestPlayUiSfx:
+    """play_ui_sfx (spec 05, as amended 2026-10-09: UI sound effects)."""
+
+    def test_when_ui_sfx_disabled_should_be_silent_noop(self, loaded_loader: ResourceLoader) -> None:
+        # Spec 05: invoking play_ui_sfx when ui_sfx_enabled is False does nothing.
+        manager = AudioManager(loaded_loader, AudioConfig(ui_sfx_enabled=False))
+        manager.play_ui_sfx(SFX_BOOM)
+        assert _busy_channel_indices() == []
+
+    def test_with_nonexistent_id_should_be_silent_noop(self, audio_manager: None) -> None:
+        # Spec 05: it is not an error if the id does not resolve to an sfx.
+        audio_manager.play_ui_sfx("audio/sfx/does_not_exist.wav")
+        assert _busy_channel_indices() == []
+
+    def test_with_valid_id_should_play_at_configured_volume_on_ui_channels(
+        self, loaded_loader: ResourceLoader
+    ) -> None:
+        # Spec 05: the sound plays at the configured UI volume on one of
+        # the 3 reserved UI channels (12-14), at the channel level.
+        manager = AudioManager(loaded_loader, AudioConfig(ui_sfx_volume=50))
+        manager.play_ui_sfx(SFX_BOOM)
+        sound = loaded_loader.get_sfx_resource(SFX_BOOM)
+        playing = _channels_playing(sound)
+        assert len(playing) == 1
+        assert playing[0] in AUDIO_CHANNEL_RANGES["ui_sfx"]
+        assert pygame.mixer.Channel(playing[0]).get_volume() == _vol(0.5)
+
+    def test_when_no_free_ui_channels_should_be_silent_noop(
+        self, audio_manager: None, loaded_loader: ResourceLoader
+    ) -> None:
+        # GIVEN the entire reserved UI range occupied (3 long one-shots
+        # land on the lowest idle channels 12, 13, 14):
+        long_hit = loaded_loader.get_sfx_resource(SFX_LONG_HIT)
+        for _ in range(3):
+            audio_manager.play_ui_sfx(SFX_LONG_HIT)
+        assert _channels_playing(long_hit) == [12, 13, 14]
+
+        # WHEN a fourth UI sound is requested:
+        audio_manager.play_ui_sfx(SFX_BOOM)
+
+        # THEN it is a silent no-op - a busy UI channel is never stolen
+        # (spec 05: Channel budget):
+        assert _channels_playing(loaded_loader.get_sfx_resource(SFX_BOOM)) == []
+        assert _channels_playing(long_hit) == [12, 13, 14]
+
+    def test_with_music_typed_id_should_do_nothing(self, audio_manager: None) -> None:
+        # Spec 05: a music-typed resource id is not an sfx - nothing happens.
+        audio_manager.play_ui_sfx(MUSIC_THEME)
+        assert _busy_channel_indices() == []
+
+
+class TestPlaySpeech:
+    """play_speech (spec 05, as amended 2026-10-09: speech - the one
+    category that interrupts itself)."""
+
+    def test_when_speech_disabled_should_be_silent_noop(self, loaded_loader: ResourceLoader) -> None:
+        # Spec 05: invoking play_speech when speech_enabled is False does nothing.
+        manager = AudioManager(loaded_loader, AudioConfig(speech_enabled=False))
+        manager.play_speech(SFX_LONG_HIT)
+        assert _busy_channel_indices() == []
+
+    def test_with_nonexistent_id_should_be_silent_noop(self, audio_manager: None) -> None:
+        # Spec 05: it is not an error if the id does not resolve.
+        audio_manager.play_speech("audio/sfx/does_not_exist.wav")
+        assert _busy_channel_indices() == []
+
+    def test_with_valid_id_should_play_at_configured_volume_on_speech_channel(
+        self, loaded_loader: ResourceLoader
+    ) -> None:
+        # Spec 05: the clip plays at the configured speech volume on the
+        # single reserved speech channel (15).
+        manager = AudioManager(loaded_loader, AudioConfig(speech_volume=50))
+        manager.play_speech(SFX_LONG_HIT)
+        sound = loaded_loader.get_sfx_resource(SFX_LONG_HIT)
+        assert _channels_playing(sound) == [15]
+        assert pygame.mixer.Channel(15).get_volume() == _vol(0.5)
+
+    def test_with_speech_in_progress_should_interrupt_it_with_the_new_clip(
+        self, audio_manager: None, loaded_loader: ResourceLoader
+    ) -> None:
+        # GIVEN a long speech clip occupying the speech channel:
+        first = loaded_loader.get_sfx_resource(SFX_LONG_HIT)
+        audio_manager.play_speech(SFX_LONG_HIT)
+        assert _channels_playing(first) == [15]
+
+        # WHEN a new valid clip is requested while it is still playing:
+        audio_manager.play_speech(SFX_BOOM)
+
+        # THEN the in-progress clip is terminated and the new one plays
+        # on the same channel - speech is the documented exception to
+        # the never-steal rule (spec 05: Channel budget):
+        assert _channels_playing(first) == []
+        assert _channels_playing(loaded_loader.get_sfx_resource(SFX_BOOM)) == [15]
+
+    def test_with_invalid_id_should_not_interrupt_in_progress_speech(
+        self, audio_manager: None, loaded_loader: ResourceLoader
+    ) -> None:
+        # GIVEN a long speech clip occupying the speech channel:
+        sound = loaded_loader.get_sfx_resource(SFX_LONG_HIT)
+        audio_manager.play_speech(SFX_LONG_HIT)
+        assert _channels_playing(sound) == [15]
+
+        # WHEN an id that does not resolve is requested:
+        audio_manager.play_speech("audio/sfx/does_not_exist.wav")
+
+        # THEN the in-progress clip keeps playing - termination only
+        # happens once a valid clip is in hand (spec 05: AudioManager):
+        assert _channels_playing(sound) == [15]
+
+    def test_with_music_typed_id_should_do_nothing(self, audio_manager: None) -> None:
+        # Spec 05: a music-typed resource id is not a speech clip.
+        audio_manager.play_speech(MUSIC_THEME)
+        assert _busy_channel_indices() == []
 
 
 class TestSetActiveLoops:
@@ -288,9 +431,9 @@ class TestSetActiveLoops:
         # And a later empty set is still a clean no-op:
         audio_manager.set_active_loops(frozenset())
 
-    def test_when_sfx_disabled_should_be_silent_noop(self, loaded_loader: ResourceLoader) -> None:
-        # Spec 05: invoking set_active_loops when sfx_enabled is False does nothing.
-        manager = AudioManager(loaded_loader, AudioConfig(sfx_enabled=False))
+    def test_when_game_sfx_disabled_should_be_silent_noop(self, loaded_loader: ResourceLoader) -> None:
+        # Spec 05: invoking set_active_loops when game_sfx_enabled is False does nothing.
+        manager = AudioManager(loaded_loader, AudioConfig(game_sfx_enabled=False))
         manager.set_active_loops(frozenset({SFX_BOOM}))
         assert _busy_channel_indices() == []
 
@@ -311,22 +454,39 @@ class TestSetActiveLoops:
     ) -> None:
         # Spec 05: idempotent per frame - an unchanged set never restarts
         # (and re-stutters) an already-running loop.
-        spies = _spy_find_channel(monkeypatch)
+        # GIVEN a running loop, with the allocator's find_free wrapped so
+        # any channel acquisition would be recorded (pygame's Channel is
+        # an immutable C type, so the allocator is the observation
+        # point):
+        acquired: list = []
+        allocator = audio_manager._game_sfx_allocator
+        real_find_free = allocator.find_free
+
+        def spy_find_free():
+            channel = real_find_free()
+            acquired.append(channel)
+            return channel
+
+        monkeypatch.setattr(allocator, "find_free", spy_find_free)
         sound = loaded_loader.get_sfx_resource(SFX_BOOM)
         audio_manager.set_active_loops(frozenset({SFX_BOOM}))
+        assert len(acquired) == 1
         original_channel = _channels_playing(sound)[0]
+
         # WHEN the same set is submitted again:
         audio_manager.set_active_loops(frozenset({SFX_BOOM}))
-        # THEN no channel was stopped and the loop is on the SAME channel:
-        assert all(spy.stop_count == 0 for spy in spies)
+
+        # THEN no channel was acquired (so nothing was stopped or
+        # restarted) and the loop is on the SAME channel:
+        assert len(acquired) == 1
         assert _channels_playing(sound) == [original_channel]
 
-    def test_when_id_playing_via_play_sfx_should_restart_it_as_loop(
+    def test_when_id_playing_via_play_game_sfx_should_restart_it_as_loop(
         self, audio_manager: None, loaded_loader: ResourceLoader
     ) -> None:
-        # Spec 05: an id already playing via play_sfx is restarted AS a loop.
+        # Spec 05: an id already playing via play_game_sfx is restarted AS a loop.
         sound = loaded_loader.get_sfx_resource(SFX_BOOM)
-        audio_manager.play_sfx(SFX_BOOM)
+        audio_manager.play_game_sfx(SFX_BOOM)
         audio_manager.set_active_loops(frozenset({SFX_BOOM}))
         # The one-shot is replaced by the loop immediately...
         assert len(_channels_playing(sound)) == 1
@@ -335,16 +495,44 @@ class TestSetActiveLoops:
         time.sleep(0.08)
         assert len(_channels_playing(sound)) == 1
 
+    def test_starting_loop_with_sound_also_playing_as_ui_sfx_or_speech_should_not_interrupt_them(
+        self, audio_manager: None, loaded_loader: ResourceLoader
+    ) -> None:
+        # Spec 05 (Looping): the restart-as-loop kill is scoped to the
+        # game-sfx range; the same sound in other categories is untouched.
+        # GIVEN the same long sound (150 ms) playing in all three
+        # categories (lowest idle channels: 0, 12, 15):
+        long_hit = loaded_loader.get_sfx_resource(SFX_LONG_HIT)
+        audio_manager.play_game_sfx(SFX_LONG_HIT)
+        audio_manager.play_ui_sfx(SFX_LONG_HIT)
+        audio_manager.play_speech(SFX_LONG_HIT)
+        assert _channels_playing(long_hit) == [0, 12, 15]
+
+        # WHEN a loop of that same id starts:
+        audio_manager.set_active_loops(frozenset({SFX_LONG_HIT}))
+
+        # THEN the game one-shot is replaced by the loop on channel 0 and
+        # the UI and speech instances keep playing (an unscoped Sound.stop()
+        # would have silenced channels 12 and 15 here):
+        assert _channels_playing(long_hit) == [0, 12, 15]
+
+        # AND past the 150 ms track length only the LOOP survives - proof
+        # the game instance really is looping and the others were ordinary
+        # one-shots that ended on their own:
+        time.sleep(0.2)
+        assert _channels_playing(long_hit) == [0]
+
     def test_when_budget_full_should_not_start_extra_loop(
         self, audio_manager: None, loaded_loader: ResourceLoader
     ) -> None:
-        # Spec 05: Channel budget - with all 16 channels holding loops, a
-        # 17th loop attempt is silently ignored (not marked active).
+        # Spec 05 (amendment): with all 12 reserved game-sfx channels
+        # holding loops, a 13th loop attempt is silently ignored (not
+        # marked active).
         audio_manager.set_active_loops(frozenset(LOOP_IDS))
-        assert len(_busy_channel_indices()) == AUDIO_CHANNEL_BUDGET
+        assert len(_busy_channel_indices()) == GAME_SFX_CHANNEL_COUNT
         audio_manager.set_active_loops(frozenset(LOOP_IDS) | {SFX_BOOM})
         assert _channels_playing(loaded_loader.get_sfx_resource(SFX_BOOM)) == []
-        assert len(_busy_channel_indices()) == AUDIO_CHANNEL_BUDGET
+        assert len(_busy_channel_indices()) == GAME_SFX_CHANNEL_COUNT
 
     def test_when_budget_full_then_loop_removed_should_allow_retry(
         self, audio_manager: None, loaded_loader: ResourceLoader
@@ -377,7 +565,7 @@ class TestStopSfx:
     ) -> None:
         # GIVEN a one-shot sfx that is still playing (150 ms long):
         sound = loaded_loader.get_sfx_resource(SFX_LONG_HIT)
-        audio_manager.play_sfx(SFX_LONG_HIT)
+        audio_manager.play_game_sfx(SFX_LONG_HIT)
         assert _channels_playing(sound) != []
 
         # WHEN the client requests that id be stopped:
@@ -393,8 +581,8 @@ class TestStopSfx:
         # GIVEN the same sfx played twice, occupying two channels (spec 06
         # note: Sound.stop() stops it on ALL channels):
         sound = loaded_loader.get_sfx_resource(SFX_LONG_HIT)
-        audio_manager.play_sfx(SFX_LONG_HIT)
-        audio_manager.play_sfx(SFX_LONG_HIT)
+        audio_manager.play_game_sfx(SFX_LONG_HIT)
+        audio_manager.play_game_sfx(SFX_LONG_HIT)
         assert len(_channels_playing(sound)) == 2
 
         # WHEN stop_sfx is requested a single time:
@@ -431,7 +619,7 @@ class TestStopSfx:
     ) -> None:
         # GIVEN one sfx playing and a second valid id that is not:
         long_hit = loaded_loader.get_sfx_resource(SFX_LONG_HIT)
-        audio_manager.play_sfx(SFX_LONG_HIT)
+        audio_manager.play_game_sfx(SFX_LONG_HIT)
 
         # WHEN the idle id is stopped:
         audio_manager.stop_sfx(SFX_BOOM)
@@ -453,12 +641,39 @@ class TestStopSfx:
         # THEN the music keeps playing:
         assert pygame.mixer.music.get_busy()
 
-    def test_when_sfx_disabled_should_be_silent_noop(
+    def test_started_by_play_ui_sfx_should_be_stopped_like_any_other(
+        self, audio_manager: None, loaded_loader: ResourceLoader
+    ) -> None:
+        # Spec 05 (amendment): stop_sfx does not care which play_*()
+        # method started the sound.
+        sound = loaded_loader.get_sfx_resource(SFX_LONG_HIT)
+        audio_manager.play_ui_sfx(SFX_LONG_HIT)
+        assert _channels_playing(sound) != []
+        audio_manager.stop_sfx(SFX_LONG_HIT)
+        assert _channels_playing(sound) == []
+
+    def test_started_by_play_speech_should_be_stopped_like_any_other(
+        self, audio_manager: None, loaded_loader: ResourceLoader
+    ) -> None:
+        # Spec 05 (amendment): a speech clip is stopped by stop_sfx too.
+        sound = loaded_loader.get_sfx_resource(SFX_LONG_HIT)
+        audio_manager.play_speech(SFX_LONG_HIT)
+        assert _channels_playing(sound) != []
+        audio_manager.stop_sfx(SFX_LONG_HIT)
+        assert _channels_playing(sound) == []
+
+    def test_when_game_sfx_disabled_should_be_silent_noop(
         self, loaded_loader: ResourceLoader
     ) -> None:
-        # Spec 05: with sfx disabled nothing can be playing, so
-        # stop_sfx is inherently a no-op in that state.
-        manager = AudioManager(loaded_loader, AudioConfig(sfx_enabled=False))
+        # Spec 05 (amendment): with every sound-effect category disabled
+        # nothing can be playing, so stop_sfx is inherently a no-op in
+        # that state.
+        manager = AudioManager(
+            loaded_loader,
+            AudioConfig(
+                game_sfx_enabled=False, ui_sfx_enabled=False, speech_enabled=False
+            ),
+        )
         manager.stop_sfx(SFX_BOOM)
         assert _busy_channel_indices() == []
 
@@ -645,18 +860,22 @@ class TestPlayMusicFirstMatch:
 
 
 class TestConfigurationSetters:
-    def test_sfx_volume_change_should_apply_immediately_to_playing_audio(
+    def test_game_sfx_volume_change_should_apply_immediately_to_playing_audio(
         self, audio_manager: None, loaded_loader: ResourceLoader
     ) -> None:
-        # Spec 05: sfx_volume adjusted while audio is playing takes effect
-        # immediately on currently playing sfx and loops.
+        # Spec 05: game_sfx_volume adjusted while audio is playing takes
+        # effect immediately on the channels playing sfx and loops - via
+        # channel volume, never Sound volume (spec 05: Adjusting volume).
         long_hit = loaded_loader.get_sfx_resource(SFX_LONG_HIT)
         boom = loaded_loader.get_sfx_resource(SFX_BOOM)
-        audio_manager.play_sfx(SFX_LONG_HIT)
+        audio_manager.play_game_sfx(SFX_LONG_HIT)
         audio_manager.set_active_loops(frozenset({SFX_BOOM}))
-        audio_manager.sfx_volume = 25
-        assert long_hit.get_volume() == _vol(0.25)
-        assert boom.get_volume() == _vol(0.25)
+        audio_manager.game_sfx_volume = 25
+        for sound in (long_hit, boom):
+            playing = _channels_playing(sound)
+            assert playing != []
+            for index in playing:
+                assert pygame.mixer.Channel(index).get_volume() == _vol(0.25)
         # ...and playback continues:
         assert _channels_playing(long_hit) != []
         assert _channels_playing(boom) != []
@@ -677,32 +896,113 @@ class TestConfigurationSetters:
         boom = loaded_loader.get_sfx_resource(SFX_BOOM)
         audio_manager.set_active_loops(frozenset({SFX_BOOM}))
         audio_manager.play_music(MUSIC_THEME)
-        audio_manager.sfx_volume = 30
+        audio_manager.game_sfx_volume = 30
         audio_manager.music_volume = 60
-        assert audio_manager.sfx_volume == 30
+        assert audio_manager.game_sfx_volume == 30
         assert audio_manager.music_volume == 60
-        assert boom.get_volume() == _vol(0.3)
+        loop_channels = _channels_playing(boom)
+        assert loop_channels != []
+        assert pygame.mixer.Channel(loop_channels[0]).get_volume() == _vol(0.3)
         assert pygame.mixer.music.get_volume() == _vol(0.6)
 
-    def test_setting_sfx_enabled_false_should_stop_playing_sfx_and_loops(
+    def test_setting_game_sfx_enabled_false_should_stop_playing_sfx_and_loops(
         self, audio_manager: None, loaded_loader: ResourceLoader
     ) -> None:
-        # Spec 05: setting sfx_enabled to false stops any currently playing
+        # Spec 05: setting game_sfx_enabled to false stops any currently playing
         # sfx/loop.
-        audio_manager.play_sfx(SFX_LONG_HIT)
+        audio_manager.play_game_sfx(SFX_LONG_HIT)
         audio_manager.set_active_loops(frozenset({SFX_BOOM}))
         assert len(_busy_channel_indices()) == 2
-        audio_manager.sfx_enabled = False
-        assert audio_manager.sfx_enabled is False
+        audio_manager.game_sfx_enabled = False
+        assert audio_manager.game_sfx_enabled is False
         assert _busy_channel_indices() == []
 
     def test_re_enabling_sfx_should_allow_playing_again(
         self, audio_manager: None, loaded_loader: ResourceLoader
     ) -> None:
-        audio_manager.sfx_enabled = False
-        audio_manager.sfx_enabled = True
-        audio_manager.play_sfx(SFX_BOOM)
+        audio_manager.game_sfx_enabled = False
+        audio_manager.game_sfx_enabled = True
+        audio_manager.play_game_sfx(SFX_BOOM)
         assert _channels_playing(loaded_loader.get_sfx_resource(SFX_BOOM)) != []
+
+    # -- category isolation (spec 05 amendment 2026-10-09) ------------------
+
+    def test_disabling_game_sfx_should_not_affect_ui_sfx_or_speech(
+        self, audio_manager: None, loaded_loader: ResourceLoader
+    ) -> None:
+        # GIVEN the same long sound playing in all three categories
+        # (lowest idle channels: 0, 12, 15):
+        long_hit = loaded_loader.get_sfx_resource(SFX_LONG_HIT)
+        audio_manager.play_game_sfx(SFX_LONG_HIT)
+        audio_manager.play_ui_sfx(SFX_LONG_HIT)
+        audio_manager.play_speech(SFX_LONG_HIT)
+        assert _channels_playing(long_hit) == [0, 12, 15]
+        # WHEN game sfx is disabled:
+        audio_manager.game_sfx_enabled = False
+        # THEN only the game channel went silent:
+        assert _channels_playing(long_hit) == [12, 15]
+
+    def test_disabling_ui_sfx_should_not_affect_game_sfx_or_speech(
+        self, audio_manager: None, loaded_loader: ResourceLoader
+    ) -> None:
+        long_hit = loaded_loader.get_sfx_resource(SFX_LONG_HIT)
+        audio_manager.play_game_sfx(SFX_LONG_HIT)
+        audio_manager.play_ui_sfx(SFX_LONG_HIT)
+        audio_manager.play_speech(SFX_LONG_HIT)
+        assert _channels_playing(long_hit) == [0, 12, 15]
+        audio_manager.ui_sfx_enabled = False
+        assert _channels_playing(long_hit) == [0, 15]
+
+    def test_disabling_speech_should_not_affect_game_sfx_or_ui_sfx(
+        self, audio_manager: None, loaded_loader: ResourceLoader
+    ) -> None:
+        long_hit = loaded_loader.get_sfx_resource(SFX_LONG_HIT)
+        audio_manager.play_game_sfx(SFX_LONG_HIT)
+        audio_manager.play_ui_sfx(SFX_LONG_HIT)
+        audio_manager.play_speech(SFX_LONG_HIT)
+        assert _channels_playing(long_hit) == [0, 12, 15]
+        audio_manager.speech_enabled = False
+        assert _channels_playing(long_hit) == [0, 12]
+
+    def test_ui_sfx_volume_change_should_apply_immediately(
+        self, audio_manager: None, loaded_loader: ResourceLoader
+    ) -> None:
+        # Spec 05: ui_sfx_volume adjusted while UI sfx is playing takes
+        # effect immediately on ALL channels of the reserved UI range.
+        # GIVEN all three UI channels occupied by long one-shots:
+        long_hit = loaded_loader.get_sfx_resource(SFX_LONG_HIT)
+        for _ in range(3):
+            audio_manager.play_ui_sfx(SFX_LONG_HIT)
+        assert _channels_playing(long_hit) == [12, 13, 14]
+        # WHEN the volume is adjusted mid-flight:
+        audio_manager.ui_sfx_volume = 25
+        # THEN every UI channel carries the new level and keeps playing:
+        for index in (12, 13, 14):
+            assert pygame.mixer.Channel(index).get_volume() == _vol(0.25)
+        assert _channels_playing(long_hit) == [12, 13, 14]
+
+    def test_speech_volume_change_should_apply_immediately(
+        self, audio_manager: None, loaded_loader: ResourceLoader
+    ) -> None:
+        # Spec 05: speech_volume adjusted while speech is playing takes
+        # effect immediately on the speech channel.
+        sound = loaded_loader.get_sfx_resource(SFX_LONG_HIT)
+        audio_manager.play_speech(SFX_LONG_HIT)
+        audio_manager.speech_volume = 25
+        assert _channels_playing(sound) == [15]
+        assert pygame.mixer.Channel(15).get_volume() == _vol(0.25)
+
+    def test_adjusting_one_category_volume_should_not_touch_another(
+        self, audio_manager: None, loaded_loader: ResourceLoader
+    ) -> None:
+        # Spec 05 (Adjusting volume): the same Sound may play in several
+        # categories at once; per-category volume must not leak across.
+        long_hit = loaded_loader.get_sfx_resource(SFX_LONG_HIT)
+        audio_manager.play_game_sfx(SFX_LONG_HIT)  # channel 0 at game volume (100%)
+        audio_manager.play_ui_sfx(SFX_LONG_HIT)  # channel 12 at UI volume (80%)
+        audio_manager.ui_sfx_volume = 25
+        assert pygame.mixer.Channel(12).get_volume() == _vol(0.25)
+        assert pygame.mixer.Channel(0).get_volume() == _vol(1.0)
 
     def test_setting_music_enabled_false_should_stop_playing_music(
         self, audio_manager: None
@@ -724,86 +1024,64 @@ class TestSetterValidation:
     startup (InvalidConfigError) and silently lose the user's settings.
     """
 
-    def test_when_sfx_volume_below_range_should_clamp_to_zero_and_warn(
-        self, audio_manager: None, hermetic_persistence: Path
+    @pytest.mark.parametrize("volume_field", VOLUME_FIELDS)
+    def test_when_volume_below_range_should_clamp_to_zero_and_warn(
+        self, audio_manager: None, hermetic_persistence: Path, volume_field: str
     ) -> None:
-        # GIVEN the default sfx volume (100) and a writable game.json:
+        # GIVEN the default volume for this category and a writable game.json:
         warnings, sink_id = _warning_records()
         try:
             # WHEN the client sets a volume below the 0-100 range:
-            audio_manager.sfx_volume = -5
+            setattr(audio_manager, volume_field, -5)
         finally:
             logger.remove(sink_id)
         # THEN the in-memory setting is clamped to mute and a warning
         # was logged:
-        assert audio_manager.sfx_volume == 0
+        assert getattr(audio_manager, volume_field) == 0
         assert any("clamped" in record for record in warnings)
         # AND game.json holds the valid value - never the raw -5:
-        assert _config_payload(hermetic_persistence)["audio"]["sfx_volume"] == 0
+        assert _config_payload(hermetic_persistence)["audio"][volume_field] == 0
 
-    def test_when_sfx_volume_above_range_should_clamp_to_full_volume_and_warn(
-        self, audio_manager: None, hermetic_persistence: Path
+    @pytest.mark.parametrize("volume_field", VOLUME_FIELDS)
+    def test_when_volume_above_range_should_clamp_to_full_volume_and_warn(
+        self, audio_manager: None, hermetic_persistence: Path, volume_field: str
     ) -> None:
         warnings, sink_id = _warning_records()
         try:
             # WHEN the client sets a volume above the 0-100 range:
-            audio_manager.sfx_volume = 999
+            setattr(audio_manager, volume_field, 999)
         finally:
             logger.remove(sink_id)
         # THEN the setting is clamped to full volume with a warning, and
         # game.json holds 100 - never the raw 999:
-        assert audio_manager.sfx_volume == 100
+        assert getattr(audio_manager, volume_field) == 100
         assert any("clamped" in record for record in warnings)
-        assert _config_payload(hermetic_persistence)["audio"]["sfx_volume"] == 100
+        assert _config_payload(hermetic_persistence)["audio"][volume_field] == 100
 
-    def test_when_music_volume_below_range_should_clamp_to_zero_and_warn(
-        self, audio_manager: None, hermetic_persistence: Path
+    @pytest.mark.parametrize("volume_field", VOLUME_FIELDS)
+    def test_when_volume_non_numeric_should_keep_current_value_and_warn(
+        self, audio_manager: None, volume_field: str
     ) -> None:
-        warnings, sink_id = _warning_records()
-        try:
-            # WHEN the client sets the music volume below the 0-100 range:
-            audio_manager.music_volume = -5
-        finally:
-            logger.remove(sink_id)
-        # THEN it is clamped to mute with a warning, and the file agrees:
-        assert audio_manager.music_volume == 0
-        assert any("clamped" in record for record in warnings)
-        assert _config_payload(hermetic_persistence)["audio"]["music_volume"] == 0
-
-    def test_when_music_volume_above_range_should_clamp_to_full_volume(
-        self, audio_manager: None, hermetic_persistence: Path
-    ) -> None:
-        warnings, sink_id = _warning_records()
-        try:
-            audio_manager.music_volume = 999
-        finally:
-            logger.remove(sink_id)
-        assert audio_manager.music_volume == 100
-        assert any("clamped" in record for record in warnings)
-        assert _config_payload(hermetic_persistence)["audio"]["music_volume"] == 100
-
-    def test_when_sfx_volume_non_numeric_should_keep_current_value_and_warn(
-        self, audio_manager: None
-    ) -> None:
-        # GIVEN the default sfx volume (100):
+        # GIVEN the default volume for this category:
         warnings, sink_id = _warning_records()
         try:
             # WHEN the client sets a value that is not numeric at all:
-            audio_manager.sfx_volume = "banana"
+            setattr(audio_manager, volume_field, "banana")
         finally:
             logger.remove(sink_id)
         # THEN the setting is unchanged and a warning was logged:
-        assert audio_manager.sfx_volume == 100
-        assert any("sfx_volume" in record for record in warnings)
+        assert getattr(audio_manager, volume_field) == DEFAULT_VOLUMES[volume_field]
+        assert any(volume_field in record for record in warnings)
 
-    def test_when_sfx_volume_is_numeric_string_should_coerce_as_config_loading_does(
-        self, audio_manager: None, hermetic_persistence: Path
+    @pytest.mark.parametrize("volume_field", VOLUME_FIELDS)
+    def test_when_volume_is_numeric_string_should_coerce_as_config_loading_does(
+        self, audio_manager: None, hermetic_persistence: Path, volume_field: str
     ) -> None:
         # Spec 05: pydantic coerces "50" to 50 at config-load time; the
-        # setter applies the same rule.
-        audio_manager.sfx_volume = "45"
-        assert audio_manager.sfx_volume == 45
-        assert _config_payload(hermetic_persistence)["audio"]["sfx_volume"] == 45
+        # setter applies the same rule, for every category alike.
+        setattr(audio_manager, volume_field, "45")
+        assert getattr(audio_manager, volume_field) == 45
+        assert _config_payload(hermetic_persistence)["audio"][volume_field] == 45
 
     def test_when_music_volume_is_fractional_should_keep_current_value(
         self, audio_manager: None
@@ -822,42 +1100,38 @@ class TestSetterValidation:
         # would fail validation at startup (InvalidConfigError) and the
         # game would silently lose the user's settings.
         # GIVEN out-of-range volumes were clamped by the setters:
-        audio_manager.sfx_volume = -5
+        audio_manager.game_sfx_volume = -5
         audio_manager.music_volume = 999
         # WHEN the config is loaded the way startup loads it:
         config = game_config.load_game_config()
         # THEN the file is valid and the clamped values survived:
         assert config.audio is not None
-        assert config.audio.sfx_volume == 0
+        assert config.audio.game_sfx_volume == 0
         assert config.audio.music_volume == 100
 
-    def test_when_sfx_enabled_non_boolean_should_keep_current_value_and_warn(
-        self, audio_manager: None
+    @pytest.mark.parametrize("enabled_field", ENABLED_FIELDS)
+    def test_when_enabled_flag_non_boolean_should_keep_current_value_and_warn(
+        self, audio_manager: None, enabled_field: str
     ) -> None:
-        # GIVEN sfx is enabled:
+        # GIVEN the flag is enabled:
         warnings, sink_id = _warning_records()
         try:
-            # WHEN the client sets the flag to a non-boolean value:
-            audio_manager.sfx_enabled = "banana"
+            # WHEN the client sets it to a non-boolean value:
+            setattr(audio_manager, enabled_field, "banana")
         finally:
             logger.remove(sink_id)
         # THEN the flag is unchanged and a warning was logged:
-        assert audio_manager.sfx_enabled is True
-        assert any("sfx_enabled" in record for record in warnings)
+        assert getattr(audio_manager, enabled_field) is True
+        assert any(enabled_field in record for record in warnings)
 
-    def test_when_music_enabled_non_boolean_should_keep_current_value(
-        self, audio_manager: None
-    ) -> None:
-        audio_manager.music_enabled = "nope"
-        assert audio_manager.music_enabled is True
-
+    @pytest.mark.parametrize("enabled_field", ENABLED_FIELDS)
     def test_when_enabled_flag_is_zero_should_coerce_to_false(
-        self, audio_manager: None
+        self, audio_manager: None, enabled_field: str
     ) -> None:
-        # Spec 05: pydantic accepts 0/1 as booleans at config-load time; the
-        # setter applies the same rule.
-        audio_manager.sfx_enabled = 0
-        assert audio_manager.sfx_enabled is False
+        # Spec 05: pydantic accepts 0/1 as booleans at config-load time;
+        # the setter applies the same rule, for every category alike.
+        setattr(audio_manager, enabled_field, 0)
+        assert getattr(audio_manager, enabled_field) is False
 
 
 class TestPersistence:
@@ -865,14 +1139,18 @@ class TestPersistence:
         self, audio_manager: None, hermetic_persistence: Path
     ) -> None:
         # Spec 05: config changes are persisted via the configuration module.
-        audio_manager.sfx_volume = 30
+        audio_manager.game_sfx_volume = 30
         payload = json.loads(
             (hermetic_persistence / "game.json").read_text(encoding="utf-8")
         )
         assert payload == {
             "audio": {
-                "sfx_enabled": True,
-                "sfx_volume": 30,
+                "game_sfx_enabled": True,
+                "game_sfx_volume": 30,
+                "ui_sfx_enabled": True,
+                "ui_sfx_volume": 80,
+                "speech_enabled": True,
+                "speech_volume": 90,
                 "music_enabled": True,
                 "music_volume": 80,
             }
@@ -890,7 +1168,7 @@ class TestPersistence:
             json.dumps(
                 {
                     "mainWindow": {"mode": "fullscreen", "resolution": "1920x1080"},
-                    "audio": {"sfx_volume": 70},
+                    "audio": {"game_sfx_volume": 70},
                 }
             ),
             encoding="utf-8",
@@ -903,8 +1181,12 @@ class TestPersistence:
         payload = json.loads(config_path.read_text(encoding="utf-8"))
         assert payload["mainWindow"] == {"mode": "fullscreen", "resolution": "1920x1080"}
         assert payload["audio"] == {
-            "sfx_enabled": True,
-            "sfx_volume": 70,
+            "game_sfx_enabled": True,
+            "game_sfx_volume": 70,
+            "ui_sfx_enabled": True,
+            "ui_sfx_volume": 80,
+            "speech_enabled": True,
+            "speech_volume": 90,
             "music_enabled": True,
             "music_volume": 10,
         }
@@ -917,19 +1199,19 @@ class TestPersistence:
         # GIVEN a game.json with an unrecognized key in the audio section:
         config_path = bootstrapped_persistence / "game.json"
         config_path.write_text(
-            json.dumps({"audio": {"sfx_volume": 30, "bogusKey": 1}}), encoding="utf-8"
+            json.dumps({"audio": {"game_sfx_volume": 30, "bogusKey": 1}}), encoding="utf-8"
         )
         config = game_config.load_game_config()
         # The unknown key is ignored on startup:
         assert config.audio is not None
-        assert config.audio.sfx_volume == 30
+        assert config.audio.game_sfx_volume == 30
         # WHEN the section is saved:
         manager = AudioManager(loaded_loader, config.audio)
         manager.music_volume = 10
         # THEN the unrecognized key is gone from the file:
         payload = json.loads(config_path.read_text(encoding="utf-8"))
         assert "bogusKey" not in payload["audio"]
-        assert payload["audio"]["sfx_volume"] == 30
+        assert payload["audio"]["game_sfx_volume"] == 30
 
     def test_when_persistence_fails_should_keep_settings_and_log_warning(
         self, audio_manager: None, monkeypatch: pytest.MonkeyPatch
@@ -943,11 +1225,11 @@ class TestPersistence:
         warnings, sink_id = _warning_records()
         try:
             # WHEN the volume changes despite the failing save:
-            audio_manager.sfx_volume = 10
+            audio_manager.game_sfx_volume = 10
         finally:
             logger.remove(sink_id)
         # THEN the setting is in effect in memory and a warning was logged:
-        assert audio_manager.sfx_volume == 10
+        assert audio_manager.game_sfx_volume == 10
         assert any("audio" in record.lower() for record in warnings)
 
 
@@ -965,10 +1247,10 @@ class TestSingleton:
     ) -> None:
         # Spec 05: init_audio_manager creates the global instance; the
         # accessor returns it.
-        created = audio.init_audio_manager(loaded_loader, AudioConfig(sfx_volume=42))
+        created = audio.init_audio_manager(loaded_loader, AudioConfig(game_sfx_volume=42))
         try:
             assert audio.get_audio_manager() is created
-            assert audio.get_audio_manager().sfx_volume == 42
+            assert audio.get_audio_manager().game_sfx_volume == 42
         finally:
             # Keep the module global clean for other tests.
             monkeypatch.setattr(audio, "_audio_manager", None)

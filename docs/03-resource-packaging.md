@@ -366,7 +366,8 @@ of duplicating it, also acceptable. The packager is bundled with the game and is
 Note: add-on package authors control their own namespace, but it is recommended to create a directory structure that mirrors
 what the game itself uses:
 
-- `resources/audio/sfx` - base directory for sound effects
+- `resources/audio/ui` - base directory for UI sound effects (clicks, cancels, etc.)
+- `resources/audio/sfx` - base directory for game sound effects (projectiles, explosions, etc.)
 - `resources/audio/music` - base directory for music
 - `resources/graphics` - base directory for images (game objects, backgrounds, etc.)
 - `resources/data` - base directory for miscellaneous data files.

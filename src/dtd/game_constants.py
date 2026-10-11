@@ -5,6 +5,8 @@ that tuning the game does not require hunting through code.
 """
 from __future__ import annotations
 
+from typing import Final
+
 # Fixed simulation step used by the test harness (spec 00: Testing). The
 # accumulator that consumes this step lives in the test harness, not the game.
 SIM_STEP = 1 / 60
@@ -20,10 +22,33 @@ SUPPORTED_RESOLUTIONS = ("1280x720", "1920x1080", "2560x1440")
 DEFAULT_FULLSCREEN_RESOLUTION = "1920x1080"
 
 # --- Audio manager (spec 05) -----------------------------------------------
-#: The mixer channel budget for all sfx playback (spec 05: Channel budget).
-#: One-shot plays and sfx loops share this single pool; when it is exhausted,
-#: further play requests are silently ignored by pygame.
-AUDIO_CHANNEL_BUDGET = 16
+#: Per-category channel counts for the reserved mixer pool (spec 05,
+#: amendment 2026-10-09: Channel budget). The pool is split into fixed
+#: contiguous index ranges, in this order: game sfx 0-11, UI sfx 12-14,
+#: speech 15.
+GAME_SFX_CHANNEL_COUNT = 12
+UI_SFX_CHANNEL_COUNT = 3
+SPEECH_CHANNEL_COUNT = 1
+#: The mixer channel budget, derived from the category counts so the total
+#: and the parts can never drift apart (spec 05: Channel budget).
+AUDIO_CHANNEL_BUDGET = (
+    GAME_SFX_CHANNEL_COUNT + UI_SFX_CHANNEL_COUNT + SPEECH_CHANNEL_COUNT
+)
+#: The fixed contiguous channel index range each category owns, derived
+#: from the counts above in order: game sfx 0-11, UI sfx 12-14, speech 15
+#: (spec 05: Channel budget). Keyed by the same category names the config
+#: keys use. This is the ONLY place the offsets are computed. The Final
+#: annotation marks the mapping itself as module constant - the ranges are
+#: immutable, and rebinding or editing the dict at runtime is a bug.
+AUDIO_CHANNEL_RANGES: Final[dict[str, range]] = {
+    "game_sfx": range(0, GAME_SFX_CHANNEL_COUNT),
+    "ui_sfx": range(
+        GAME_SFX_CHANNEL_COUNT, GAME_SFX_CHANNEL_COUNT + UI_SFX_CHANNEL_COUNT
+    ),
+    "speech": range(
+        GAME_SFX_CHANNEL_COUNT + UI_SFX_CHANNEL_COUNT, AUDIO_CHANNEL_BUDGET
+    ),
+}
 #: The allowable volume range, as integer percentages (spec 05: Validation).
 #: 0 is mute, 100 is full volume. Shared by the config validation rules and
 #: the runtime setter clamping so the two can never drift apart.
@@ -37,6 +62,19 @@ VOLUME_MAX_PERCENT = 100
 #: (spec 02) is 16:9, so one uniform scale factor covers both axes.
 DESIGN_W = 1920
 DESIGN_H = 1080
+#: Core UI resource ids (spec 04: Core UI Resources). This is the code
+#: half of the canonical table in spec 04; other spec docs reference
+#: these constants by name, never by raw resource id string. Any of
+#: them not resolving is never an error - all UI resources are optional.
+#: Step 2 of the spec 04 Font determination chain: the font used by all
+#: widgets unless a valid font is explicitly configured.
+UI_DEFAULT_FONT = "fonts/Audiowide-Regular.ttf"
+#: Sound effect for widgets that support mouse hover, played through
+#: ``AudioManager.play_ui_sfx`` (spec 04: Core UI Resources).
+UI_SFX_HOVER = "audio/ui/hover.ogg"
+#: Sound effect confirming a UI action, e.g. a button click (spec 04:
+#: Core UI Resources).
+UI_SFX_ACCEPT = "audio/ui/accept.ogg"
 #: Fraction of the Button inner-rect height reserved as margin around the
 #: icon - top and bottom always, plus the left edge when a label is
 #: present (spec 09: Icon scaling).
@@ -89,17 +127,18 @@ STARFIELD_BRIGHTNESS_STEP = 1
 #: same value when no theme (or an invalid one) is configured.
 DEFAULT_THEME_VALUE = "default"
 #: The config value that explicitly means "use the fallback font" (spec 04:
-#: Configuration). ``Theme.get_font_resource_id`` reports this same value
-#: when no font (or an invalid one) is configured.
+#: Configuration). ``Theme.get_font_resource_id`` reports this value only
+#: when the font chain fell through to a system font.
 DEFAULT_FONT_VALUE = "default"
 #: Display value the resource loader's ``get_theme_resource_ids`` always
 #: offers first, standing in for "no theme" in a chooser (spec 08). Chooser
 #: callbacks map this display value back to ``DEFAULT_THEME_VALUE``.
 DEFAULT_THEME_DISPLAY_VALUE = "(Default theme)"
 #: Display value the resource loader's ``get_font_resource_ids`` always
-#: offers first, standing in for "no font" in a chooser (spec 08). Chooser
-#: callbacks map this display value back to ``DEFAULT_FONT_VALUE``.
-DEFAULT_FONT_DISPLAY_VALUE = "(System default)"
+#: offers first, standing in for "no explicit font configured" in a
+#: chooser (spec 08). Chooser callbacks map this display value back
+#: to ``DEFAULT_FONT_VALUE``.
+DEFAULT_FONT_DISPLAY_VALUE = "(Default font)"
 
 # --- Resource packaging (spec 03) ----------------------------------------
 #: The directory name the game always scans first in the resource search

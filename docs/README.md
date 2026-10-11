@@ -126,6 +126,8 @@ an answer clearly documented (for future reference purposes).
 
 ## Amending spec docs
 
+### Amending via another spec doc
+
 New spec docs may require changes to previous, active spec docs. This is acceptable, as long
 as the changes are clearly defined:
 - what must change?
@@ -137,4 +139,23 @@ the first stage of the dev plan must be to implement the amendments to previous 
 
 The amended document is updated in place and retains its current status; once the amendments
 are carried out, the 'Amendments' section is removed from the amending document.
+
+### Amending directly
+
+If an active spec doc requires changes that are NOT driven from some other spec doc, but rather
+due to a desire to change the behavior of the doc in question, then the following general flow
+should be followed:
+- flip the doc from `active` back to `proposed` to indicate that there is work to be done.
+- modify the doc: remove deprecated behavior, add new behavior, modify existing behavior, etc.
+- if a Dev plan section was present, add at least one new stage to cover the changes.
+  If the changes are too large to implement in a single stage, add several stages.
+  The final stage should include instructions to flip the doc back to `active` status.
+  The added stages should include wording to make it clear that these stages were added
+  *after* initial implementation. Include the current date. For example: "Amendment 2026-05-29".
+- if a Dev plan section was not present, add one, unless the change is trivial.
+  A label/wording change, for example, does not warrant the creation of a Dev plan.
+
+Any changes to behavior require changes to tests! If the previous behavior was untested, add tests!
+Any new behavior requires new tests!
+Deleting previous behavior may require deletion or modification of existing tests.
 
