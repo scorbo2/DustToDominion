@@ -271,6 +271,18 @@ calculations should take this into account.
    suite green at 738 tests.)
 7. Implement `set_opaque()` to allow toggling rect-filling, and `set_border_width()`
    to enable/disable border display.
+   **Completed 2026-10-11** (`set_opaque` gates the fill blit - the SRCALPHA overlay
+   starts transparent, so border and text simply draw over the background;
+   `set_border_width` and the constructor share one `_validated_border_width` helper:
+   positive passes, 0 is silent, bools/non-ints/negatives disable with a log warning.
+   Re-layout is inherent (layout happens at draw time). 15 new tests: transparent
+   background with border+text intact, state-appropriate fill restoration, same-value
+   no-ops, the full border validation matrix at construction and through the mutator,
+   and re-layout pins via the font-size spy. Two gotchas surfaced and are now pinned
+   by the tests: loguru needs brace formatting (a printf-style `%s` message silently
+   drops its arguments), and a non-opaque Label's semi-transparent text
+   re-composites over its own leftovers on an uncleared surface - no-op tests must
+   clear between draws. Full suite green at 753 tests.)
 8. Implement the spec 08 changes to modify TitleScreen to use the new Label widget
    and remove the old caching code. Mark the new stage in the 08 Dev plan section
    as complete with today's date. Flip the 08 spec back to `active` status on

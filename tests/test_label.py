@@ -1,17 +1,20 @@
 """Unit tests for the ``Label`` widget (spec 10).
 
-Stage 4-6 coverage (spec 10 Dev plan): defaults - auto-scale with the
+Stage 4-7 coverage (spec 10 Dev plan): defaults - auto-scale with the
 zero-glyph margin, left alignment, vertical centering, opaque rect
 fill, border rendering, and the full state-color matrix (normal /
 selected / disabled; hover ignored in every state);
 ``set_font_point_size`` - pinned design-space sizes (floor
 conversion), clipping of oversized pinned text, and the
-invalid-value/None auto-scale fallbacks; and ``set_text_centered`` -
+invalid-value/None auto-scale fallbacks; ``set_text_centered`` -
 horizontal centering for auto-scaled and pinned text alike,
 both-sides clipping of oversized centered text, the toggle back to
-left-alignment, and same-value no-ops. The remaining mutator stubs
-are pinned as no-ops until stage 7 lands and replaces those tests
-with real behavior tests.
+left-alignment, and same-value no-ops; and ``set_opaque`` /
+``set_border_width`` - transparent backgrounds with border and text
+intact, state-appropriate fills, the border validation matrix
+(0 silent, negative/non-int warn and disable - at construction and
+through the mutator alike), and text re-layout on border width
+changes.
 
 The margin-aware auto-scale search itself is pinned in
 test_text_layout.py (specs 07/10); the tests here prove Label
@@ -841,28 +844,224 @@ class TestLabelTextCentering:
                 assert screen.get_at((x, y)) == baseline.get_at((x, y))
 
 
-class TestLabelMutatorStubs:
-    def test_stubbed_mutators_should_not_change_rendering_yet(
-        self, font_ready: None
-    ) -> None:
-        # GIVEN a Label with text and a border, drawn once to
-        # establish the baseline:
-        _, ui = _label_ui(
-            pygame.Rect(0, 0, 400, 100), _theme(TEST_THEME_JSON), text="OK", border_width=10
-        )
-        baseline = _draw(ui).copy()
-
-        # WHEN the remaining stub mutators are invoked with valid
-        # values (spec 10 Dev plan stage 7 implements them for real),
-        label = ui.widgets[0]
+class TestLabelOpacity:
+    def test_set_opaque_with_false_should_not_fill_the_rect(self, font_ready: None) -> None:
+        # GIVEN a bare Label (no border, no text) made non-opaque
+        # (spec 10: set_opaque):
+        label, ui = _label_ui(pygame.Rect(0, 0, 400, 100), _theme(TEST_THEME_JSON))
         label.set_opaque(False)
-        label.set_border_width(30)
 
-        # WHEN the UI redraws,
+        # WHEN the UI draws,
         screen = _draw(ui)
 
-        # THEN the rendering is unchanged - the stubs are honest no-ops
-        # until their stage lands:
+        # THEN not a single pixel inside the rect differs from the
+        # (black) screen - the background is fully transparent:
+        assert not _any_pixel_differs(screen, pygame.Rect(0, 0, 400, 100), BLACK)
+
+    def test_set_opaque_with_false_should_still_draw_border_and_text(
+        self, font_ready: None
+    ) -> None:
+        # GIVEN a bordered Label with 10pt pinned text, made non-opaque:
+        label, ui = _label_ui(
+            pygame.Rect(0, 0, 400, 100), _theme(TEST_THEME_JSON), text="OK", border_width=10
+        )
+        label.set_font_point_size(10)
+        label.set_opaque(False)
+
+        # WHEN the UI draws,
+        screen = _draw(ui)
+
+        # THEN the border still draws...
+        assert screen.get_at((5, 50)) == NORMAL_FG
+        # ...the text still draws...
+        assert _any_pixel_differs(screen, pygame.Rect(10, 10, 380, 80), BLACK)
+        # ...but the fill is gone: a point inside the inner rect and
+        # clear of the small centered text stays pure screen background:
+        assert screen.get_at((200, 15)) == BLACK
+
+    def test_set_opaque_with_true_should_restore_the_state_appropriate_fill(
+        self, font_ready: None
+    ) -> None:
+        # GIVEN a selected Label made non-opaque:
+        label, ui = _label_ui(pygame.Rect(0, 0, 400, 100), _theme(TEST_THEME_JSON))
+        label.selected = True
+        label.set_opaque(False)
+        _draw(ui)
+
+        # WHEN opacity is restored,
+        label.set_opaque(True)
+        screen = _draw(ui)
+
+        # THEN the fill returns with the *current state's* background -
+        # selected here (spec 10: Testing):
+        assert screen.get_at((200, 50)) == SELECTED_BG
+
+    def test_set_opaque_with_same_value_should_be_a_no_op(self, font_ready: None) -> None:
+        # GIVEN a Label already made non-opaque and drawn once:
+        label, ui = _label_ui(pygame.Rect(0, 0, 400, 100), _theme(TEST_THEME_JSON), text="OK")
+        label.set_opaque(False)
+        screen = _draw(ui)
+        baseline = screen.copy()
+
+        # WHEN the same value is set again and the UI redraws (spec 10:
+        # Testing - subsequent calls with the same value are no-ops),
+        label.set_opaque(False)
+        # Start from a clean slate: a non-opaque Label's semi-transparent
+        # text re-composites over its own leftovers on a dirty surface,
+        # and that compositing is not what the no-op contract is about.
+        screen.fill(BLACK)
+        screen = _draw(ui)
+
+        # THEN the rendering is unchanged:
         for x in range(0, 400, 7):
             for y in range(0, 100, 5):
                 assert screen.get_at((x, y)) == baseline.get_at((x, y))
+
+
+class TestLabelBorderWidthMutation:
+    def test_set_border_width_with_positive_value_should_draw_the_border(
+        self, font_ready: None
+    ) -> None:
+        # GIVEN a border-less Label (spec 10: set_border_width):
+        label, ui = _label_ui(pygame.Rect(0, 0, 400, 100), _theme(TEST_THEME_JSON))
+
+        # WHEN a 10 design-pixel border is applied and the UI draws,
+        label.set_border_width(10)
+        screen = _draw(ui)
+
+        # THEN the border band is foregroundNormal and the fill is
+        # backgroundNormal:
+        assert screen.get_at((5, 50)) == NORMAL_FG
+        assert screen.get_at((200, 50)) == NORMAL_BG
+
+    def test_set_border_width_with_zero_should_remove_the_border_without_warning(
+        self, font_ready: None
+    ) -> None:
+        # GIVEN a Label with a 10px border:
+        label, ui = _label_ui(
+            pygame.Rect(0, 0, 400, 100), _theme(TEST_THEME_JSON), border_width=10
+        )
+
+        # WHEN the width is set to 0 (and the UI redraws):
+        records, sink_id = _warning_records()
+        try:
+            label.set_border_width(0)
+        finally:
+            logger.remove(sink_id)
+        screen = _draw(ui)
+
+        # THEN the border is gone and no warning was logged (spec 10:
+        # Testing - 0 disables with no log warning):
+        assert screen.get_at((0, 50)) == NORMAL_BG
+        assert records == []
+
+    def test_set_border_width_with_negative_value_should_disable_the_border_and_warn(
+        self, font_ready: None
+    ) -> None:
+        # GIVEN a Label with a 10px border:
+        label, ui = _label_ui(
+            pygame.Rect(0, 0, 400, 100), _theme(TEST_THEME_JSON), border_width=10
+        )
+
+        # WHEN a negative width is applied (and the UI redraws):
+        records, sink_id = _warning_records()
+        try:
+            label.set_border_width(-5)
+        finally:
+            logger.remove(sink_id)
+        screen = _draw(ui)
+
+        # THEN the border is disabled and a warning was logged (spec 10:
+        # Testing):
+        assert screen.get_at((0, 50)) == NORMAL_BG
+        assert any("set_border_width" in record for record in records)
+
+    @pytest.mark.parametrize("invalid_width", [True, False, 2.5, "thick"])
+    def test_set_border_width_with_non_int_value_should_disable_the_border_and_warn(
+        self, font_ready: None, invalid_width: object
+    ) -> None:
+        # GIVEN a Label with a 10px border:
+        label, ui = _label_ui(
+            pygame.Rect(0, 0, 400, 100), _theme(TEST_THEME_JSON), border_width=10
+        )
+
+        # WHEN a non-int value (bool included, spec 10: Label options)
+        # is applied (and the UI redraws):
+        records, sink_id = _warning_records()
+        try:
+            label.set_border_width(invalid_width)  # type: ignore[arg-type]
+        finally:
+            logger.remove(sink_id)
+        screen = _draw(ui)
+
+        # THEN the border is disabled and a warning was logged:
+        assert screen.get_at((0, 50)) == NORMAL_BG
+        assert any("set_border_width" in record for record in records)
+
+    @pytest.mark.parametrize("invalid_width", [True, -5, 2.5])
+    def test_constructor_with_invalid_border_width_should_warn_and_disable(
+        self, font_ready: None, invalid_width: object
+    ) -> None:
+        # GIVEN the same invalid values arriving at construction
+        # instead of through the mutator - one validation, no drift:
+        records, sink_id = _warning_records()
+        try:
+            _, ui = _label_ui(
+                pygame.Rect(0, 0, 400, 100), _theme(TEST_THEME_JSON), border_width=invalid_width  # type: ignore[arg-type]
+            )
+        finally:
+            logger.remove(sink_id)
+
+        # WHEN the UI draws,
+        screen = _draw(ui)
+
+        # THEN there is no border and a warning was logged:
+        assert screen.get_at((0, 50)) == NORMAL_BG
+        assert any("border width" in record for record in records)
+
+    def test_border_width_change_should_relayout_text(self, font_ready: None) -> None:
+        # GIVEN a border-less 400x100 Label that has drawn its text at
+        # the full inner rect:
+        theme = _theme(TEST_THEME_JSON)
+        requested_sizes = _font_size_spy(theme)
+        label, ui = _label_ui(pygame.Rect(0, 0, 400, 100), theme, text="OK")
+        _draw(ui)
+        first_draw_size = len(requested_sizes)
+        wide_choice = max(
+            size for size in set(requested_sizes) if _margin_rule(theme, "OK", size, 400, 100)
+        )
+
+        # WHEN the border width is raised to 30 and the UI redraws,
+        label.set_border_width(30)
+        _draw(ui)
+
+        # THEN the border draws at the new width...
+        screen = _draw(ui)
+        assert screen.get_at((15, 50)) == NORMAL_FG
+        # ...and the second draw re-laid out the text for the smaller
+        # inner rect (340x40), picking a smaller size (spec 10:
+        # Testing - every border width change re-layouts the text):
+        second_sizes = requested_sizes[first_draw_size:]
+        narrow_choice = max(
+            size for size in set(second_sizes) if _margin_rule(theme, "OK", size, 340, 40)
+        )
+        assert narrow_choice < wide_choice
+
+    def test_mutated_unreasonably_large_border_should_prevent_text(
+        self, font_ready: None
+    ) -> None:
+        # GIVEN a 100x100 Label that drew its text with no border:
+        theme = _theme(TEST_THEME_JSON)
+        requested_sizes = _font_size_spy(theme)
+        label, ui = _label_ui(pygame.Rect(0, 0, 100, 100), theme, text="OK")
+        _draw(ui)
+        first_draw_size = len(requested_sizes)
+
+        # WHEN a 60px border is applied (inner 100-120 < 0) and the UI
+        # redraws,
+        label.set_border_width(60)
+        _draw(ui)
+
+        # THEN the second draw requested no font at all - the text is
+        # not drawn (spec 10: zero or negative inner rect):
+        assert requested_sizes[first_draw_size:] == []

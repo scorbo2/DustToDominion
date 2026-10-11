@@ -8,9 +8,12 @@ Rendering contract (spec 10; the spec's Dev plan notes which stage
 implements what):
 
 - The rect is filled with ``backgroundNormal``/``backgroundSelected``
-  (or the disabled colors), honoring the theme's ``cornerRadius``.
-  Borders use the matching ``foreground*`` color with a pixel floor of
-  1 when nonzero (spec 04: Widget coordinates).
+  (or the disabled colors), honoring the theme's ``cornerRadius``,
+  unless ``set_opaque(False)`` made the label transparent. Borders use
+  the matching ``foreground*`` color with a pixel floor of 1 when
+  nonzero (spec 04: Widget coordinates); ``set_border_width`` changes
+  the border after construction (invalid values disable it with a log
+  warning, spec 10: Label options).
 - Everything is drawn to a per-pixel-alpha (``SRCALPHA``) overlay and
   blitted, because theme colors may carry alpha and ``pygame.draw``
   ignores color alpha on plain surfaces (spec 04: Theme Configuration).
@@ -34,10 +37,6 @@ implements what):
   disabling are cosmetic only, and "disabled" outranks "selected"
   through the shared ``state_colors`` precedence (spec 04, as noted by
   spec 10).
-
-Pending spec 10 dev stages: opacity toggling and border-width
-mutation (stage 7). The remaining mutators below are deliberate no-op
-stubs until their stage lands.
 """
 from __future__ import annotations
 
@@ -52,12 +51,32 @@ from dtd.widgets.text_layout import (
 )
 
 
+def _validated_border_width(width: object, source: str) -> int:
+    """One validation for the constructor argument and the mutator.
+
+    A positive int passes through; 0 is valid and silent (no border);
+    bools, other non-ints, and negatives become 0 with a log warning
+    (spec 10: set_border_width). The constructor gets the same rules -
+    a widget should not render a 1px border for ``border_width=True``
+    just because the value arrived at construction instead of through
+    the mutator.
+    """
+    if isinstance(width, bool) or not isinstance(width, int) or width < 0:
+        logger.warning(
+            "label.{}: invalid border width {!r}; disabling the border", source, width
+        )
+        return 0
+    return width
+
+
 class Label(Widget):
     """A static text display (spec 10: Label options).
 
     ``rect`` is in design space (inherited from ``Widget``); ``text``
     that is blank, empty, or ``None`` displays nothing; ``border_width``
-    is a width in *design* pixels (0 = no border, the default).
+    is a width in *design* pixels (0 = no border, the default; invalid
+    values disable the border with a log warning, same as
+    ``set_border_width``).
     """
 
     def __init__(
@@ -68,7 +87,7 @@ class Label(Widget):
     ) -> None:
         super().__init__(rect)
         self.text = text
-        self.border_width = border_width
+        self.border_width = _validated_border_width(border_width, "__init__")
         # Design-space point size for the text, or None for auto-scale
         # (spec 10: set_font_point_size). No constructor argument:
         # auto-scale is the default.
@@ -77,6 +96,10 @@ class Label(Widget):
         # default) or center within the inner rect (spec 10:
         # set_text_centered). No constructor argument.
         self._text_centered = False
+        # Fill the rect with the state's background color (True, the
+        # default) or stay transparent (spec 10: set_opaque). No
+        # constructor argument.
+        self._opaque = True
 
     # -- cosmetics (spec 10: Label options) ---------------------------------
 
@@ -116,23 +139,26 @@ class Label(Widget):
         """
         self._text_centered = bool(is_centered)
 
-    # Remaining mutators are deliberate no-op stubs until their dev
-    # stage lands; the defaults they will eventually change (opaque
-    # fill, border width) are what the draw path implements today.
-
     def set_opaque(self, is_opaque: bool) -> None:
         """Toggle filling the rect with the state's background color.
 
-        Stub: implemented in spec 10 dev stage 7. Labels are opaque by
-        default (spec 10: Label options).
+        Labels are opaque by default; ``False`` leaves the background
+        transparent while border and text still draw (spec 10: Label
+        options). Layout happens at draw time, so repeated calls with
+        the same value are no-ops by construction.
         """
+        self._opaque = bool(is_opaque)
 
     def set_border_width(self, width: int) -> None:
         """Change the border width after construction.
 
-        Stub: implemented in spec 10 dev stage 7. The constructor's
-        ``border_width`` is the only way to set a border for now.
+        A positive design-pixel width draws that border; 0 disables it
+        silently; negatives and non-ints (bool included) disable it
+        with a log warning (spec 10: Label options). The text
+        re-layouts to the new inner rect on the next draw - layout
+        happens at draw time, so no extra invalidation is needed.
         """
+        self.border_width = _validated_border_width(width, "set_border_width")
 
     # -- rendering (spec 10: Label options / Label layout) ------------------
     def draw(self, surf: pygame.Surface, theme: Theme) -> None:
@@ -148,7 +174,11 @@ class Label(Widget):
             if self.border_width > 0
             else 0
         )
-        pygame.draw.rect(overlay, bg, (0, 0, rect.w, rect.h), border_radius=corner)
+        # The overlay starts fully transparent, so a non-opaque Label
+        # simply skips the fill - border and text still draw over the
+        # background (spec 10: set_opaque).
+        if self._opaque:
+            pygame.draw.rect(overlay, bg, (0, 0, rect.w, rect.h), border_radius=corner)
         if border_px > 0:
             pygame.draw.rect(
                 overlay, fg, (0, 0, rect.w, rect.h), width=border_px, border_radius=corner
