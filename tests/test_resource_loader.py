@@ -39,6 +39,12 @@ from dtd.pak import (
 )
 from dtd.resource_loader import ResourceLoader
 
+# chmod-based permission tests are meaningless when running as root (Unix) or
+# on a platform without os.geteuid (e.g. Windows); skip in both cases. The
+# guard must not call os.geteuid() unguarded - it is evaluated at collection
+# time and would raise AttributeError on Windows, failing the whole module.
+_SKIP_PERMISSION_TESTS = not hasattr(os, "geteuid") or os.geteuid() == 0
+
 
 @pytest.fixture
 def project(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
@@ -303,7 +309,8 @@ class TestSearchPath:
             ResourceLoader().load(ResourcesConfig(location=[str(stray)]))
 
     @pytest.mark.skipif(
-        os.geteuid() == 0, reason="root ignores filesystem permissions"
+        _SKIP_PERMISSION_TESTS,
+        reason="directory permission checks are bypassed (root) or N/A (no os.geteuid, e.g. Windows)",
     )
     def test_load_withUnreadableLocationDirectory_shouldRaiseResourceLoadError(
         self, project: Path
@@ -479,7 +486,8 @@ class TestPakLocations:
             ResourceLoader().load(ResourcesConfig(location=[str(pak_path)]))
 
     @pytest.mark.skipif(
-        os.geteuid() == 0, reason="root ignores filesystem permissions"
+        _SKIP_PERMISSION_TESTS,
+        reason="file permission checks are bypassed (root) or N/A (no os.geteuid, e.g. Windows)",
     )
     def test_load_withUnreadablePakLocation_shouldRaiseResourceLoadError(
         self, project: Path
