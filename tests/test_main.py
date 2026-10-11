@@ -22,12 +22,12 @@ from dtd.game_config import GameConfig
 
 @pytest.fixture
 def synthesized_project(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    """A fake project dir whose ``resources/`` tree holds one synthesized resource.
+    """A fake game dir whose ``resources/`` tree holds one synthesized resource.
 
     Tests that let ``run()`` load resources for real must not scan the repo's
     actual ``resources/`` directory - the suite is hermetic (spec 00), so the
     result must not depend on whether real assets happen to be checked out.
-    A single UTF-8 text file is the cheapest valid dev-mode resource: no
+    A single UTF-8 text file is the cheapest valid resource: no
     mixer or font decoding is involved, and the default config's empty
     theme/font values use the built-in defaults without ever querying the
     loader (spec 04), so one text file is all ``run()`` needs to get to a
@@ -37,7 +37,7 @@ def synthesized_project(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path
     resource = project / "resources/data/hermetic.txt"
     resource.parent.mkdir(parents=True)
     resource.write_text("synthesized for a hermetic test", encoding="utf-8")
-    monkeypatch.setattr(resource_loader, "project_directory", lambda: project)
+    monkeypatch.setattr(resource_loader, "game_directory", lambda: project)
     return project
 
 
@@ -455,10 +455,10 @@ class TestStartupFailures:
         self, bootstrapped_persistence: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         # Spec 03: no resources anywhere -> NoResourcesFoundError and exit
-        # code 1. (The distribution-mode fallback runs here too but finds no
-        # *.pak files either.)
+        # code 1. (The empty resources/ dir is not an error by itself; the
+        # scan simply completes with zero resources found.)
         (tmp_path / "resources").mkdir()  # exists, but holds nothing
-        monkeypatch.setattr(resource_loader, "project_directory", lambda: tmp_path)
+        monkeypatch.setattr(resource_loader, "game_directory", lambda: tmp_path)
         window_opened: list[object] = []
         monkeypatch.setattr(
             app_main.MainWindow,
@@ -466,7 +466,7 @@ class TestStartupFailures:
             lambda self, config=None: window_opened.append(config),
         )
 
-        # WHEN run() is invoked with the REAL (dev-mode) loader:
+        # WHEN run() is invoked with the REAL resource loader:
         exit_code = app_main.run()
 
         # THEN startup aborts with exit code 1 and the window never opens:

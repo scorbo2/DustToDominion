@@ -257,9 +257,9 @@ def sfx_loader(
     monkeypatch: pytest.MonkeyPatch,
     mixer_ready: None,
 ) -> ResourceLoader:
-    """A dev-mode loader over a synthesized two-sfx tree."""
+    """A loader over a synthesized two-sfx tree."""
     monkeypatch.setattr(
-        resource_loader, "project_directory", lambda: bootstrapped_persistence
+        resource_loader, "game_directory", lambda: bootstrapped_persistence
     )
     root = bootstrapped_persistence / "resources"
     _write_tone(root / SFX_PING, duration_ms=20)
