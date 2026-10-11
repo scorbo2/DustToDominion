@@ -208,10 +208,12 @@ class TitleScreen(Screen):
     ) -> int:
         """Which chooser item to preselect (spec 08: Testing).
 
-        The "default" value - meaning nothing configured, or an invalid
-        configuration - maps to the sentinel display value. A configured
-        value that is absent from the list falls back to the sentinel
-        too, which the loader always places first.
+        The current values come straight from the Theme's accessors, so
+        the screen never probes resources itself. A "default" value -
+        meaning the Theme's font/theme chains fell through to system
+        fallbacks - maps to the sentinel display value. A resolved value
+        that is absent from the list falls back to the sentinel too,
+        which the loader always places first.
         """
         wanted = sentinel if current_value == default_value else current_value
         return items.index(wanted) if wanted in items else 0

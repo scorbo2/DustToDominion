@@ -248,13 +248,14 @@ class Theme:
         the current value."""
         return self._theme_resource_id or game_constants.DEFAULT_THEME_VALUE
 
-    # -- font resolution (spec 04: Theme) ---------------------------------
+    # -- font resolution (spec 04: Font determination) --------------------
     def _resolve_font(self, font_value: str) -> None:
         self._font_resource_id = None
         value = (font_value or "").strip()
         if value and value != game_constants.DEFAULT_FONT_VALUE:
-            # Probe at size 1: presence is what matters, and the loader
-            # caches Font objects per (id, size) (spec 03: Consumer API).
+            # Step 1: the configured font, if it resolves. Probe at size 1:
+            # presence is what matters, and the loader caches Font objects
+            # per (id, size) (spec 03: Consumer API).
             if self._loader.get_font_resource(value, 1) is None:
                 logger.warning(
                     "font resource {!r} does not resolve to a Font resource; "
@@ -264,16 +265,26 @@ class Theme:
             else:
                 self._font_resource_id = value
         if self._font_resource_id is None:
-            # Deterministic fallback (spec 04: Theme): the alphabetically
-            # first monospaced system font, else pygame's built-in font,
-            # which always works even headless.
+            # Step 2: the game's core default font (spec 04: Core UI
+            # Resources). Optional by design, so its absence is not worth
+            # a warning - the chain simply continues.
+            if (
+                self._loader.get_font_resource(game_constants.UI_DEFAULT_FONT, 1)
+                is not None
+            ):
+                self._font_resource_id = game_constants.UI_DEFAULT_FONT
+        if self._font_resource_id is None:
+            # Steps 3/4: deterministic fallback (spec 04: Font
+            # determination) - the alphabetically first monospaced system
+            # font, else pygame's built-in font, which always works even
+            # headless.
             names = sorted(pygame.font.get_fonts())
             self._fallback_name = next((name for name in names if "mono" in name), None)
 
     def get_font(self, size: int) -> pygame.font.Font:
-        """A valid ``Font`` at ``size`` points (spec 04: Theme) - either the
-        configured font resource (served from the loader's cache) or the
-        deterministic fallback. Never returns ``None``."""
+        """A valid ``Font`` at ``size`` points (spec 04: Font
+        determination) - whichever step of the chain resolved, served from
+        the loader's cache or the system fallback. Never returns ``None``."""
         size = max(1, int(size))
         if self._font_resource_id is not None:
             font = self._loader.get_font_resource(self._font_resource_id, size)
@@ -284,10 +295,11 @@ class Theme:
         return pygame.font.Font(None, size)
 
     def get_font_resource_id(self) -> str:
-        """The font resource id this Theme resolved, or the "default"
-        sentinel when no font (or an invalid one) was configured
-        (spec 04, as amended by spec 08). Lets chooser widgets preselect
-        the current value."""
+        """The font resource id this Theme resolved - the configured one,
+        or the core default font when nothing (or nothing valid) was
+        configured (spec 04: Font determination). The "default" sentinel
+        means the chain fell through to a system font. Lets chooser
+        widgets preselect the current value."""
         return self._font_resource_id or game_constants.DEFAULT_FONT_VALUE
 
 

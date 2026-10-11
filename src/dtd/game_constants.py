@@ -62,6 +62,19 @@ VOLUME_MAX_PERCENT = 100
 #: (spec 02) is 16:9, so one uniform scale factor covers both axes.
 DESIGN_W = 1920
 DESIGN_H = 1080
+#: Core UI resource ids (spec 04: Core UI Resources). This is the code
+#: half of the canonical table in spec 04; other spec docs reference
+#: these constants by name, never by raw resource id string. Any of
+#: them not resolving is never an error - all UI resources are optional.
+#: Step 2 of the spec 04 Font determination chain: the font used by all
+#: widgets unless a valid font is explicitly configured.
+UI_DEFAULT_FONT = "fonts/Audiowide-Regular.ttf"
+#: Sound effect for widgets that support mouse hover, played through
+#: ``AudioManager.play_ui_sfx`` (spec 04: Core UI Resources).
+UI_SFX_HOVER = "audio/ui/hover.ogg"
+#: Sound effect confirming a UI action, e.g. a button click (spec 04:
+#: Core UI Resources).
+UI_SFX_ACCEPT = "audio/ui/accept.ogg"
 #: Fraction of the Button inner-rect height reserved as margin around the
 #: icon - top and bottom always, plus the left edge when a label is
 #: present (spec 09: Icon scaling).
@@ -114,17 +127,18 @@ STARFIELD_BRIGHTNESS_STEP = 1
 #: same value when no theme (or an invalid one) is configured.
 DEFAULT_THEME_VALUE = "default"
 #: The config value that explicitly means "use the fallback font" (spec 04:
-#: Configuration). ``Theme.get_font_resource_id`` reports this same value
-#: when no font (or an invalid one) is configured.
+#: Configuration). ``Theme.get_font_resource_id`` reports this value only
+#: when the font chain fell through to a system font.
 DEFAULT_FONT_VALUE = "default"
 #: Display value the resource loader's ``get_theme_resource_ids`` always
 #: offers first, standing in for "no theme" in a chooser (spec 08). Chooser
 #: callbacks map this display value back to ``DEFAULT_THEME_VALUE``.
 DEFAULT_THEME_DISPLAY_VALUE = "(Default theme)"
 #: Display value the resource loader's ``get_font_resource_ids`` always
-#: offers first, standing in for "no font" in a chooser (spec 08). Chooser
-#: callbacks map this display value back to ``DEFAULT_FONT_VALUE``.
-DEFAULT_FONT_DISPLAY_VALUE = "(System default)"
+#: offers first, standing in for "no explicit font configured" in a
+#: chooser (spec 08). Chooser callbacks map this display value back
+#: to ``DEFAULT_FONT_VALUE``.
+DEFAULT_FONT_DISPLAY_VALUE = "(Default font)"
 
 # --- Resource packaging (spec 03) ----------------------------------------
 #: The directory name the game always scans first in the resource search

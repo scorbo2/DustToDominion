@@ -181,15 +181,15 @@ config at startup, same rationale as the `AudioManager` singleton - but `UIManag
 state is the widget list, which is inherently screen-scoped. Each Screen implementation creates
 its own `UIManager` and passes the application `Theme` to it (see spec 08: Code layout).*
 
-If no font was configured (or if the configured font does not resolve), the
-Theme class should automatically determine a safe fallback font to use.
-Enumerate a list of fonts via `pygame.font.get_fonts()`, order the list alphabetically,
-and filter it with `mono` to find a monospaced font. Pick the first one found.
-If the list is empty, fall back to `pygame.font.Font(None, size)`
-as a safe default that always works, even headless. This should be transparent
-to callers: the Theme class's `get_font(size)` function should always return
-a valid Font at the requested size, either from the resource loader's cache,
-or from the fallback described above.
+Font determination:
+1. If a specific font resource id is configured AND is a valid font resource, use it.
+2. Otherwise, if `UI_DEFAULT_FONT` resolves to a valid font resource id, use that.
+3. Otherwise, enumerate a list of fonts via `pygame.font.get_fonts()`, order the list alphabetically, and filter it with `mono` to find a monospaced font. Pick the first one found.
+4. If the enumerated list of fonts was empty, fall back to `pygame.font.Font(None, size)` as a safe default that always works, even headless.
+
+This font determination should be transparent to callers: the Theme class's `get_font(size)`
+function should always return a valid Font at the requested size, regardless of how
+that font was resolved.
 
 The Theme class also exposes the resource ids it resolved, so client code (for example a
 font/theme chooser) can preselect the current values:
@@ -199,7 +199,9 @@ def get_theme_resource_id(self) -> str:
     # return "default" if no configured theme OR if the configured theme is not valid
 
 def get_font_resource_id(self) -> str:
-    # return "default" if no configured font OR if the configured font is not valid
+    # return the configured font resource id if it is valid.
+    # else, return UI_DEFAULT_FONT if it is valid.
+    # else, return "default" to indicate that font determination has fallen back to a system font.
 ```
 
 The "default" sentinel value lives in `game_constants.py` and must not be hard-coded.
@@ -273,13 +275,34 @@ This sidesteps any stale-state bugs.
 Note that border widths should have a floor of 1 if set to a nonzero value. This is to
 avoid the case where a border width of 1 might resolve to `0.67px` in 1280x720 mode.
 
+## Core UI Resources
+
+The game ships with these "core" resources used throughout the UI.
+They are represented in `game_constants.py`:
+
+| Constant name | Constant value | Purpose |
+| --- | --- | --- |
+| `UI_DEFAULT_FONT` | `fonts/Audiowide-Regular.ttf` | Resource ID of the font used by all Widgets unless explicitly noted otherwise. |
+| `UI_SFX_HOVER` | `audio/ui/hover.ogg` | Used by widgets that support mouse hover events. |
+| `UI_SFX_ACCEPT` | `audio/ui/accept.ogg` | Used to confirm some UI action (example: a button click). |
+| `TITLE_SCREEN_BACKGROUND_IMAGE_IDS` | `( "graphics/screens/title_screen.png", "graphics/screens/title_screen.jpg", "graphics/screens/title_screen.jpeg" )` | List of background image resource IDs that can be displayed on the Title Screen (spec 08). |
+| `TITLE_SCREEN_MUSIC_IDS` | `( "audio/music/game_title.mp3", "audio/music/game_title.wav", "audio/music/game_title.ogg" )` | List of music track IDs that can be played on the Title Screen (spec 08). |
+
+This table is the canonical list of UI resource ids used by any UI spec doc in this project.
+Other spec docs must reference these constants by name, never by raw resource id string.
+New core UI resources are added here first via an "Amendments to previous spec docs" section,
+or by directly amending this doc to add to the list.
+
+It is never an error if these resource IDs do not resolve. All UI resources are optional.
+
 ## Testing
 
-- no configuration specified: default theme and deterministically-chosen font should be used:
-  - `Theme.get_font` returns a non-None `Font`; if the environment offers monospaced fonts (names containing
-     `mono`, per `pygame.font.get_fonts()`), the fallback is the alphabetically first one — assertable by
-      comparing against `get_fonts()` in the same test.
-- invalid configuration specified: should fall back to theme defaults and default font fallback
+- Font determination:
+  - if a valid font resource id is configured, it is used. `get_font_resource_id()` should return the configured id.
+  - if an invalid font resource id is configured, or no font is configured, `UI_DEFAULT_FONT` is used. `get_font_resource_id()` should return the value of `UI_DEFAULT_FONT`.
+  - if `UI_DEFAULT_FONT` fails to resolve to a valid font resource, the deterministically-chosen font is used: `Theme.get_font` returns a non-None `Font`; if the environment offers monospaced fonts (names containing `mono`, per `pygame.font.get_fonts()`), the fallback is the alphabetically first one — assertable by comparing against `get_fonts()` in the same test. `get_font_resource_id()` should return "default".
+  - Note: tests must synthesize the loader; do not depend on the repo's resources/ directory!
+- invalid configuration specified: should fall back to theme defaults and default font fallback path.
 - unrecognized properties in theme json are silently ignored
 - wrong data types in theme json are ignored with a warning
 - invalid color string used in a theme color field: ignored with a warning
@@ -294,15 +317,13 @@ avoid the case where a border width of 1 might resolve to `0.67px` in 1280x720 m
   - `get_theme_resource_id()` returns a valid resource id if one was configured.
   - `get_theme_resource_id()` returns "default" if no theme was configured.
   - `get_theme_resource_id()` returns "default" if an invalid theme was configured.
-  - `get_font_resource_id()` returns a valid resource id if one was configured.
-  - `get_font_resource_id()` returns "default" if no font was configured.
-  - `get_font_resource_id()` returns "default" if an invalid font was configured.
   - UIManager's `set_theme` can be used to change the current theme in a UIManager. All of its
     widgets receive the new Theme on subsequent calls to `draw()`.
 
 ## Acceptance criteria
 
 - Can the font be changed independently from the theme and vice versa?
+- If the game-supplied `UI_DEFAULT_FONT` exists, is it used if no font is explicitly configured?
 - Do disabled widgets ignore mouse events?
 - Do widget layouts stay visually consistent when changing between supported resolutions?
 
@@ -345,6 +366,10 @@ The spec can be implemented in stages:
 8. Amendment per spec 09: split the Button specification out of this
    document into a new specification: `09-ui-widget-button.md`. No functional
    changes. **Completed 2026-10-09**
+9. Amendment 2026-10-10: add the new `game_constants.py` entries as mentioned in the
+   new "Core UI Resources" section. Implement the Font Determination path (updating the
+   old logic around font determination). Update the tests as described in the Testing section.
+   If all tests pass, flip this document back to `active` status. **Completed 2026-10-10**
 
 Upon completion, if all tests pass, mark this document as "active". (Done 2026-10-01;
 full suite green at 280 tests.)
