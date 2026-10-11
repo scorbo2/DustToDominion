@@ -1,6 +1,6 @@
 ---
 description: Describes the game's title screen and the game's screen-handling in general.
-status: active
+status: proposed
 ---
 
 # Title Screen
@@ -50,13 +50,24 @@ a lower resolution.
 
 ### Title
 
-The game title "Dust to Dominion" should be displayed in 80pt font (in design space - this
-point value scales by the window scale factor), centered both horizontally and vertically
-in the upper half of the screen. Use the Title Screen's currently-configured font.
-Use the `foregroundSelected` color from the current theme.
+The game title "Dust to Dominion" should be displayed using a `Label` widget
+(spec 10) placed in the upper half of the screen, with the following
+characteristics (amended 2026-10-11 per spec 10):
 
-*Implementation note (2026-10-07): the rendered title text is cached per font size and
-invalidated whenever the screen-local Theme is rebuilt. Not observable behavior.*
+- centered text
+- selected (the selected state causes the `foregroundSelected` color from the
+  current theme to be used for the title text)
+- fixed font point size of 80 (in design space - this point value scales by
+  the window scale factor)
+- non-opaque
+- border width of 0
+
+Use the Title Screen's currently-configured font.
+
+*Note (2026-10-11, spec 10): the previous title-text caching implementation
+note (2026-10-07) has been removed. The initial Label widget does not cache
+rendered text; per-frame rendering of a fixed-size title is acceptable. A
+future amendment may add caching.*
 
 ### Buttons and options
 
@@ -181,10 +192,9 @@ New tests specifically for Title Screen behavior (these stay in this doc):
   - the search order is respected based on the constant's list order.
   - if none resolve, no music plays.
 - The game title is centered in the upper half of the screen.
-- Draw caching (added 2026-10-07, performance follow-up):
+- Draw caching (added 2026-10-07, performance follow-up; title-text caching
+  removed 2026-10-11 per spec 10 - the Label-based title renders per frame):
   - a background image is scaled exactly once per surface size, and re-scaled when the size changes.
-  - the title text is rendered exactly once per font size, and re-rendered when the screen-local
-    Theme is rebuilt (the new colors appear on the next frame).
 - ChoiceLists for font and theme appear horizontally and vertically centered in the lower half of the screen.
 - Selecting "(Default theme)" should map to "default" for theme.
 - Selecting "(Default font)" should map to "default" for font.
@@ -254,4 +264,9 @@ staged implementation plan is suggested (each stage should include tests):
    Specifically, the sentinel display value should only be initially selected when
    `get_font_resource_id()` returns "default". If all tests pass, flip this doc back to `active` status.
    **Completed 2026-10-10**
+10. Amendment 2026-10-11 per spec 10 (Label): display the game title via a Label widget
+    (centered, selected, fixed 80pt, non-opaque, border width 0) instead of direct rendering.
+    Remove the title-text caching implementation and its associated tests; the Label-based
+    title renders per frame. This doc was flipped to `proposed` while the amendment is
+    carried out (spec 10 dev plan stage 7); flip it back to `active` on completion.
 

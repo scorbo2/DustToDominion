@@ -1,6 +1,6 @@
 ---
 description: Describes a new UI widget for the game: Button
-status: active
+status: proposed
 ---
 
 # Button
@@ -76,6 +76,11 @@ the optimal rect for the button, given its desired label text.
 
 If a font point size is explicitly provided, text is rendered at that exact size, with clipping at the
 inner rect boundary for text too large to fit.
+
+*Amended 2026-10-11 per spec 10 (Label): the text auto-scale logic itself lives in a shared
+`dtd/widgets/text_layout.py` module, so that Button, Label, and future widgets all scale text
+identically. The existing Button auto-scale tests are repointed at this module and serve as its
+behavioral pin. This is a pure refactor - no functional change to Button rendering.*
 
 ### Button layout - icon only
 
@@ -184,3 +189,9 @@ don't resolve to valid audio resources, etc.)
    onto them, and test_title_screen gained an autouse singleton delegation - the
    title screen hosts Buttons, whose clicks now reach the AudioManager like every
    other widget's.)
+5. Amendment 2026-10-11 per spec 10 (Label): extract the text auto-scale logic out of
+   `dtd/widgets/button.py` into a new shared module `dtd/widgets/text_layout.py`, and
+   repoint the existing Button auto-scale tests at the new module as its behavioral pin.
+   No functional change - this is a pure refactor. This doc was flipped to `proposed`
+   while the amendment is carried out (spec 10 dev plan stage 2); flip it back to
+   `active` on completion.
