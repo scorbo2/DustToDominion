@@ -4,7 +4,10 @@ Mouse events are synthesized against a dummy display (hermetic, per spec
 09: Testing); pixel assertions read the display surface after
 ``ui.draw``. Audio assertions use the shared ``silent_audio_manager`` +
 ``record_play_ui_sfx`` fixtures (spec 09: Button audio).
-"""
+
+The text auto-scale algorithm itself is pinned in test_text_layout.py
+(spec 09, as amended by spec 10); the auto-scale tests here prove
+Button delegates to that shared module with the right box."""
 from __future__ import annotations
 
 import pygame
@@ -647,7 +650,7 @@ class TestButtonIconAndTextLayout:
         assert _ink_bbox(screen, (0, 0, 100, 100), _is_text_ink) is None
         assert _ink_bbox(screen, (100, 0, 300, 100), _is_text_ink) is not None
 
-    def test_auto_scale_should_height_limit_point_size_for_short_wide_button(
+    def test_auto_scale_should_delegate_to_shared_search_with_inner_rect_height(
         self, font_ready: None
     ) -> None:
         # GIVEN a 400x20 button (width is plentiful, height is not) with
@@ -660,9 +663,11 @@ class TestButtonIconAndTextLayout:
         # WHEN the UI draws:
         ui.draw(pygame.display.get_surface())
 
-        # THEN the size actually used fits the 20px inner height - a
-        # width-only search would have picked the 20 upper bound, whose
-        # height exceeds the box (spec 09: auto-scale must height-limit):
+        # THEN the size actually used fits the 20px inner height - the
+        # search itself is pinned in test_text_layout.py; this test
+        # proves Button hands the shared module the inner rect's height
+        # (spec 09: auto-scale must height-limit, as amended by
+        # spec 10):
         assert theme.get_font(20).get_height() > 20  # premise of the test
 
         def fits(size: int) -> bool:

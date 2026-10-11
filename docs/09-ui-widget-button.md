@@ -1,6 +1,6 @@
 ---
 description: Describes a new UI widget for the game: Button
-status: proposed
+status: active
 ---
 
 # Button
@@ -79,8 +79,10 @@ inner rect boundary for text too large to fit.
 
 *Amended 2026-10-11 per spec 10 (Label): the text auto-scale logic itself lives in a shared
 `dtd/widgets/text_layout.py` module, so that Button, Label, and future widgets all scale text
-identically. The existing Button auto-scale tests are repointed at this module and serve as its
-behavioral pin. This is a pure refactor - no functional change to Button rendering.*
+identically. The auto-scale algorithm's behavioral pin was repointed from the Button suite to
+`tests/test_text_layout.py`, which exercises the shared module directly; Button keeps
+integration-level tests proving it delegates to the module with the correct box. This is a
+pure refactor - no functional change to Button rendering.*
 
 ### Button layout - icon only
 
@@ -195,3 +197,8 @@ don't resolve to valid audio resources, etc.)
    No functional change - this is a pure refactor. This doc was flipped to `proposed`
    while the amendment is carried out (spec 10 dev plan stage 2); flip it back to
    `active` on completion.
+   **Completed 2026-10-11** (full suite green at 693 tests: 688 baseline plus 5 new
+   direct pins in tests/test_text_layout.py. The height-limit search semantics are now
+   pinned against the shared module; the former Button test of that name was retargeted
+   to `test_auto_scale_should_delegate_to_shared_search_with_inner_rect_height` - it
+   still exercises the draw path, but its intent is now delegation, not the algorithm.)

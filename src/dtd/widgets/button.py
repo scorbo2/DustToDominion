@@ -22,7 +22,8 @@ Rendering contract (spec 09, as amended 2026-10-08):
   never depending on the label; they center horizontally when no label
   is present and left-align (with the margin) when one is (spec 09:
   Icon scaling / Button layout).
-- Label text auto-scales to fit its available space by default, or
+- Label text auto-scales to fit its available space by default (via the
+  shared ``text_layout`` module, spec 09 as amended by spec 10), or
   renders at an exact design-space point size when
   ``set_font_point_size`` pins one; text never line-wraps and clips at
   the inner rect boundary when too large (spec 09: Text scaling).
@@ -53,6 +54,7 @@ from loguru import logger
 from dtd import game_constants
 from dtd.audio import get_audio_manager
 from dtd.ui import Scale, Theme, Widget, current_scale, state_colors
+from dtd.widgets.text_layout import largest_fitting_size
 
 #: An icon/text layout slot: the scaled surface and its blit position
 #: relative to the inner surface.
@@ -269,7 +271,9 @@ class Button(Widget):
         if available_width < 1:
             return
         if self._font_point_size is None:
-            size = self._largest_fitting_size(
+            # The search itself is shared with Label and future widgets
+            # (spec 09: Text scaling, as amended by spec 10).
+            size = largest_fitting_size(
                 theme, text, available_width, inner.get_height()
             )
         else:
@@ -280,27 +284,3 @@ class Button(Widget):
         x = left + (available_width - surface.get_width()) // 2
         y = (inner.get_height() - surface.get_height()) // 2
         inner.blit(surface, (x, y))
-
-    def _largest_fitting_size(
-        self, theme: Theme, text: str, available_width: int, available_height: int
-    ) -> int:
-        """The largest point size whose rendered label fits the box (spec 09).
-
-        Content width grows monotonically with font size, so a binary
-        search over [1, min(available dimensions)] is sound. The size is
-        height-limited as well: a short, wide button must not produce a
-        vertically oversized label. When even size 1 does not fit, 1 is
-        returned and the caller clips at the inner rect boundary.
-        """
-        upper = max(1, min(available_width, available_height))
-        best: int | None = None
-        low, high = 1, upper
-        while low <= high:
-            mid = (low + high) // 2
-            font = theme.get_font(mid)
-            if font.get_height() <= available_height and font.size(text)[0] <= available_width:
-                best = mid
-                low = mid + 1
-            else:
-                high = mid - 1
-        return best if best is not None else 1
