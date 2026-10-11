@@ -9,7 +9,11 @@ text), and the audio contract (spec 07: ChoiceList audio). Mouse events
 are synthesized and pixel assertions read the display surface after
 ``ui.draw`` at the design resolution (scale 1, following the Button
 test patterns).
-"""
+
+The margin-aware text auto-scale search itself is pinned in
+test_text_layout.py (spec 07, as amended by spec 10); the glyph-less
+pager and clipped-text cases here prove ChoiceList delegates to that
+shared module correctly."""
 from __future__ import annotations
 
 from collections.abc import Callable

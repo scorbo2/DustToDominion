@@ -35,6 +35,23 @@ be re-used not only by this widget, but by future widgets as well. The existing
 Button tests that check Button's auto-scale behavior should be repointed to this
 new module, to serve as a behavioral pin.
 
+### Extract ChoiceList's margin-aware auto-scale into the shared module as well
+
+Discovered during stage 2 of the Dev plan: the existing ChoiceList widget (spec 07)
+carries its own private margin-aware auto-scale search. This doc amends the
+`07-ui-widget-choice-list.md` spec to mention that this search should also move into
+the shared `dtd/widgets/text_layout.py` module. The shared binary search takes an
+optional fit-predicate parameter plus an optional fallback value (returned when even
+point size 1 does not fit - ChoiceList's item text clips at size 1, its pager glyphs
+draw nothing). A fit predicate is used rather than a plain margin parameter because the
+widgets genuinely disagree on what "fits" means: Button measures the font's line height,
+while ChoiceList and this widget measure the rendered glyph extent plus a margin - and
+for text with descenders those differ. The "half the height of the `0` character"
+margin rule that both spec 07 and this widget require is implemented once, as the
+module's `zero_glyph_margin` helper, with a ready-made margin-aware predicate built on
+it. ChoiceList's existing pixel-level tests remain as integration pins; the
+margin-aware search semantics are pinned directly against the shared module.
+
 ## Additional dependencies
 
 None! This widget relies entirely on the UI framework introduced by `04-ui-widgets.md`, which itself
@@ -191,24 +208,45 @@ calculations should take this into account.
 1. Amendments to the 08 and 09 spec docs come first! Flip both specs back
    to `proposed` state to reflect that the docs and the code are temporarily out of sync.
    Append a new dev stage to each doc's Dev plan to briefly explain the change.
+   **Completed 2026-10-11** (both docs amended and flipped to `proposed`; full suite
+   green at 688 tests - docs-only change)
 2. Implement the spec 09 changes to extract the text auto-scale logic, and adjust
    all existing Button tests that reference it. Label depends directly on this
    logic, so this must be done before any Label code is written.
    Mark the new stage in the 09 Dev plan section as complete with today's date.
    Flip the 09 spec back to `active` status on successful completion of this stage.
-3. Implement Label with stubbed-out mutators. Defaults only at this stage (auto-scale
+   **Completed 2026-10-11** (`dtd/widgets/text_layout.py` created; Button delegates;
+   algorithm pinned directly in tests/test_text_layout.py; 09 flipped back to `active`.
+   Full suite green at 693 tests. This stage surfaced the ChoiceList duplicate, which
+   became the new stage 3 below.)
+3. Amendment per spec 07 (discovered during stage 2): flip the 07 spec to `proposed`
+   and add the amendment note and a dev stage to it. Extend the shared `text_layout`
+   module with an optional fit-predicate parameter and an optional fallback value, plus
+   named predicates (`fits_line_height` for Button; a margin-aware predicate built on a
+   `zero_glyph_margin` helper for the "half the height of `0`" rule shared by spec 07
+   and this widget). Move ChoiceList's margin-aware search into the shared module and
+   have ChoiceList delegate. Pin the margin-aware search semantics directly in
+   tests/test_text_layout.py; ChoiceList's pixel tests remain as integration pins.
+   Mark the new stage in the 07 Dev plan complete with today's date and flip the 07
+   spec back to `active` on successful completion.
+   **Completed 2026-10-11** (`text_layout` gained `fits`/`fallback` parameters,
+   `zero_glyph_margin`, `fits_line_height`, and `margin_fit_predicate`; ChoiceList
+   delegates for both item text and pager glyphs; 5 new direct pins in
+   tests/test_text_layout.py; all ChoiceList integration tests passed unchanged.
+   Full suite green at 698 tests. 07 flipped back to `active`.)
+4. Implement Label with stubbed-out mutators. Defaults only at this stage (auto-scale
    left-align, opaque). Implement disable/re-enable. Make use of the new shared
-   auto-scale module created by stage 2.
-4. Implement `set_font_point_size()` to allow disabling auto-scale in favor of fixed
+   auto-scale module created by stages 2 and 3.
+5. Implement `set_font_point_size()` to allow disabling auto-scale in favor of fixed
    font point size.
-5. Implement `set_text_centered()` to allow centering label text.
-6. Implement `set_opaque()` to allow toggling rect-filling, and `set_border_width()`
+6. Implement `set_text_centered()` to allow centering label text.
+7. Implement `set_opaque()` to allow toggling rect-filling, and `set_border_width()`
    to enable/disable border display.
-7. Implement the spec 08 changes to modify TitleScreen to use the new Label widget
+8. Implement the spec 08 changes to modify TitleScreen to use the new Label widget
    and remove the old caching code. Mark the new stage in the 08 Dev plan section
    as complete with today's date. Flip the 08 spec back to `active` status on
    successful completion of this stage.
-8. Final compliance check. Do all tests pass? Are all acceptance criteria met?
+9. Final compliance check. Do all tests pass? Are all acceptance criteria met?
    Reword the doc to replace "proposes" prose with "describes" as needed.
    Flip this doc to `active` status if all is well.
 
