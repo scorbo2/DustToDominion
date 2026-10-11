@@ -237,6 +237,14 @@ calculations should take this into account.
 4. Implement Label with stubbed-out mutators. Defaults only at this stage (auto-scale
    left-align, opaque). Implement disable/re-enable. Make use of the new shared
    auto-scale module created by stages 2 and 3.
+   **Completed 2026-10-11** (`dtd/widgets/label.py`: constructor with text/rect/
+   border_width, state colors via the shared `state_colors` precedence (hover never
+   passed), opaque fill + border honoring corner radius, margin-aware auto-scale via
+   `text_layout` with left-align at the margin and vertical centering; the four
+   mutators are explicit no-op stubs until their stages. 26 tests in
+   tests/test_label.py covering the state-color matrix, blank/empty/None text,
+   margin application, clipping at the inner rect, rect-mutation relayout, corner
+   radius, ignored mouse events, and the stub no-ops. Full suite green at 724 tests.)
 5. Implement `set_font_point_size()` to allow disabling auto-scale in favor of fixed
    font point size.
 6. Implement `set_text_centered()` to allow centering label text.

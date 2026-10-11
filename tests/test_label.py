@@ -1,0 +1,602 @@
+"""Unit tests for the ``Label`` widget (spec 10).
+
+Stage 4 coverage (spec 10 Dev plan): defaults only - auto-scale with
+the zero-glyph margin, left alignment, vertical centering, opaque rect
+fill, border rendering, and the full state-color matrix (normal /
+selected / disabled; hover ignored in every state). The mutator stubs
+are pinned as no-ops until their stages (5-7) land and replace those
+tests with real behavior tests.
+
+The margin-aware auto-scale search itself is pinned in
+test_text_layout.py (specs 07/10); the tests here prove Label
+delegates to it with the right box and applies the margin to text
+placement. Pixel assertions read the display surface at the design
+resolution (scale 1) after ``ui.draw``, following the Button and
+ChoiceList test patterns; "ink" assertions check for deviation from
+the pure background because anti-aliased glyph coverage is
+platform-dependent (issue #34/#37).
+"""
+from __future__ import annotations
+
+import pygame
+import pytest
+
+from dtd.resource_loader import ResourceLoader
+from dtd.ui import Theme, UIManager
+from dtd.widgets.label import Label
+
+# Distinguishable custom theme: red/green in the normal state, blue/
+# yellow when selected, dark grays when disabled, magenta/cyan on
+# hover (which a Label must never show).
+TEST_THEME_JSON = {
+    "foregroundNormal": "ff0000",
+    "backgroundNormal": "00ff00",
+    "foregroundSelected": "0000ff",
+    "backgroundSelected": "ffff00",
+    "foregroundDisabled": "111111",
+    "backgroundDisabled": "222222",
+    "foregroundHover": "ff00ff",
+    "backgroundHover": "00ffff",
+}
+
+NORMAL_FG = (255, 0, 0, 255)
+NORMAL_BG = (0, 255, 0, 255)
+SELECTED_FG = (0, 0, 255, 255)
+SELECTED_BG = (255, 255, 0, 255)
+DISABLED_FG = (17, 17, 17, 255)
+DISABLED_BG = (34, 34, 34, 255)
+HOVER_BG = (0, 255, 255, 255)
+BLACK = (0, 0, 0, 255)
+
+
+def _theme(json_data: dict | None = None) -> Theme:
+    """A Theme over an unloaded loader with its getters stubbed."""
+    loader = ResourceLoader()
+    loader.get_json_resource = lambda resource_id: json_data
+    loader.get_font_resource = lambda resource_id, size: None
+    return Theme("themes/test.json" if json_data is not None else "", "", loader)
+
+
+def _label_ui(
+    rect: pygame.Rect,
+    theme: Theme,
+    text: str | None = None,
+    border_width: int = 0,
+) -> tuple[Label, UIManager]:
+    """A single Label registered with a fresh UIManager."""
+    label = Label(rect, text=text, border_width=border_width)
+    ui = UIManager(theme)
+    ui.widgets.append(label)
+    return label, ui
+
+
+def _draw(ui: UIManager) -> pygame.Surface:
+    """Draw the UI onto the dummy display at the design resolution."""
+    surface = pygame.display.get_surface()
+    if surface is None:
+        surface = pygame.display.set_mode((1920, 1080))
+    ui.draw(surface)
+    return surface
+
+
+def _motion(pos: tuple[int, int]) -> pygame.event.Event:
+    return pygame.event.Event(pygame.MOUSEMOTION, pos=pos, rel=(0, 0))
+
+
+def _down(pos: tuple[int, int], button: int = 1) -> pygame.event.Event:
+    return pygame.event.Event(pygame.MOUSEBUTTONDOWN, button=button, pos=pos)
+
+
+def _up(pos: tuple[int, int], button: int = 1) -> pygame.event.Event:
+    return pygame.event.Event(pygame.MOUSEBUTTONUP, button=button, pos=pos)
+
+
+def _any_pixel_differs(surf: pygame.Surface, area: pygame.Rect, background) -> bool:
+    """Whether any pixel inside ``area`` differs from ``background``.
+
+    The safe way to assert "ink was rendered here" at small sizes
+    (issue #34: exact-foreground matching is platform-dependent).
+    """
+    return any(
+        surf.get_at((x, y)) != background
+        for x in range(area.x, area.right)
+        for y in range(area.y, area.bottom)
+    )
+
+
+def _is_red_ink(pixel: tuple[int, int, int, int]) -> bool:
+    """Red-dominant thresholds: the red text over the green fill."""
+    return pixel[0] > 150 and pixel[1] < 100 and pixel[2] < 100
+
+
+def _ink_bbox(
+    screen: pygame.Surface,
+    region: tuple[int, int, int, int],
+    predicate,
+) -> tuple[int, int, int, int] | None:
+    """Tight bounding box of pixels matching ``predicate`` inside ``region``.
+
+    Returns ``(x, y, width, height)`` or ``None`` when nothing matches.
+    """
+    x0, y0, w, h = region
+    xs: list[int] = []
+    ys: list[int] = []
+    for x in range(x0, x0 + w):
+        for y in range(y0, y0 + h):
+            if predicate(screen.get_at((x, y))):
+                xs.append(x)
+                ys.append(y)
+    if not xs:
+        return None
+    return (min(xs), min(ys), max(xs) - min(xs) + 1, max(ys) - min(ys) + 1)
+
+
+def _left_bearing(font: pygame.font.Font, text: str) -> int:
+    """Columns of empty space before the first visible glyph pixel.
+
+    ``font.render`` surfaces include the glyph's left side bearing, so
+    "ink hugs the layout edge" must be measured against the bearing,
+    not the surface edge.
+    """
+    surface = font.render(text, True, (255, 255, 255))
+    surface.lock()
+    try:
+        for x in range(surface.get_width()):
+            for y in range(surface.get_height()):
+                if surface.get_at((x, y))[3] > 0:
+                    return x
+    finally:
+        surface.unlock()
+    return 0
+
+
+def _font_size_spy(theme: Theme) -> list[int]:
+    """Record every point size a draw requests from ``theme.get_font``."""
+    requested: list[int] = []
+    original = theme.get_font
+
+    def spy(size: int) -> pygame.font.Font:
+        requested.append(size)
+        return original(size)
+
+    theme.get_font = spy  # instance attribute shadows the bound method
+    return requested
+
+
+def _margin_rule(theme: Theme, text: str, size: int, width: int, height: int) -> bool:
+    """Label's fit rule, re-implemented for test premises (spec 10:
+    Margin): rendered extent plus twice the `0`-height margin."""
+    font = theme.get_font(size)
+    margin = font.size("0")[1] // 2
+    text_w, text_h = font.size(text)
+    return text_w + 2 * margin <= width and text_h + 2 * margin <= height
+
+
+class TestLabelStateColors:
+    #: A text-free label rect so fill samples are pure background in
+    #: every state; center is far from any border.
+    RECT = pygame.Rect(0, 0, 400, 100)
+    CENTER = (200, 50)
+
+    def test_default_should_fill_rect_with_background_normal(self, font_ready: None) -> None:
+        # GIVEN a freshly created Label (no mutators invoked):
+        label, ui = _label_ui(self.RECT, _theme(TEST_THEME_JSON))
+
+        # WHEN the UI draws,
+        screen = _draw(ui)
+
+        # THEN the label is neither selected nor disabled, and the fill
+        # uses backgroundNormal (spec 10: default settings):
+        assert label.selected is False
+        assert label.enabled is True
+        assert screen.get_at(self.CENTER) == NORMAL_BG
+        # ...and outside the rect the (black) screen shows through:
+        assert screen.get_at((401, 50)) == BLACK
+
+    def test_selected_should_fill_with_background_selected(self, font_ready: None) -> None:
+        # GIVEN a programmatically selected Label:
+        _, ui = _label_ui(self.RECT, _theme(TEST_THEME_JSON))
+        ui.widgets[0].selected = True
+
+        # WHEN the UI draws,
+        screen = _draw(ui)
+
+        # THEN the fill uses backgroundSelected (spec 10: Labels can be
+        # selected):
+        assert screen.get_at(self.CENTER) == SELECTED_BG
+
+    def test_disabled_should_fill_with_background_disabled(self, font_ready: None) -> None:
+        # GIVEN a disabled Label:
+        label, ui = _label_ui(self.RECT, _theme(TEST_THEME_JSON))
+        label.enabled = False
+
+        # WHEN the UI draws,
+        screen = _draw(ui)
+
+        # THEN the fill uses backgroundDisabled (spec 10: Labels CAN be
+        # disabled):
+        assert screen.get_at(self.CENTER) == DISABLED_BG
+
+    def test_selecting_a_disabled_label_should_render_as_disabled(
+        self, font_ready: None
+    ) -> None:
+        # GIVEN a disabled Label that is then selected:
+        label, ui = _label_ui(self.RECT, _theme(TEST_THEME_JSON))
+        label.enabled = False
+        label.selected = True
+
+        # WHEN the UI draws,
+        screen = _draw(ui)
+
+        # THEN disabled outranks selected (spec 10: a Label that is both
+        # selected and disabled renders as disabled):
+        assert screen.get_at(self.CENTER) == DISABLED_BG
+
+    def test_disabling_a_selected_label_should_switch_to_disabled_colors(
+        self, font_ready: None
+    ) -> None:
+        # GIVEN a selected Label that is then disabled:
+        label, ui = _label_ui(self.RECT, _theme(TEST_THEME_JSON))
+        label.selected = True
+        label.enabled = False
+
+        # WHEN the UI draws,
+        screen = _draw(ui)
+
+        # THEN the fill switched to backgroundDisabled (spec 10:
+        # Testing):
+        assert screen.get_at(self.CENTER) == DISABLED_BG
+
+    def test_re_enabling_a_selected_label_should_switch_to_selected_colors(
+        self, font_ready: None
+    ) -> None:
+        # GIVEN a selected Label that was disabled and then re-enabled
+        # (disabling never clears the selection, spec 04):
+        label, ui = _label_ui(self.RECT, _theme(TEST_THEME_JSON))
+        label.selected = True
+        label.enabled = False
+        label.enabled = True
+
+        # WHEN the UI draws,
+        screen = _draw(ui)
+
+        # THEN the fill uses backgroundSelected and the selection
+        # survived (spec 10: Testing):
+        assert label.selected is True
+        assert screen.get_at(self.CENTER) == SELECTED_BG
+
+    def test_re_enabling_a_non_selected_label_should_switch_to_normal_colors(
+        self, font_ready: None
+    ) -> None:
+        # GIVEN a plain Label that was disabled and then re-enabled:
+        label, ui = _label_ui(self.RECT, _theme(TEST_THEME_JSON))
+        label.enabled = False
+        label.enabled = True
+
+        # WHEN the UI draws,
+        screen = _draw(ui)
+
+        # THEN the fill uses backgroundNormal again (spec 10: Testing):
+        assert screen.get_at(self.CENTER) == NORMAL_BG
+
+    @pytest.mark.parametrize(
+        ("state", "expected_bg"),
+        [
+            ("normal", NORMAL_BG),
+            ("selected", SELECTED_BG),
+            ("disabled", DISABLED_BG),
+        ],
+    )
+    def test_hover_should_not_change_colors_in_any_state(
+        self, font_ready: None, state: str, expected_bg: tuple
+    ) -> None:
+        # GIVEN a Label in the given state with the mouse hovering over
+        # it (spec 10: Labels do not respond to mouse hover events):
+        label, ui = _label_ui(self.RECT, _theme(TEST_THEME_JSON))
+        if state == "selected":
+            label.selected = True
+        elif state == "disabled":
+            label.enabled = False
+        ui.update([_motion(self.CENTER)])
+
+        # WHEN the UI draws,
+        screen = _draw(ui)
+
+        # THEN the state's own colors are used and no *Hover color
+        # appears anywhere (the hovered flag may be set by the
+        # framework, but the Label ignores it):
+        assert screen.get_at(self.CENTER) == expected_bg
+        assert screen.get_at((5, 5)) != HOVER_BG
+
+
+class TestLabelBorder:
+    RECT = pygame.Rect(0, 0, 400, 100)
+    BORDER_WIDTH = 10
+
+    def _bordered_ui(self, theme: Theme) -> tuple[Label, UIManager]:
+        return _label_ui(
+            self.RECT, theme, border_width=self.BORDER_WIDTH
+        )
+
+    def test_border_should_use_foreground_normal(self, font_ready: None) -> None:
+        # GIVEN a Label with a 10 design-pixel border (scale 1):
+        _, ui = self._bordered_ui(_theme(TEST_THEME_JSON))
+
+        # WHEN the UI draws,
+        screen = _draw(ui)
+
+        # THEN the border band is foregroundNormal and the fill is
+        # backgroundNormal (spec 10: Label options):
+        assert screen.get_at((5, 50)) == NORMAL_FG
+        assert screen.get_at((200, 50)) == NORMAL_BG
+
+    def test_border_should_use_foreground_selected_when_selected(
+        self, font_ready: None
+    ) -> None:
+        # GIVEN a selected Label with a border:
+        label, ui = self._bordered_ui(_theme(TEST_THEME_JSON))
+        label.selected = True
+
+        # WHEN the UI draws,
+        screen = _draw(ui)
+
+        # THEN the border uses foregroundSelected (spec 10: Testing):
+        assert screen.get_at((5, 50)) == SELECTED_FG
+        assert screen.get_at((200, 50)) == SELECTED_BG
+
+    def test_border_should_use_foreground_disabled_when_disabled(
+        self, font_ready: None
+    ) -> None:
+        # GIVEN a disabled Label with a border:
+        label, ui = self._bordered_ui(_theme(TEST_THEME_JSON))
+        label.enabled = False
+
+        # WHEN the UI draws,
+        screen = _draw(ui)
+
+        # THEN the border uses foregroundDisabled (spec 10: Testing):
+        assert screen.get_at((5, 50)) == DISABLED_FG
+        assert screen.get_at((200, 50)) == DISABLED_BG
+
+    def test_border_should_use_foreground_disabled_when_selected_and_disabled(
+        self, font_ready: None
+    ) -> None:
+        # GIVEN a Label that is both selected and disabled, with a
+        # border:
+        label, ui = self._bordered_ui(_theme(TEST_THEME_JSON))
+        label.selected = True
+        label.enabled = False
+
+        # WHEN the UI draws,
+        screen = _draw(ui)
+
+        # THEN the border uses foregroundDisabled - disabled wins in
+        # every state color (spec 10: precedence note, spec 04):
+        assert screen.get_at((5, 50)) == DISABLED_FG
+        assert screen.get_at((200, 50)) == DISABLED_BG
+
+    def test_zero_border_should_render_no_border(self, font_ready: None) -> None:
+        # GIVEN a border-less Label (the default):
+        _, ui = _label_ui(self.RECT, _theme(TEST_THEME_JSON))
+
+        # WHEN the UI draws,
+        screen = _draw(ui)
+
+        # THEN the edge pixels are fill, not border:
+        assert screen.get_at((0, 50)) == NORMAL_BG
+
+
+class TestLabelTextRendering:
+    @pytest.mark.parametrize("text", ["", "   ", None])
+    def test_with_blank_empty_or_none_text_should_draw_no_text(
+        self, font_ready: None, text: str | None
+    ) -> None:
+        # GIVEN a Label whose text is blank, empty, or None (spec 10:
+        # Label options):
+        _, ui = _label_ui(pygame.Rect(0, 0, 400, 100), _theme(TEST_THEME_JSON), text=text)
+
+        # WHEN the UI draws,
+        screen = _draw(ui)
+
+        # THEN the fill is present but not a single pixel deviates from
+        # it - no text was drawn:
+        assert screen.get_at((200, 50)) == NORMAL_BG
+        assert not _any_pixel_differs(screen, pygame.Rect(0, 0, 400, 100), NORMAL_BG)
+
+    def test_default_should_auto_scale_left_align_and_vertically_center(
+        self, font_ready: None
+    ) -> None:
+        # GIVEN a 400x100 Label with short text and default settings:
+        theme = _theme(TEST_THEME_JSON)
+        requested_sizes = _font_size_spy(theme)
+        _, ui = _label_ui(pygame.Rect(0, 0, 400, 100), theme, text="OK")
+
+        # WHEN the UI draws,
+        screen = _draw(ui)
+
+        # THEN the chosen size is the largest one the margin-aware rule
+        # allows (the search itself is pinned in test_text_layout.py;
+        # this proves Label delegates with the inner rect):
+        chosen = max(
+            size for size in set(requested_sizes) if _margin_rule(theme, "OK", size, 400, 100)
+        )
+        assert chosen > 1  # auto-scale actually scaled up
+
+        # THEN the ink sits inside the surface blitted at the margin
+        # (left-aligned, not centered) and vertically centered
+        # (spec 10: Label layout):
+        font = theme.get_font(chosen)
+        text_w, text_h = font.size("OK")
+        margin = font.size("0")[1] // 2
+        expected_x = margin
+        expected_y = (100 - text_h) // 2
+        bbox = _ink_bbox(screen, (0, 0, 400, 100), _is_red_ink)
+        assert bbox is not None
+        bx, by, bw, bh = bbox
+        assert bx >= expected_x and bx + bw <= expected_x + text_w
+        assert by >= expected_y and by + bh <= expected_y + text_h
+        # Left-alignment pin: a centered label would start far right of
+        # the margin; the ink must hug the layout edge instead (within
+        # the glyph's own left side bearing plus anti-alias slack).
+        assert bx <= expected_x + _left_bearing(font, "OK") + 2
+
+    def test_auto_scale_should_apply_the_zero_glyph_margin(self, font_ready: None) -> None:
+        # GIVEN a 400x100 Label with short text (spec 10: Margin):
+        theme = _theme(TEST_THEME_JSON)
+        requested_sizes = _font_size_spy(theme)
+        _, ui = _label_ui(pygame.Rect(0, 0, 400, 100), theme, text="OK")
+
+        # WHEN the UI draws,
+        screen = _draw(ui)
+
+        # THEN the chosen size fits only *with* its margins - the
+        # margin is part of Label's fit rule, not just the search's:
+        chosen = max(
+            size for size in set(requested_sizes) if _margin_rule(theme, "OK", size, 400, 100)
+        )
+        font = theme.get_font(chosen)
+        margin = font.size("0")[1] // 2
+        assert margin >= 1  # premise: the margin rule is active here
+        text_w, text_h = font.size("OK")
+        assert text_w + 2 * margin <= 400
+        assert text_h + 2 * margin <= 100
+
+        # THEN no ink reaches the right-hand margin band either:
+        assert not _any_pixel_differs(
+            screen, pygame.Rect(400 - margin, 0, margin, 100), NORMAL_BG
+        )
+
+    def test_text_too_large_to_fit_should_clip_at_inner_rect_boundary(
+        self, font_ready: None
+    ) -> None:
+        # GIVEN a 20x10 Label whose text cannot fit even at point size
+        # 1 (the margin rule fails at every size):
+        theme = _theme(TEST_THEME_JSON)
+        text = "OK " * 20
+        assert theme.get_font(1).size(text)[0] + 2 > 20  # premise: size 1 fails
+
+        _, ui = _label_ui(pygame.Rect(0, 0, 20, 10), theme, text=text)
+
+        # WHEN the UI draws (must not raise),
+        screen = _draw(ui)
+
+        # THEN text ink exists inside the rect - clipped at size 1, not
+        # skipped (spec 10: Label layout):
+        assert _any_pixel_differs(screen, pygame.Rect(0, 0, 20, 10), NORMAL_BG)
+        # ...and nothing at all renders outside the rect:
+        outside = [
+            screen.get_at((x, y))
+            for x in range(20, 25)
+            for y in range(0, 15)
+        ] + [screen.get_at((x, y)) for x in range(0, 25) for y in range(10, 15)]
+        assert all(pixel == BLACK for pixel in outside)
+
+    def test_mutating_rect_after_construction_should_relayout_text(
+        self, font_ready: None
+    ) -> None:
+        # GIVEN a 400x100 Label that has drawn once at the design
+        # resolution:
+        theme = _theme(TEST_THEME_JSON)
+        requested_sizes = _font_size_spy(theme)
+        label, ui = _label_ui(pygame.Rect(0, 0, 400, 100), theme, text="OK")
+        _draw(ui)
+        first_draw_size = len(requested_sizes)
+        wide_choice = max(
+            size for size in set(requested_sizes) if _margin_rule(theme, "OK", size, 400, 100)
+        )
+
+        # WHEN the rect is narrowed to 60px and the UI redraws,
+        label.rect = pygame.Rect(0, 0, 60, 100)
+        _draw(ui)
+
+        # THEN the second draw picked a smaller size that fits the new
+        # inner rect (with margin) - the layout is recomputed from the
+        # current rect every draw (spec 10: Testing):
+        second_sizes = requested_sizes[first_draw_size:]
+        narrow_choice = max(
+            size for size in set(second_sizes) if _margin_rule(theme, "OK", size, 60, 100)
+        )
+        assert narrow_choice < wide_choice
+
+
+class TestLabelInnerRect:
+    def test_unreasonably_large_border_should_prevent_text(self, font_ready: None) -> None:
+        # GIVEN a 100x100 Label whose 60px border leaves a negative
+        # inner rect, with text:
+        theme = _theme(TEST_THEME_JSON)
+        requested_sizes = _font_size_spy(theme)
+        _, ui = _label_ui(pygame.Rect(0, 0, 100, 100), theme, text="OK", border_width=60)
+
+        # WHEN the UI draws,
+        _draw(ui)
+
+        # THEN no font is ever requested - the text is not drawn at all
+        # (spec 10: zero or negative inner rect):
+        assert requested_sizes == []
+
+
+class TestLabelCornerRadius:
+    def test_nonzero_corner_radius_should_round_fill_and_border(
+        self, font_ready: None
+    ) -> None:
+        # GIVEN a 100x100 Label with a 5px border and a theme whose
+        # corner radius rounds the rect (spec 10: respect the theme's
+        # corner radius):
+        theme_json = dict(TEST_THEME_JSON, cornerRadius=20)
+        _, ui = _label_ui(pygame.Rect(0, 0, 100, 100), _theme(theme_json), border_width=5)
+
+        # WHEN the UI draws,
+        screen = _draw(ui)
+
+        # THEN the extreme corner is outside the rounded shape (black
+        # shows through), while the border band and the fill are both
+        # intact along the edges:
+        assert screen.get_at((0, 0)) == BLACK
+        assert screen.get_at((50, 1)) == NORMAL_FG  # border, top edge center
+        assert screen.get_at((50, 50)) == NORMAL_BG  # fill, center
+
+
+class TestLabelMouse:
+    def test_mouse_clicks_should_be_ignored(self, font_ready: None) -> None:
+        # GIVEN a Label with the mouse clicking squarely inside it:
+        label, ui = _label_ui(pygame.Rect(0, 0, 400, 100), _theme(TEST_THEME_JSON), text="OK")
+
+        # WHEN a full press-and-release click lands inside the rect,
+        ui.update([_down((200, 50))])
+        ui.update([_up((200, 50))])
+
+        # THEN nothing about the Label changed - no state, no
+        # appearance (spec 10: Labels do not respond to mouse clicks):
+        assert label.enabled is True
+        assert label.selected is False
+        screen = _draw(ui)
+        assert screen.get_at((200, 50)) == NORMAL_BG
+
+
+class TestLabelMutatorStubs:
+    def test_stubbed_mutators_should_not_change_rendering_yet(
+        self, font_ready: None
+    ) -> None:
+        # GIVEN a Label with text and a border, drawn once to
+        # establish the baseline:
+        _, ui = _label_ui(
+            pygame.Rect(0, 0, 400, 100), _theme(TEST_THEME_JSON), text="OK", border_width=10
+        )
+        baseline = _draw(ui).copy()
+
+        # WHEN every stage-4 stub mutator is invoked with valid values
+        # (spec 10 Dev plan stages 5-7 implement them for real),
+        label = ui.widgets[0]
+        label.set_font_point_size(20)
+        label.set_text_centered(True)
+        label.set_opaque(False)
+        label.set_border_width(30)
+
+        # WHEN the UI redraws,
+        screen = _draw(ui)
+
+        # THEN the rendering is byte-for-byte unchanged - the stubs are
+        # honest no-ops until their stages land:
+        for x in range(0, 400, 7):
+            for y in range(0, 100, 5):
+                assert screen.get_at((x, y)) == baseline.get_at((x, y))
