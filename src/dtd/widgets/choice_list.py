@@ -40,6 +40,16 @@ Rendering contract (spec 07: Visual appearance):
   though not disabled - widget: a client geometry problem.
 - A click is a left-button press *and* release inside the same pager
   square (the same rule as Button, spec 09: Button events).
+
+Audio contract (spec 07: ChoiceList audio):
+
+- A pager click that counts (enabled, more than one option) plays
+  ``UI_SFX_ACCEPT``; a one-item list pages nothing and sounds nothing.
+- ``on_hover_enter()`` (the spec 04 hook, as amended by spec 07) plays
+  ``UI_SFX_HOVER``; the UIManager already keeps disabled and selected
+  widgets from ever reaching the hook.
+- Resource ids are handed to the global AudioManager as-is; the widget
+  never resolves them or tracks whether audio actually plays (spec 05).
 """
 from __future__ import annotations
 
@@ -47,6 +57,8 @@ from collections.abc import Callable
 
 import pygame
 
+from dtd import game_constants
+from dtd.audio import get_audio_manager
 from dtd.ui import Scale, Theme, Widget, current_scale, state_colors
 
 
@@ -267,10 +279,37 @@ class ChoiceList(Widget):
                 clicked_left = self._left_pressed and pressing_left
                 clicked_right = self._right_pressed and pressing_right
                 self._left_pressed = self._right_pressed = False
-                if clicked_left:
-                    self._page(-1)
-                elif clicked_right:
-                    self._page(+1)
+                # A pager click only *counts* when paging is actually
+                # possible: with one item the selection cannot change,
+                # so the click neither pages nor plays the accept sound
+                # (spec 07: ChoiceList audio).
+                if clicked_left or clicked_right:
+                    if len(self._items) > 1:
+                        self._play_ui_sfx(game_constants.UI_SFX_ACCEPT)
+                        if clicked_left:
+                            self._page(-1)
+                        else:
+                            self._page(+1)
+
+    # -- audio (spec 07: ChoiceList audio) ----------------------------------
+    def on_hover_enter(self) -> None:
+        """Play the shared hover sound on a non-hovered -> hovered
+        transition (the spec 04 hook, as amended by spec 07).
+
+        The UIManager never invokes this on disabled or selected widgets,
+        so those spec rules come for free from the framework.
+        """
+        self._play_ui_sfx(game_constants.UI_SFX_HOVER)
+
+    def _play_ui_sfx(self, resource_id: str) -> None:
+        """Hand the id to the global AudioManager as-is (spec 07).
+
+        The widget never resolves resource ids and never checks whether
+        the sound actually plays: disabled UI sound effects, unresolvable
+        ids, and exhausted channels are all AudioManager's business
+        (spec 05).
+        """
+        get_audio_manager().play_ui_sfx(resource_id)
 
     @staticmethod
     def _pagers_hit(

@@ -125,6 +125,11 @@ class Widget:
     def hit(self, pos) -> bool:
         return self.rect.collidepoint(pos) # in design space
 
+    def on_hover_enter(self) -> None:
+        # no-op hook; UIManager calls it when this widget transitions
+        # from non-hovered to hovered state (added 2026-10-10 per
+        # spec 07). Never called on disabled or selected widgets.
+
     def update(self, events): ...   # state changes
     def draw(self, surf, theme): ...  # rendering only; convert to pixel space
 ```
@@ -163,6 +168,18 @@ to actual pixels as needed, based on current window resolution (see Widget coord
 UIManager broadcasts the event batch to all enabled widgets; each widget hit-tests its own rect.
 Disabled widgets receive no events. Note that overlapping widgets may receive and respond
 to the same mouse events - this is acceptable.
+
+*Amended 2026-10-10 per spec 07 (ChoiceList audio): hover-enter notification.*
+When a widget's hover state transitions from non-hovered to hovered, the UIManager
+invokes that widget's `on_hover_enter()` hook - once per transition, not on every frame
+the mouse stays inside. The hook is a no-op on the base `Widget` class; widgets that
+want hover feedback (for example playing `UI_SFX_HOVER`, see specs 07 and 09) override
+it. The hook is never invoked on a disabled or selected widget: for this notification,
+"hovered" means enabled AND hit AND not selected, consistent with the disabled >
+selected > hover precedence chain. The `hovered` flag itself keeps its existing
+semantics (enabled + hit) - a selected widget still tracks hover internally (see
+"Selecting widgets"). Re-enabling or de-selecting a widget while the mouse is still
+over it counts as a fresh transition: the hook fires again.
 
 Widgets do not respond to keyboard input - the mouse must be used. So, there's no need
 to track or clear focus.
@@ -319,6 +336,19 @@ It is never an error if these resource IDs do not resolve. All UI resources are 
   - `get_theme_resource_id()` returns "default" if an invalid theme was configured.
   - UIManager's `set_theme` can be used to change the current theme in a UIManager. All of its
     widgets receive the new Theme on subsequent calls to `draw()`.
+- Hover-enter notification (added 2026-10-10 per spec 07):
+  - `UIManager` invokes `Widget.on_hover_enter()` when a non-disabled, non-selected Widget
+    transitions from non-hovered state to hovered state - and only once per transition
+    (further frames with the mouse held inside the widget do not re-invoke it).
+  - `UIManager` does not invoke `Widget.on_hover_enter()` on a disabled widget.
+  - `UIManager` does not invoke `Widget.on_hover_enter()` on a selected widget.
+  - If a Widget is disabled while in the hovered state, then re-enabled while still in the hovered
+    state, then `Widget.on_hover_enter()` is invoked again (as we are technically transitioning from
+    a non-hovered state to a hovered state).
+  - If a Widget is selected while in the hovered state, then de-selected while still in the hovered
+    state, then `Widget.on_hover_enter()` is invoked again (as we are technically transitioning from
+    a non-hovered state to a hovered state).
+  - Moving the mouse out of a Widget and back in invokes `Widget.on_hover_enter()` again.
 
 ## Acceptance criteria
 
@@ -370,6 +400,11 @@ The spec can be implemented in stages:
    new "Core UI Resources" section. Implement the Font Determination path (updating the
    old logic around font determination). Update the tests as described in the Testing section.
    If all tests pass, flip this document back to `active` status. **Completed 2026-10-10**
+10. Amendment 2026-10-10 per spec 07 (ChoiceList audio): add the `Widget.on_hover_enter()`
+    no-op hook, and have `UIManager` invoke it on non-hovered -> hovered transitions -
+    never on disabled or selected widgets. Tests as described in the Testing section above.
+    If all tests pass, flip this document back to `active` status.
+    **Completed 2026-10-10** (full suite green at 678 tests)
 
 Upon completion, if all tests pass, mark this document as "active". (Done 2026-10-01;
 full suite green at 280 tests.)

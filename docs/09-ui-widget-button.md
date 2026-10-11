@@ -105,6 +105,19 @@ also occurred inside the button's rect. Mouse tracking from press to release mus
 When this document refers to a "button click" it means the complete process of pressing and releasing the mouse
 button inside the Button's rect. The left mouse button is the click button.
 
+### Button audio
+
+The Button class should play UI sound effects for some events (constants defined in spec 04):
+
+- a button click should play `UI_SFX_ACCEPT`. Button clicks only count when the button is not disabled.
+- Override the `on_hover_enter()` hook from the parent Widget class:
+  `get_audio_manager().play_ui_sfx(UI_SFX_HOVER)`
+
+Button makes no attempt to resolve the resource ids from these constants (located in `game_constants.py`).
+Button should make use of AudioManager's `play_ui_sfx()` method via the global singleton AudioManager instance.
+This method handles all edge cases related to audio playing (UI sound effects are disabled, the resource IDs
+don't resolve to valid audio resources, etc.)
+
 ## Testing
 
 - buttons can be created and displayed; they should respect the current theme settings
@@ -133,6 +146,12 @@ button inside the Button's rect. The left mouse button is the click button.
 - buttons with unreasonable border width, leaving zero or negative inner rect dimensions, prevent both icon and text from drawing.
 - `set_font_point_size()` can be invoked on a button with a positive integer to enable forced-size text.
 - `set_font_point_size()` can be invoked with a non-int value, a non-positive number, or None to enable auto-scaled text.
+- button audio events:
+  - when a button is clicked, `UI_SFX_ACCEPT` is played.
+  - a disabled button does not play audio on click.
+  - `UI_SFX_HOVER` is played when the Buttons's `on_hover_enter()` is invoked. Tests can just invoke this hook directly, rather than synthesize MOUSEMOTION.
+  - note that the tests need to use the `mixer_ready` + `init_audio_manager` pattern to process audio events.
+  - if `UI_SFX_HOVER` or `UI_SFX_ACCEPT` do not resolve to valid audio resources, no error is raised.
 
 ## Acceptance criteria
 
@@ -156,4 +175,12 @@ button inside the Button's rect. The left mouse button is the click button.
    Search the entire codebase for references to `Button` or spec 04 and update them as needed to point
    to spec 09 instead. Do not change code behavior! **Completed 2026-10-09** (all citations retargeted;
    framework-level citations to 04 left intact; full suite green at 614 tests)
-
+4. Amendment 2026-10-10: implement the Button audio section and related tests.
+   If all tests pass, flip this document back to `active` status.
+   **Completed 2026-10-10** (full suite green at 688 tests. Test-infrastructure note:
+   the audio fixture + play_ui_sfx recorder pattern reached its third occurrence with
+   these tests, so it was hoisted to conftest.py as the shared `silent_audio_manager`
+   and `record_play_ui_sfx` fixtures; test_text_panel/test_choice_list were migrated
+   onto them, and test_title_screen gained an autouse singleton delegation - the
+   title screen hosts Buttons, whose clicks now reach the AudioManager like every
+   other widget's.)

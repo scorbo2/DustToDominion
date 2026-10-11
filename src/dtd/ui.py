@@ -89,6 +89,16 @@ class Widget:
         """Whether a design-space position is inside this widget's rect."""
         return self.rect.collidepoint(pos)
 
+    def on_hover_enter(self) -> None:
+        """Called by the UIManager when this widget transitions from
+        non-hovered to hovered state (spec 04, as amended by spec 07).
+
+        A no-op by default: widgets that want hover feedback (for
+        example playing ``UI_SFX_HOVER``) override this. The UIManager
+        never calls it on disabled or selected widgets - "selected"
+        suppresses hover semantics here just as it does for rendering.
+        """
+
     def update(self, events: list[pygame.event.Event]) -> None:
         """State changes from the frame's event batch (spec 04: the
         UIManager broadcasts the batch to all enabled widgets)."""
@@ -316,20 +326,41 @@ class UIManager:
     Disabled widgets receive no events and are never hovered (spec 04:
     Disabled widgets). Widgets never handle keyboard events; input handling
     stays with the game loop (spec 04: Widgets).
+
+    On a non-hovered -> hovered transition the UIManager also invokes the
+    widget's ``on_hover_enter()`` hook - once per transition, and never
+    on disabled or selected widgets (spec 04, as amended by spec 07).
     """
 
     def __init__(self, theme: Theme) -> None:
         self.theme = theme
         self.widgets: list[Widget] = []  # back-to-front
         self._mouse_pos: tuple[float, float] | None = None  # design space
+        # Widgets whose hover-enter hook has already fired for the
+        # current hover: membership is exactly "effective hover"
+        # (enabled AND hit AND not selected), so a fresh frame's set
+        # difference is precisely the transition edge (spec 07).
+        self._hover_notified: set[Widget] = set()
 
     def _refresh_hover_flags(self) -> None:
-        if self._mouse_pos is None:
-            for widget in self.widgets:
-                widget.hovered = False
-            return
+        currently_hovered: list[Widget] = []
         for widget in self.widgets:
-            widget.hovered = widget.enabled and widget.hit(self._mouse_pos)
+            widget.hovered = (
+                self._mouse_pos is not None
+                and widget.enabled
+                and widget.hit(self._mouse_pos)
+            )
+            # The hovered flag keeps tracking hover while selected (a
+            # selected widget may restore its hover appearance when
+            # deselected - spec 04: Selecting widgets), but the hook
+            # treats "selected" as suppressing hover, matching the
+            # disabled > selected > hover precedence chain.
+            if widget.hovered and not widget.selected:
+                currently_hovered.append(widget)
+        for widget in currently_hovered:
+            if widget not in self._hover_notified:
+                widget.on_hover_enter()
+        self._hover_notified = set(currently_hovered)
 
     def update(self, events: list[pygame.event.Event]) -> None:
         """Process the frame's event batch (spec 04: Changes to game loop)."""

@@ -15,7 +15,7 @@ import pygame
 import pytest
 
 from dtd import game_constants
-from dtd import game_config
+from dtd import audio, game_config
 from dtd.resource_loader import ResourceLoader
 from dtd.screens import starfield
 from dtd.screens.base import Screen, ScreenAction
@@ -24,6 +24,14 @@ from dtd.screens.title import TitleScreen
 from dtd.ui import Theme, UIManager, Widget
 from dtd.widgets.button import Button
 from dtd.widgets.choice_list import ChoiceList
+
+
+@pytest.fixture(autouse=True)
+def _audio_singleton(silent_audio_manager: audio.AudioManager) -> None:
+    """Mirror the startup precondition: the real game initializes the
+    AudioManager before any screen exists (spec 05), and the title
+    screen's Buttons and ChoiceLists hand ids to the singleton on
+    clicks and hover (specs 07/09: widget audio)."""
 
 
 def _default_theme() -> Theme:

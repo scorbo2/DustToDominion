@@ -2,8 +2,8 @@
 
 Covers the design-space scaling (``Scale``/``current_scale``), the widget
 base class, ``Theme`` (built-in defaults, theme-JSON validation, font
-resolution and fallback), and ``UIManager`` (central hover tracking and
-event broadcast).
+resolution and fallback), and ``UIManager`` (central hover tracking,
+hover-enter notification, and event broadcast).
 """
 from __future__ import annotations
 
@@ -727,3 +727,143 @@ class TestUIManager:
         # spec 08):
         assert received_themes == [first_theme, second_theme]
         assert ui.theme is second_theme
+
+
+class HoverRecordingWidget(Widget):
+    """A widget that counts its ``on_hover_enter()`` invocations."""
+
+    def __init__(self, rect: pygame.Rect) -> None:
+        super().__init__(rect)
+        self.hover_enters = 0
+
+    def on_hover_enter(self) -> None:
+        self.hover_enters += 1
+
+
+class TestHoverEnterNotification:
+    """The hover-enter hook (spec 04, as amended by spec 07)."""
+
+    def _recording_widget(self) -> HoverRecordingWidget:
+        # Design rect mapping to pixels (640, 360) at 1280x720.
+        return HoverRecordingWidget(pygame.Rect(960, 540, 100, 100))
+
+    def _mouse_motion(self, pos: tuple[int, int]) -> pygame.event.Event:
+        return pygame.event.Event(pygame.MOUSEMOTION, pos=pos, rel=(0, 0))
+
+    def _ui_with(self, widget: Widget) -> UIManager:
+        pygame.display.set_mode((1280, 720))
+        ui = UIManager(Theme("", "", ResourceLoader()))
+        ui.widgets.append(widget)
+        return ui
+
+    def test_mouse_entering_widget_should_invoke_on_hover_enter_once(
+        self, font_ready: None
+    ) -> None:
+        # GIVEN a widget and a UIManager managing it:
+        widget = self._recording_widget()
+        ui = self._ui_with(widget)
+
+        # WHEN the mouse moves inside the widget's rect:
+        ui.update([self._mouse_motion((640, 360))])
+
+        # THEN the hook fired exactly once for the transition:
+        assert widget.hover_enters == 1
+
+        # AND further frames with the mouse held inside do not re-invoke
+        # it (spec 04: once per transition):
+        ui.update([self._mouse_motion((640, 360))])
+        ui.update([])
+        assert widget.hover_enters == 1
+
+    def test_disabled_widget_under_mouse_should_not_invoke_on_hover_enter(
+        self, font_ready: None
+    ) -> None:
+        # GIVEN a disabled widget directly under the cursor:
+        widget = self._recording_widget()
+        widget.enabled = False
+        ui = self._ui_with(widget)
+
+        # WHEN the mouse moves over it:
+        ui.update([self._mouse_motion((640, 360))])
+
+        # THEN the hook is never invoked (spec 04: Disabled widgets):
+        assert widget.hover_enters == 0
+
+    def test_selected_widget_under_mouse_should_not_invoke_on_hover_enter(
+        self, font_ready: None
+    ) -> None:
+        # GIVEN a selected widget directly under the cursor:
+        widget = self._recording_widget()
+        widget.selected = True
+        ui = self._ui_with(widget)
+
+        # WHEN the mouse moves over it:
+        ui.update([self._mouse_motion((640, 360))])
+
+        # THEN the hook is never invoked (spec 04, as amended by spec 07:
+        # selected suppresses hover semantics):
+        assert widget.hover_enters == 0
+
+        # BUT the hover flag itself still tracks hover internally
+        # (spec 04: Selecting widgets):
+        assert widget.hovered is True
+
+    def test_re_enabling_widget_while_hovered_should_invoke_on_hover_enter_again(
+        self, font_ready: None
+    ) -> None:
+        # GIVEN a hovered widget that already received the hook:
+        widget = self._recording_widget()
+        ui = self._ui_with(widget)
+        ui.update([self._mouse_motion((640, 360))])
+        assert widget.hover_enters == 1
+
+        # WHEN the widget is disabled and re-enabled with the mouse
+        # still inside:
+        widget.enabled = False
+        ui.update([])
+        widget.enabled = True
+        ui.update([])
+
+        # THEN the hook fires again - re-enabling under the cursor is a
+        # fresh non-hovered -> hovered transition (spec 04, as amended
+        # by spec 07):
+        assert widget.hover_enters == 2
+
+    def test_de_selecting_widget_while_hovered_should_invoke_on_hover_enter_again(
+        self, font_ready: None
+    ) -> None:
+        # GIVEN a hovered widget that already received the hook:
+        widget = self._recording_widget()
+        ui = self._ui_with(widget)
+        ui.update([self._mouse_motion((640, 360))])
+        assert widget.hover_enters == 1
+
+        # WHEN the widget is selected and then de-selected with the
+        # mouse still inside:
+        widget.selected = True
+        ui.update([])
+        assert widget.hover_enters == 1  # no hook while selected
+        widget.selected = False
+        ui.update([])
+
+        # THEN de-selecting under the cursor counts as a fresh
+        # transition and re-invokes the hook (spec 04, as amended by
+        # spec 07):
+        assert widget.hover_enters == 2
+
+    def test_mouse_leaving_and_re_entering_should_invoke_on_hover_enter_again(
+        self, font_ready: None
+    ) -> None:
+        # GIVEN a hovered widget that already received the hook:
+        widget = self._recording_widget()
+        ui = self._ui_with(widget)
+        ui.update([self._mouse_motion((640, 360))])
+        assert widget.hover_enters == 1
+
+        # WHEN the mouse leaves and returns:
+        ui.update([self._mouse_motion((0, 0))])
+        assert widget.hover_enters == 1
+        ui.update([self._mouse_motion((640, 360))])
+
+        # THEN the return transition invokes the hook again:
+        assert widget.hover_enters == 2

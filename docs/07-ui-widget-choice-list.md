@@ -12,6 +12,29 @@ to the existing Button widget, but with `<` and `>` pager controls on the left a
 of the widget to cycle through the available list options one at a time, with list-wrapping
 at both ends of the list. The currently-selected list item is displayed in the center of the widget.
 
+## Amendments to previous spec docs
+
+This spec amends the 04 spec to add support for notifying widgets when they transition
+from a non-hovered state to a hovered state:
+
+1. Add a no-op base-class hook to the `Widget` class: `on_hover_enter()`.
+2. Modify `UIManager` to invoke this hook when transitioning from a non-hovered
+   state to a hovered state (UIManager already owns the hover state, so this change
+   should be minor in implementation). `UIManager` should not invoke this hook
+   on a Widget that is disabled, or on a Widget that is selected.
+
+Tests to be added to the 04 spec doc as part of the Amendments to previous spec docs section:
+- `UIManager` invokes `Widget.on_hover_enter()` when a non-disabled Widget transitions from non-hovered
+  state to hovered state.
+- `UIManager` does not invoke `Widget.on_hover_enter()` on a disabled widget.
+- `UIManager` does not invoke `Widget.on_hover_enter()` on a selected widget.
+- If a Widget is disabled while in the hovered state, then re-enabled while still in the hovered
+  state, then `Widget.on_hover_enter()` is invoked again (as we are technically transitioning from
+  a non-hovered state to a hovered state).
+- If a Widget is selected while in the hovered state, then de-selected while still in the hovered
+  state, then `Widget.on_hover_enter()` is invoked again (as we are technically transitioning from
+  a non-hovered state to a hovered state).
+
 ## ChoiceList details
 
 There is no keyboard interaction for this widget - the user must use the mouse to click the
@@ -188,6 +211,20 @@ use this to discover if their input lists are being stripped for any reason.
 Callers can select any item with `set_current_item()`, but they must specify
 an EXACT match. This is a client responsibility.
 
+## ChoiceList audio
+
+The ChoiceList class should play UI sound effects for some events (constants defined in spec 04):
+
+- Clicking either pager control should play `UI_SFX_ACCEPT`. Pager control clicks only count when the
+  ChoiceList is not disabled and there is more than one option present.
+- Override the `on_hover_enter()` hook from the parent Widget class:
+  `get_audio_manager().play_ui_sfx(UI_SFX_HOVER)`
+
+ChoiceList makes no attempt to resolve the resource ids from these constants (located in `game_constants.py`).
+ChoiceList should make use of AudioManager's `play_ui_sfx()` method via the global singleton AudioManager instance.
+This method handles all edge cases related to audio playing (UI sound effects are disabled, the resource IDs
+don't resolve to valid audio resources, etc.)
+
 ## Additional dependencies
 
 None! This widget relies entirely on the UI framework introduced by `04-ui-widgets.md`, which itself
@@ -245,6 +282,13 @@ This document introduces no new configuration keys.
 - ChoiceList can be disabled programmatically. Mouse events (including hover) are ignored.
 - Tall ChoiceLists render their pager controls vertically centered within the widget.
 - Narrow ChoiceLists don't allow more than 33% of their horizontal space to be used by the pager controls.
+- Audio events:
+  - when a pager control is clicked and more than one option is present, `UI_SFX_ACCEPT` is played.
+  - a disabled ChoiceList does not play any audio when a pager control is clicked.
+  - a ChoiceList with only one item in the list does not attempt to play audio when a pager control is clicked.
+  - `UI_SFX_HOVER` is played when the ChoiceList's `on_hover_enter()` is invoked. Tests can just invoke this hook directly, rather than synthesize MOUSEMOTION.
+  - note that the tests need to use the `mixer_ready` + `init_audio_manager` pattern to process audio events.
+  - if `UI_SFX_HOVER` or `UI_SFX_ACCEPT` do not resolve to valid audio resources, no error is raised.
 
 ## Acceptance criteria
 
@@ -285,8 +329,20 @@ implementation plan is suggested (each stage after 1 should include tests):
    Clean up any stale code comments or docstrings added by previous stages such as
    "will be done in stage N". Upon completion, flip the status of this document from "proposed" to "active".
    **Completed 2026-10-05**
-
-Upon completion, if all tests pass, mark this document as "active". (Done 2026-10-05;
-full suite green at 495 tests. The two implementation judgment calls - two-axis glyph
-fitting and the floored 33% pager-width cap - were reviewed and accepted.)
+5. Amendment 2026-10-10: implement the "Amendments to previous spec docs" section for the 04 spec.
+   Flip spec 04 from `active` to `proposed`.
+   Add the new hook to the Widget class, implement the hook calling logic in the UIManager class,
+   and add all tests mentioned in the "Amendments to previous spec docs" section.
+   Append a new stage to the Dev plan in spec 04 to track this work, and reference this 07
+   doc as the source of that amendment (with today's date). If all tests pass upon completion
+   of this work, flip the 04 spec back to `active`.
+   **Completed 2026-10-10** (full suite green at 678 tests; the 04 Testing section also
+   gained an explicit "only once per transition" case and a leave-and-re-enter case,
+   strengthening the amendment's test list)
+6. Amendment 2026-10-10: implement the ChoiceList audio section and related tests.
+   If all tests pass, flip this document back to `active` status.
+   **Completed 2026-10-10** (full suite green at 683 tests. Implementation note: the
+   test module carries an autouse fixture that initializes the AudioManager singleton
+   with a bare, nothing-resolves loader - required because pager clicks and UIManager
+   hover now reach the singleton even in non-audio tests.)
 
