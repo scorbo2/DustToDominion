@@ -142,7 +142,7 @@ The resource loader exposes functions to retrieve specific resource types:
 - `get_json_resource(id)` - returns a decoded object containing data from the Json resource.
 - `get_font_resource(id, size)` - returns a `pygame.font.Font` object containing the named font at the specified point size (clamped to `max(size,1)`). Note that the loader should cache the raw font bytes, and create a Font object as this function is invoked (similar to music handling). The resource loader should cache generated Font objects so that client code that repeatedly requests the same Font at the same size multiple times is served a cached copy for every request after the first. The cache can be unbounded.
 - `get_theme_resource_ids()` - returns a list of all theme resource ids: every loaded resource whose id begins with `themes/` and ends in `.json`. The search is recursive: both `themes/blue.json` and `themes/long/path/matrix.json` are found. The list is sorted alphabetically by full resource id (casefold). A sentinel display value `(Default theme)` is always added as the first item, so the returned list is never empty. The sentinel display value lives in `game_constants.py` and must not be hard-coded. (Added 2026-10-06 per spec 08: Title Screen.)
-- `get_font_resource_ids()` - returns a list of all font resource ids: every loaded resource whose id begins with `fonts/` and ends in `.ttf`. The search is recursive: both `fonts/iceland.ttf` and `fonts/long/path/sahara.ttf` are found. Sorted and sentinel rules are identical to `get_theme_resource_ids()`, except the sentinel display value is `(System default)`, also living in `game_constants.py`. (Added 2026-10-06 per spec 08: Title Screen.)
+- `get_font_resource_ids()` - returns a list of all font resource ids: every loaded resource whose id begins with `fonts/` and ends in `.ttf`. The search is recursive: both `fonts/iceland.ttf` and `fonts/long/path/sahara.ttf` are found. Sorted and sentinel rules are identical to `get_theme_resource_ids()`, except the sentinel display value is `(Default font)`, also living in `game_constants.py`. (Added 2026-10-06 per spec 08: Title Screen.)
 
 These two id-listing accessors exist so future screens can offer the player a chooser of
 available fonts and themes without knowing what resources the user has installed.
@@ -456,7 +456,7 @@ Notes for font validation:
 - An invalid `.ttf` file (wrong header) is rejected as invalid, regardless of where it was loaded from.
 - Theme and font id accessors (added 2026-10-06 per spec 08: Title Screen):
   - `get_theme_resource_ids` with no resources in `themes/` returns a list of size 1 with item "(Default theme)".
-  - `get_font_resource_ids` with no resources in `fonts/` returns a list of size 1 with item "(System default)".
+  - `get_font_resource_ids` with no resources in `fonts/` returns a list of size 1 with item "(Default font)".
   - `get_theme_resource_ids` returns all resources whose ids begin with `themes/` and end in `.json`
     (recursive), sorted by full id (casefold), with the sentinel first.
   - `get_font_resource_ids` returns all resources whose ids begin with `fonts/` and end in `.ttf`

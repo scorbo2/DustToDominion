@@ -71,7 +71,7 @@ Each widget should be 400px wide by 45px tall with a 4-pixel border (all units i
 There should be 35px of empty space between each option.
 
 The font selector should default to the resource id returned from `get_font_resource_id()`,
-with a fallback to the sentinel display value "(System default)" if `get_font_resource_id()`
+with a fallback to the sentinel display value "(Default font)" if `get_font_resource_id()`
 returns "default". (Constants for sentinel values are in `game_constants.py` - don't hard-code them).
 
 The theme selector should default to the name of the currently configured theme, or the sentinel
@@ -187,7 +187,7 @@ New tests specifically for Title Screen behavior (these stay in this doc):
     Theme is rebuilt (the new colors appear on the next frame).
 - ChoiceLists for font and theme appear horizontally and vertically centered in the lower half of the screen.
 - Selecting "(Default theme)" should map to "default" for theme.
-- Selecting "(System default)" should map to "default" for font.
+- Selecting "(Default font)" should map to "default" for font.
 - The theme ChoiceList is initialized based on the configured theme as reported by `get_theme_resource_id()`.
   If an item is configured, it is preselected. Otherwise, the sentinel is preselected. If an item
   is configured but is not valid (or is not present in the list), the sentinel is preselected.
