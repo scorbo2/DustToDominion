@@ -15,7 +15,7 @@ import pygame
 import pytest
 
 from dtd import game_constants
-from dtd import game_config
+from dtd import audio, game_config
 from dtd.resource_loader import ResourceLoader
 from dtd.screens import starfield
 from dtd.screens.base import Screen, ScreenAction
@@ -24,6 +24,14 @@ from dtd.screens.title import TitleScreen
 from dtd.ui import Theme, UIManager, Widget
 from dtd.widgets.button import Button
 from dtd.widgets.choice_list import ChoiceList
+
+
+@pytest.fixture(autouse=True)
+def _audio_singleton(silent_audio_manager: audio.AudioManager) -> None:
+    """Mirror the startup precondition: the real game initializes the
+    AudioManager before any screen exists (spec 05), and the title
+    screen's Buttons and ChoiceLists hand ids to the singleton on
+    clicks and hover (specs 07/09: widget audio)."""
 
 
 def _default_theme() -> Theme:
@@ -377,13 +385,24 @@ class TestTitleScreenExitGame:
 class _StubChooserLoader(ResourceLoader):
     """A loader offering exactly one font and one theme (sentinels first,
     as the real accessors guarantee), and resolving both (spec 08 stage 5
-    chooser wiring)."""
+    chooser wiring).
+
+    ``resolve_core_default_font`` additionally offers and resolves the
+    spec 04 core default font id, simulating a game that ships it.
+    """
 
     FONT_ID = "fonts/Iceland-Regular.ttf"
     THEME_ID = "themes/blue.json"
 
+    def __init__(self, resolve_core_default_font: bool = False) -> None:
+        super().__init__()
+        self._resolve_core_default_font = resolve_core_default_font
+
     def get_font_resource_ids(self) -> list[str]:
-        return [game_constants.DEFAULT_FONT_DISPLAY_VALUE, self.FONT_ID]
+        ids = [game_constants.DEFAULT_FONT_DISPLAY_VALUE, self.FONT_ID]
+        if self._resolve_core_default_font:
+            ids.append(game_constants.UI_DEFAULT_FONT)
+        return ids
 
     def get_theme_resource_ids(self) -> list[str]:
         return [game_constants.DEFAULT_THEME_DISPLAY_VALUE, self.THEME_ID]
@@ -395,7 +414,10 @@ class _StubChooserLoader(ResourceLoader):
         return None
 
     def get_font_resource(self, resource_id: str, size: int):
-        if resource_id == self.FONT_ID:
+        resolvable = (self.FONT_ID,)
+        if self._resolve_core_default_font:
+            resolvable += (game_constants.UI_DEFAULT_FONT,)
+        if resource_id in resolvable:
             return pygame.font.Font(None, size)
         return None
 
@@ -427,15 +449,41 @@ class TestTitleScreenChoosers:
     def test_constructor_withNoFontOrThemeConfigured_shouldPreselectBothSentinels(
         self, font_ready: None
     ) -> None:
-        # GIVEN a default Theme (nothing configured),
+        # GIVEN a default Theme (nothing configured) and a loader where
+        # even the core default font fails to resolve,
         screen = TitleScreen(
             _default_theme(), _StubChooserLoader(), rng=random.Random(1)
         )
 
-        # THEN both choosers sit on their sentinel display values:
+        # THEN both choosers sit on their sentinel display values - the
+        # font chain fell through to a system font:
         assert (
             screen._ui.widgets[0].get_current_item()
             == game_constants.DEFAULT_FONT_DISPLAY_VALUE
+        )
+        assert (
+            screen._ui.widgets[1].get_current_item()
+            == game_constants.DEFAULT_THEME_DISPLAY_VALUE
+        )
+
+    def test_constructor_withNoFontConfiguredButResolvableCoreDefaultFont_shouldPreselectThatFont(
+        self, font_ready: None
+    ) -> None:
+        # GIVEN a loader that ships and resolves the spec 04 core default
+        # font, and a Theme built over that same loader with nothing
+        # configured (the production startup order shares one loader),
+        loader = _StubChooserLoader(resolve_core_default_font=True)
+        screen = TitleScreen(
+            Theme("", "", loader), loader, rng=random.Random(1)
+        )
+
+        # THEN the font chooser preselects the core default font id, not
+        # the sentinel (the sentinel is only for when
+        # get_font_resource_id() returns "default"), while the theme
+        # chooser keeps its own sentinel:
+        assert (
+            screen._ui.widgets[0].get_current_item()
+            == game_constants.UI_DEFAULT_FONT
         )
         assert (
             screen._ui.widgets[1].get_current_item()
@@ -459,7 +507,8 @@ class TestTitleScreenChoosers:
     def test_constructor_withConfiguredButUnresolvableValues_shouldPreselectSentinels(
         self, font_ready: None
     ) -> None:
-        # GIVEN a Theme configured with ids that resolve to nothing,
+        # GIVEN a Theme configured with ids that resolve to nothing, and
+        # a loader where the core default font fails to resolve too,
         loader = _StubChooserLoader()
         theme = Theme("themes/missing.json", "fonts/missing.ttf", loader)
 

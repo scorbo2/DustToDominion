@@ -1,5 +1,5 @@
 ---
-description: Describes the game's approach to audio handling (sfx and music).
+description: Describes the game's approach to audio handling (sfx, speech, and music).
 status: active
 ---
 
@@ -11,7 +11,7 @@ for managing all audio resources for the game.
 The game code should never directly query the resource manager for audio resources.
 Instead, a global AudioManager instance will be created at game startup with the
 resource loader as a constructor parameter. All game code can request AudioManager
-to play sound effects and music, and AudioManager will transparently manage those requests.
+to play sound effects, music, and speech, and AudioManager will transparently manage those requests.
 
 This amends spec 03's startup order: AudioManager initialization is inserted as a new step
 between UI initialization and main window creation. A module-level singleton in `dtd/audio.py`,
@@ -26,13 +26,17 @@ None! AudioManager will use pygame's audio mixer for handling audio play request
 
 ## Configuration
 
-One new top-level configuration key will be added to the game's main config:
+This spec doc defines one top-level configuration key in the game's main config:
 
 ```json
 {
   "audio": {
-    "sfx_enabled": true,
-    "sfx_volume": 100,
+    "game_sfx_enabled": true,
+    "game_sfx_volume": 100,
+    "ui_sfx_enabled": true,
+    "ui_sfx_volume": 80,
+    "speech_enabled": true,
+    "speech_volume": 90,
     "music_enabled": true,
     "music_volume": 80
   }
@@ -49,10 +53,10 @@ The pydantic model will be `AudioConfig` in `dtd/game_config.py`.
 
 - a top-level `audio` value of the wrong type (string, integer, array) raises `InvalidConfigError`.
 - a top-level `audio` value of `null` is fine and should result in default values being used, as though the key were absent.
-- `sfx_enabled` / `music_enabled` - simple boolean values.
+- `*_enabled` - simple boolean values.
   Note that pydantic will accept `1`, `0`, `"true"`, `"1"` and so on as valid boolean values - this is fine.
   Obviously non-boolean values such as `"banana"` should be rejected with `InvalidConfigError`.
-- `sfx_volume` / `music_volume` - volume expressed as an integer percent value between 0 (mute) and 100 (full volume).
+- `*_volume` - volume expressed as an integer percent value between 0 (mute) and 100 (full volume).
   This results in `set_volume(value / 100)`.
   Numeric values outside the 0-100 range raise `InvalidConfigError`.
   Non-numeric values raise `InvalidConfigError` (pydantic will coerce values such as `true` to 1 and `"50"` to 50 - this is fine).
@@ -70,14 +74,28 @@ class AudioManager:
         self._loader = loader
         self._config = config
 
-    def play_sfx(self, id: str) -> None:
-        # Sound effect with the given id is retrieved from _loader and played.
-        # It is not an error if id does not resolve to any sound effect.
-        # It is not an error if this is invoked when sfx_enabled is False: do nothing.
+    def play_game_sfx(self, id: str) -> None:
+        # Sound resource with the given id is retrieved from _loader via get_sfx_resource().
+        # It is not an error if id does not resolve to any sound resource: do nothing.
+        # It is not an error if this is invoked when game_sfx_enabled is False: do nothing.
+        # The sfx will play on any available game_sfx channel at the current game_sfx_volume level.
+
+    def play_ui_sfx(self, id: str) -> None:
+        # Sound resource with the given id is retrieved from _loader via get_sfx_resource().
+        # It is not an error if id does not resolve to any sound resource: do nothing.
+        # It is not an error if this is invoked when ui_sfx_enabled is False: do nothing.
+        # The sfx will play on any available ui_sfx channel at the current ui_sfx_volume level.
+
+    def play_speech(self, id: str) -> None:
+        # Sound resource with the given id is retrieved from _loader via get_sfx_resource().
+        # It is not an error if id does not resolve to any sound resource: do nothing.
+        # It is not an error if this is invoked when speech_enabled is False: do nothing.
+        # If the resource id is valid, any currently-playing speech is terminated.
+        # The new speech will play on the speech channel at the current speech_volume level.
 
     def play_music(self, id: str) -> None:
         # Any already-playing music is stopped.
-        # Music track with the given id is retrieved from _loader and played.
+        # Music track with the given id is retrieved from _loader via get_music_resource() and played at music_volume.
         # It is not an error if id does not resolve to any music track: stop music.
         # It is not an error if this is invoked when music_enabled is False: do nothing.
         # Music tracks automatically loop when finished.
@@ -101,12 +119,12 @@ class AudioManager:
         # It is not an error if this is invoked when music_enabled is False: do nothing.
 
     def set_active_loops(self, ids: frozenset[str]) -> None:
-        # The set of sfx loops that should be audible right now.
+        # The set of sfx loops that should be audible right now (always respects game_sfx_volume).
         # Idempotent per frame: only loops entering or leaving the set are
         # touched, so an unchanged set never restarts (and re-stutters) an
         # already-running loop.
-        # It is not an error if this is invoked when sfx_enabled is False: do nothing.
-        # If the given id is already playing via `play_sfx`, restart it as a loop.
+        # It is not an error if this is invoked when game_sfx_enabled is False: do nothing.
+        # If the given id is already playing on a game_sfx channel, restart it as a loop.
         # A loop that cannot start due to budget exhaustion is simply not marked active; it is retried on subsequent frames.
 
     def stop_loops(self) -> None:
@@ -119,17 +137,18 @@ class AudioManager:
         # panel animation must silence its audio.)
         # It is not an error if id does not resolve to a sound effect, or is
         # not currently playing: nothing happens.
+        # The sfx will stop regardless of how it was started.
 
     # Also include: getters and setters for configuration properties:
-    #   sfx_enabled
-    #   music_enabled
-    #   sfx_volume
-    #   music_volume
+    #   *_enabled
+    #   *_volume
     # Changes take effect immediately and are persisted via the configuration module:
     #   game_config.save_game_config_section("audio", _config)
     # If persistence fails, proceed with the new settings in-memory and log warning.
     #
-    # Setting sfx_enabled to false should stop any currently playing sfx/loop.
+    # Setting game_sfx_enabled to false should stop any currently playing sfx/loop.
+    # Setting ui_sfx_enabled to false should stop any currently playing UI sound effect.
+    # Setting speech_enabled to false should stop any currently playing speech.
     # Setting music_enabled to false should stop any currently playing music track.
 ```
 
@@ -162,19 +181,71 @@ crash the game loop nor write an invalid value to `game.json`.
 ### Channel budget
 
 At startup, AudioManager should set a channel budget of 16 via `pygame.mixer.set_num_channels(...)`
-using a constant added to `game_constants.py`. The `set_active_loops` function must track which
-channel a loop is playing on, so that `channel.stop()` can be invoked when the loop is to be stopped.
-It is not an error if the loop budget is exhausted - any additional loop attempts are silently ignored.
-Note that the 16-channel pool is shared between one-shot sfx and loops (this is inherent pygame behavior).
+using a constant in `game_constants.py`. AudioManager will reserve channels in this pool
+for specific purposes:
+- 12 channels for game sound effects (channels 0-11)
+- 3 channels for UI sound effects (channels 12-14)
+- 1 channel for speech (channel 15)
+
+The channel total budget constant should be derived from the sum of the 12/3/1 constants so that
+it can never drift.
+
+AudioManager must manage explicit `Channel` objects so that sound can be played via
+`Channel.play(sound)`. This is because `Sound.play()` does not accept a `channel=` kwarg.
+This mechanism allows AudioManager to implement the channel reservation by type outlined above.
+
+Game sfx and UI sfx never "steal" an active channel. Attempting to play a game sound effect
+when all game channels are in use is a no-op. Attempting to play a UI sound effect when
+all UI channels are in use is a no-op. AudioManager uses `Channel.get_busy()` to determine
+if a channel is already playing audio.
+
+Speech works differently, as there is only one speech channel: attempting to play
+a speech clip when one is already playing will terminate the in-progress speech in favor
+of the new one.
+
+Choosing from available channels: the free channel with the lowest channel index is used.
+Example: `play_game_sfx()` is invoked when channels 2, 3, and 4 are idle: use channel 2.
 
 (Verified against pygame-ce 2.5.8: `set_num_channels` must be called *after* `mixer.init()`,
  otherwise you get `pygame.error: mixer not initialized`.)
+
+(Verified against pygame-ce 2.5.8: `Sound.play()` with a `channel=` kwarg fails
+ with "'channel' is an invalid keyword argument". We must use `Channel.play(sound)`.)
+
+(Verified against pygame-ce 2.5.8: `Channel.get_busy()` reports whether a channel
+ is already playing audio.)
+
+### Looping
+
+Decision: only game sound effects will ever loop. UI sound effects and speech are always one-offs.
+This will be a documented known limitation in the AudioManager implementation.
+For this reason, `set_active_loops()` should only respect `game_sfx_volume` and `game_sfx_enabled`.
+The active loops will consume channels from the game sound effects set of 12 channels.
+
+The `set_active_loops` function must track which channel a loop is playing on, so
+that `channel.stop()` can be invoked when the loop is to be stopped. It is not an error if the loop
+budget is exhausted - any additional loop attempts are silently ignored.
+
+When a loop starts, any in-flight one-shot instance of the same sound is terminated first
+(the restart-as-loop rule above). That termination is scoped to the game sfx channel range:
+the same sound playing as a UI sound effect or as speech is NOT interrupted. This keeps the
+category independence promised in the "Adjusting volume" section intact. Implementation note:
+`Sound.stop()` would stop the sound on ALL channels, so the implementation must instead stop
+only the channels in the game sfx range whose `get_sound()` is the target sound.
+
+(Verified against pygame-ce 2.5.8: `Channel.get_sound()` returns the very `Sound` object
+that was handed to `Channel.play()` - identity comparison works - and `Channel.stop()`
+affects only that one channel.)
+
+If `game_sfx_enabled` is disabled while any loop is playing, then in addition to stopping
+all currently-playing loops, the list of active loops is cleared.
 
 ### Stopping sound effects
 
 *Amended 2026-10-04 per spec 06 (TextPanel).*
 
 `stop_sfx(id)` requests that the given sound effect id be stopped if it is currently playing.
+This function does not distinguish between game sound effects, UI sound effects, and speech.
 Implementation notes:
 
 - if `loader.get_sfx_resource(id)` resolves to a `mixer.Sound` instance, invoke `stop()` on it;
@@ -184,8 +255,21 @@ Implementation notes:
   stop even if some other consumer (for example, another TextPanel instance) was also playing the
   same sound. Acceptable.
 
-When `sfx_enabled` is false nothing can be playing, so `stop_sfx` is inherently a silent no-op in
-that state.
+If `game_sfx_enabled`, `ui_sfx_enabled`, and `speech_enabled` are all False, nothing can be playing,
+so `stop_sfx` is inherently a silent no-op in that state.
+
+Note that `stop_sfx()` does not care whether a sound effect was started as a 
+game sound effect, a UI sound effect, or speech - the sound will be stopped regardless
+of how it was started (via `Sound.stop()`, which stops the sound on any channels that are playing it).
+
+### Adjusting volume
+
+Pygame's `Sound.set_volume()` will adjust volume for the given sound on all channels that are currently
+playing that sound. Our sound category separation allows callers to play the same `Sound` simultaneously
+as a game sfx, a UI sfx, and a speech sfx. In order to avoid adjusting volume of the wrong category
+of sound, AudioManager should use `Channel.set_volume()` instead. Verified against pygame-ce 2.5.8:
+this mechanism exists, and AudioManager can use it to respond to volume adjustment requests
+by only changing volume of the requested category.
 
 ## Testing
 
@@ -197,30 +281,51 @@ Simple, short, single-tone sounds are sufficient.
 - Missing `audio` config key proceeds with all default values.
 - Invalid config values (wrong type or out-of-range) raise `InvalidConfigError`
 - Missing config keys silently revert to default settings for the missing key(s).
-- When `sfx_enabled` is false: `play_sfx` and `set_active_loops` are always silent no-ops.
-- When `music_enabled` is false: `play_music` is always a silent no-op.
-- When `sfx_enabled` is true:
-  - `play_sfx` with a non-existent id is a silent no-op.
-  - `set_active_loops` with a valid sfx id starts looping that sound effect.
-  - `set_active_loops` with a valid sfx id that is already playing via `play_sfx` restarts that sfx as a loop.
+- When `game_sfx_enabled` is False: `play_game_sfx()` and `set_active_loops()` are silent no-ops.
+- When `ui_sfx_enabled` is False: `play_ui_sfx()` is a silent no-op.
+- When `speech_enabled` is False: `play_speech()` is a silent no-op.
+- When `music_enabled` is False: `play_music()` is a silent no-op.
+- When `game_sfx_enabled` is True:
+  - `play_game_sfx` with a non-existent id is a silent no-op.
+  - `set_active_loops` with a valid sfx id starts looping that sound effect at the `game_sfx_volume` level.
+  - `set_active_loops` with a valid sfx id that is already playing via `play_game_sfx` restarts that sfx as a loop.
+  - starting a loop for a sound that is simultaneously playing as a UI sfx or as speech does NOT
+    interrupt those instances - the restart-as-loop termination only touches game sfx channels.
   - `set_active_loops` with an empty set stops all current loops.
-  - `set_active_loops` when the channel budget is full with 16 other loops is a no-op. Removing another loop allows the retry to succeed.
+  - `set_active_loops` when the game sfx channel budget is full with 12 other loops is a no-op. Removing another loop allows the retry to succeed.
   - `set_active_loops` with the same set that is already playing does not stop or restart any existing loop - it's a no-op.
-  - `play_sfx` with a valid id plays the sound at the currently configured volume.
-  - `play_sfx` with a valid id that is already an active loop plays the sound as a one-off, in addition to the loop.
-  - `sfx_volume` can be adjusted while audio is playing - changes take effect immediately.
-  - setting `sfx_enabled` to False while any sfx is playing stops it.
-  - `play_sfx` with a music-typed resource id does nothing.
-  - `stop_sfx` (added by spec 06):
-    - `stop_sfx` with a valid id that is currently playing stops it.
-    - `stop_sfx` stops the sound on all channels, even if it was played more than once.
-    - `stop_sfx` with an id that is an active loop stops the loop and removes it from the active
-      set (re-submitting the same set starts it again).
-    - `stop_sfx` with a non-existent id is a silent no-op.
-    - `stop_sfx` with a valid id that is not playing does not disturb other currently playing sfx.
-    - `stop_sfx` with a music-typed id does not affect the currently playing music track.
-    - `stop_sfx` when `sfx_enabled` is false is a silent no-op.
-- When `music_enabled` is true:
+  - Setting `game_sfx_enabled` to False while any loop is active stops it; re-enabling audio allows the loop to be started again via `set_active_loops()`.
+  - `play_game_sfx` with a valid id plays the sound at the currently configured game sound effects volume on one of the 12 game sfx channels.
+  - `play_game_sfx` with a valid id but with no free game sfx channels is a no-op.
+  - `play_game_sfx` with a valid id that is already an active loop plays the sound as a one-off, in addition to the loop.
+  - `game_sfx_volume` can be adjusted while audio is playing - changes take effect immediately on all sfx playing on the 12 game sfx channels.
+  - `play_game_sfx` with a music-typed resource id does nothing.
+  - Setting `game_sfx_enabled` to False while any game sfx is playing stops it; no effect on UI sfx or speech currently playing.
+- When `ui_sfx_enabled` is True:
+  - `play_ui_sfx` with a non-existent id is a silent no-op.
+  - `play_ui_sfx` with a valid id plays the sound at the currently configured UI sound effects volume on one of the 3 UI sfx channels.
+  - `play_ui_sfx` with a valid id but with no free UI sfx channels is a no-op.
+  - `ui_sfx_volume` can be adjusted while audio is playing - changes take effect immediately on all sfx playing on the 3 UI sfx channels.
+  - `play_ui_sfx` with a music-typed resource id does nothing.
+  - Setting `ui_sfx_enabled` to False while any UI sfx is playing stops it; no effect on game sfx or speech currently playing.
+- When `speech_enabled` is True:
+  - `play_speech` with a non-existent id is a silent no-op.
+  - `play_speech` with a valid id plays the sound at the currently configured speech volume on the speech channel.
+  - `play_speech` with a valid id but with no free speech channel "steals" that channel by terminating the speech that was in-progress.
+  - `speech_volume` can be adjusted while audio is playing - changes take effect immediately on currently-playing speech.
+  - `play_speech` with a music-typed resource id does nothing.
+  - Setting `speech_enabled` to False while any speech is playing stops it; no effect on game sfx or ui sfx currently playing.
+- `stop_sfx` (added by spec 06):
+  - `stop_sfx` with a valid id that is currently playing stops it.
+  - `stop_sfx` stops the sound on all channels, even if it was played more than once.
+  - `stop_sfx` with an id that is an active loop stops the loop and removes it from the active
+    set (re-submitting the same set starts it again).
+  - `stop_sfx` with a non-existent id is a silent no-op.
+  - `stop_sfx` with a valid id that is not playing does not disturb other currently playing sfx.
+  - `stop_sfx` with a music-typed id does not affect the currently playing music track.
+  - `stop_sfx` when `game_sfx_enabled`, `ui_sfx_enabled`, and `speech_enabled` are all False is a silent no-op.
+  - `stop_sfx` stops a sound regardless of which `play_*()` method started it.
+- When `music_enabled` is True:
   - `play_music` with a non-existent id is a silent no-op if no music is currently playing.
   - `play_music` with a valid track id starts playing the given track, and loops it when it completes.
   - `play_music` with a different valid id while a track is already playing stops the previous track and plays the new one.
@@ -236,7 +341,11 @@ Simple, short, single-tone sounds are sufficient.
   - stops previously-playing music when given a valid resource id.
   - does NOT stop previously-playing music when given no valid resource ids.
   - when `music_enabled` is false is a silent no-op.
-- Music and sfx volume can be adjusted independently. Currently playing sfx, loops, and music respect the new setting.
+- Volume tests:
+  - adjusting `music_volume` while music is playing has immediate effect on the playing music.
+  - adjusting `game_sfx_volume` while any sfx is playing on any of the 12 game sfx channels has immediate effect on those channels.
+  - adjusting `ui_sfx_volume` while any sfx is playing on any of the 3 ui sfx channels has immediate effect on those channels.
+  - adjusting `speech_volume` while any speech is playing on the speech channel has immediate effect on that channel.
 - Config changes take effect immediately and are persisted via the configuration module.
   - Persistence errors (can't persist new settings) don't stop the new settings from being used.
   - If no errors occur, confirm that the `game.json` file contains the new values.
@@ -253,16 +362,70 @@ Simple, short, single-tone sounds are sufficient.
     startup without `InvalidConfigError`, retaining the user's settings.
   - Setting an enabled flag to a non-boolean value (e.g. `"banana"`) keeps
     the current value and logs a warning.
-  - Enabled flags accept `0`/`1` as booleans, as at config-load time
+  - The `*_enabled` flags accept `0`/`1` as booleans, as at config-load time
     (pydantic coercion).
 
 ## Acceptance criteria
 
 - On startup, is the audio config loaded and applied?
 - On startup, is invalid config properly handled (`InvalidConfigError` raised as described in the Validation section)?
-- Can volume be adjusted at runtime, with immediate effect?
-- Can sfx and music be independently enabled/disabled at runtime, with immediate effect?
+- Can volume be adjusted at runtime, with immediate effect? (applies to each of the `*_volume` controls)
+- Does disabling `game_sfx_enabled` immediately terminate all game sound effects and active loops?
+- Does disabling `ui_sfx_enabled` immediately terminate all UI sound effects?
+- Does disabling `speech_enabled` immediately terminate any currently-playing speech?
+- Does disabling `music_enabled` immediately stop any music track in progress?
 - Are volume and enabled settings changes made at runtime persisted to the game config file?
-- Can client code request playing of non-existent sfx/music ids without error?
-- Can client code request playing of existing sfx/music ids successfully?
+- Can client code request playing of non-existent sfx/speech/music ids without error?
+- Can client code request playing of existing sfx/speech/music ids successfully?
+
+## Dev plan
+
+The original version of this spec doc was underneath the size threshold of 250 lines and therefore had no dev plan.
+The original spec was implemented in a single pass and was flipped to `active` status on 2026-10-03.
+
+Amendment 2026-10-09:
+- dropped `play_sfx()` in favor of new methods `play_game_sfx()`, `play_ui_sfx()`, and `play_speech()`.
+- dropped `sfx_enabled` and `sfx_volume` config property in favor of more granular properties:
+  - `game_sfx_enabled` / `game_sfx_volume`
+  - `ui_sfx_enabled` / `ui_sfx_volume`
+  - `speech_enabled` / `speech_volume`
+- introduced channel reservation system and the 12/3/1 channel allocation for game sfx/ui sfx/speech.
+- updated Testing section with comprehensive tests.
+- updated Acceptance criteria section accordingly.
+- introduced this Dev plan section for implementation of these changes.
+- flipped the document back to `proposed` status to reflect significant drift from the current codebase.
+
+The following dev plan is suggested for this amendment:
+1. Spec doc 06 currently references deprecated method `play_sfx()`.
+   Update that doc to reference `play_ui_sfx()` instead.
+   Search other spec docs for stale references and update them as needed.
+   This must be done first! Doc changes before any code changes, always!
+   **Completed 2026-10-09**
+2. Update configuration to drop the old properties and add the new ones.
+   This is a breaking change for existing game config files, but the game is still very
+   early in development and has not been formally released yet, so this is acceptable.
+   The existing config code will silently drop the now-unrecognized keys - this is fine.
+   Update configuration tests as needed for the new properties.
+   **Completed 2026-10-09**
+3. Implement the channel reservation system and the 12/3/1 allocation.
+   Use constants in `game_constants.py` rather than hard-coding channel ids.
+   Rename the existing `play_sfx()` method to `play_game_sfx()`, and then
+   modify that method and the existing `set_active_loops()` method to play only on
+   the 12 game sfx channels. The other channels are unused at this stage.
+   Update tests for `play_sfx()` as needed for `play_game_sfx()`.
+   Update any tests for `set_active_loops()` as needed.
+   **Completed 2026-10-09**
+4. Implement `play_ui_sfx()` and tests. Implement `play_speech()` and tests.
+   Also add the `ui_sfx_enabled`/`ui_sfx_volume` and `speech_enabled`/`speech_volume`
+   getters/setters on AudioManager (added 2026-10-09 so this sliver of the
+   amendment is not lost between stages).
+   **Completed 2026-10-09**
+5. Final check. Have all stale references to the old methods and config properties
+   been updated in code, comments, docstrings, and other spec docs? Have all
+   tests in the Testing section been updated (if they already existed) or implemented
+   (if they were added by this amendment)? Are the Acceptance criteria all met?
+   Does the test suite pass with no failures? If so, flip this document
+   back to `active` status.
+   **Completed 2026-10-09** - full suite green (659 passed); Testing section and
+   Acceptance criteria verified item by item; document flipped to `active`.
 

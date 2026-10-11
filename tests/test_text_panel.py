@@ -179,21 +179,6 @@ def _busy_channel_indices() -> list[int]:
     ]
 
 
-def _record_play_sfx(manager: audio.AudioManager) -> list[str]:
-    """Replace the singleton's ``play_sfx`` with a recorder.
-
-    The panel's contract is to hand the id to ``play_sfx`` as-is;
-    whether the id resolves is AudioManager's business (spec 05).
-    """
-    played: list[str] = []
-
-    def record(resource_id: str) -> None:
-        played.append(resource_id)
-
-    manager.play_sfx = record
-    return played
-
-
 def _record_stop_sfx(manager: audio.AudioManager) -> list[str]:
     """Replace the singleton's ``stop_sfx`` with a recorder."""
     stopped: list[str] = []
@@ -883,25 +868,25 @@ class TestUIManagerIntegration:
 class TestPanelAudio:
     """Appearance/disappearance audio (spec 06: Audio)."""
 
-    def test_first_update_should_hand_appearance_audio_id_to_play_sfx(
-        self, audio_manager: audio.AudioManager, font_ready: None
+    def test_first_update_should_hand_appearance_audio_id_to_play_ui_sfx(
+        self, audio_manager: audio.AudioManager, record_play_ui_sfx, font_ready: None
     ) -> None:
         # GIVEN a panel with an appearance audio id:
-        played = _record_play_sfx(audio_manager)
+        played = record_play_ui_sfx(audio_manager)
         panel = TextPanel(pygame.Rect(100, 100, 200, 120), audio_on_appear=SFX_PING)
         ui = _register(panel, _theme(TEST_THEME_JSON))
 
         # WHEN the UIManager runs the panel's first frame:
         ui.update([])
 
-        # THEN the id is handed to play_sfx as-is (spec 06: Audio):
+        # THEN the id is handed to play_ui_sfx as-is (spec 06: Audio):
         assert played == [SFX_PING]
 
     def test_appearance_audio_should_be_handed_over_only_once(
-        self, audio_manager: audio.AudioManager, font_ready: None
+        self, audio_manager: audio.AudioManager, record_play_ui_sfx, font_ready: None
     ) -> None:
         # GIVEN a panel with an appearance audio id:
-        played = _record_play_sfx(audio_manager)
+        played = record_play_ui_sfx(audio_manager)
         panel = TextPanel(pygame.Rect(100, 100, 200, 120), audio_on_appear=SFX_PING)
         ui = _register(panel, _theme(TEST_THEME_JSON))
 
@@ -913,11 +898,11 @@ class TestPanelAudio:
         # THEN the appearance audio was requested exactly once:
         assert played == [SFX_PING]
 
-    def test_disappear_should_hand_disappearance_audio_id_to_play_sfx(
-        self, audio_manager: audio.AudioManager, font_ready: None
+    def test_disappear_should_hand_disappearance_audio_id_to_play_ui_sfx(
+        self, audio_manager: audio.AudioManager, record_play_ui_sfx, font_ready: None
     ) -> None:
         # GIVEN an appeared panel with a disappearance audio id:
-        played = _record_play_sfx(audio_manager)
+        played = record_play_ui_sfx(audio_manager)
         panel = TextPanel(
             pygame.Rect(100, 100, 200, 120), audio_on_disappear=SFX_SUSTAINED
         )
@@ -928,14 +913,14 @@ class TestPanelAudio:
         # WHEN the panel is dismissed:
         panel.disappear()
 
-        # THEN the disappearance id is handed to play_sfx as-is:
+        # THEN the disappearance id is handed to play_ui_sfx as-is:
         assert played == [SFX_SUSTAINED]
 
-    def test_without_audio_ids_play_sfx_should_never_be_called(
-        self, audio_manager: audio.AudioManager, font_ready: None
+    def test_without_audio_ids_play_ui_sfx_should_never_be_called(
+        self, audio_manager: audio.AudioManager, record_play_ui_sfx, font_ready: None
     ) -> None:
         # GIVEN a panel with no audio ids at all:
-        played = _record_play_sfx(audio_manager)
+        played = record_play_ui_sfx(audio_manager)
         panel = TextPanel(pygame.Rect(100, 100, 200, 120))
         ui = _register(panel, _theme(TEST_THEME_JSON))
 
@@ -943,14 +928,14 @@ class TestPanelAudio:
         ui.update([])
         panel.disappear()
 
-        # THEN the calls to play_sfx are skipped entirely (spec 06):
+        # THEN the calls to play_ui_sfx are skipped entirely (spec 06):
         assert played == []
 
     def test_disappear_before_first_update_should_play_no_audio(
-        self, audio_manager: audio.AudioManager, font_ready: None
+        self, audio_manager: audio.AudioManager, record_play_ui_sfx, font_ready: None
     ) -> None:
         # GIVEN a panel that has never been updated, with both ids set:
-        played = _record_play_sfx(audio_manager)
+        played = record_play_ui_sfx(audio_manager)
         panel = TextPanel(
             pygame.Rect(100, 100, 200, 120),
             audio_on_appear=SFX_PING,
@@ -969,10 +954,10 @@ class TestPanelAudio:
         assert played == [SFX_PING]
 
     def test_disappear_should_request_in_progress_appearance_audio_be_stopped(
-        self, audio_manager: audio.AudioManager, font_ready: None
+        self, audio_manager: audio.AudioManager, record_play_ui_sfx, font_ready: None
     ) -> None:
         # GIVEN an appeared panel whose appearance audio id is set:
-        _record_play_sfx(audio_manager)
+        record_play_ui_sfx(audio_manager)
         stopped = _record_stop_sfx(audio_manager)
         panel = TextPanel(pygame.Rect(100, 100, 200, 120), audio_on_appear=SFX_PING)
         ui = _register(panel, _theme(TEST_THEME_JSON))
@@ -1026,10 +1011,10 @@ class TestPanelAudio:
         assert _busy_channel_indices() == []
 
     def test_set_audio_on_appear_before_update_should_change_the_id(
-        self, audio_manager: audio.AudioManager, font_ready: None
+        self, audio_manager: audio.AudioManager, record_play_ui_sfx, font_ready: None
     ) -> None:
         # GIVEN a panel whose appearance id is replaced before appearing:
-        played = _record_play_sfx(audio_manager)
+        played = record_play_ui_sfx(audio_manager)
         panel = TextPanel(
             pygame.Rect(100, 100, 200, 120), audio_on_appear="audio/sfx/placeholder.wav"
         )
@@ -1043,10 +1028,10 @@ class TestPanelAudio:
         assert played == [SFX_PING]
 
     def test_set_audio_on_appear_with_none_should_unset_it(
-        self, audio_manager: audio.AudioManager, font_ready: None
+        self, audio_manager: audio.AudioManager, record_play_ui_sfx, font_ready: None
     ) -> None:
         # GIVEN a panel whose appearance id is unset before appearing:
-        played = _record_play_sfx(audio_manager)
+        played = record_play_ui_sfx(audio_manager)
         panel = TextPanel(
             pygame.Rect(100, 100, 200, 120), audio_on_appear=SFX_PING
         )
@@ -1060,11 +1045,11 @@ class TestPanelAudio:
         assert played == []
 
     def test_set_audio_on_disappear_before_disappear_should_change_the_id(
-        self, audio_manager: audio.AudioManager, font_ready: None
+        self, audio_manager: audio.AudioManager, record_play_ui_sfx, font_ready: None
     ) -> None:
         # GIVEN an appeared panel whose disappearance id is replaced
         # before dismissal:
-        played = _record_play_sfx(audio_manager)
+        played = record_play_ui_sfx(audio_manager)
         panel = TextPanel(
             pygame.Rect(100, 100, 200, 120),
             audio_on_disappear="audio/sfx/placeholder.wav",
@@ -1100,12 +1085,12 @@ class TestAudioFixtureHygiene:
         yield
 
     def test_audio_manager_fixture_should_install_the_global_singleton(
-        self, audio_manager: audio.AudioManager
+        self, audio_manager: audio.AudioManager, record_play_ui_sfx
     ) -> None:
         # GIVEN the fixture initialized the module-level singleton the
         # way startup does, and a test mutated the instance the way the
         # recorder helpers do:
-        _record_play_sfx(audio_manager)
+        record_play_ui_sfx(audio_manager)
 
         # THEN get_audio_manager() hands out exactly that instance -
         # this test deliberately leaves the global set; cleaning it up

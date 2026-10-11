@@ -32,6 +32,16 @@ Rendering contract (spec 09, as amended 2026-10-08):
 Click contract (spec 04: Widgets / spec 09: Button events): a click is
 a left-mouse press *and* release both inside the rect; drag-off and
 drag-in do not fire ``on_click``.
+
+Audio contract (spec 09: Button audio):
+
+- A button click plays ``UI_SFX_ACCEPT`` - whether or not an
+  ``on_click`` callback is wired up; only enabled buttons click.
+- ``on_hover_enter()`` (the spec 04 hook, as amended by spec 07) plays
+  ``UI_SFX_HOVER``; the UIManager already keeps disabled widgets from
+  ever reaching the hook.
+- Resource ids are handed to the global AudioManager as-is; the widget
+  never resolves them or tracks whether audio actually plays (spec 05).
 """
 from __future__ import annotations
 
@@ -41,6 +51,7 @@ import pygame
 from loguru import logger
 
 from dtd import game_constants
+from dtd.audio import get_audio_manager
 from dtd.ui import Scale, Theme, Widget, current_scale, state_colors
 
 #: An icon/text layout slot: the scaled surface and its blit position
@@ -93,8 +104,35 @@ class Button(Widget):
             elif event.type == pygame.MOUSEBUTTONUP and event.button == 1:
                 clicked = self._pressed and self.hit(scale.mouse(event.pos))
                 self._pressed = False
-                if clicked and self.on_click is not None:
-                    self.on_click()
+                if clicked:
+                    # The accept sound confirms the *action*, so it
+                    # plays whether or not a callback is wired up
+                    # (spec 09: Button audio). The enabled guard above
+                    # covers the disabled case.
+                    self._play_ui_sfx(game_constants.UI_SFX_ACCEPT)
+                    if self.on_click is not None:
+                        self.on_click()
+
+    # -- audio (spec 09: Button audio) --------------------------------------
+    def on_hover_enter(self) -> None:
+        """Play the shared hover sound on a non-hovered -> hovered
+        transition (the spec 04 hook, as amended by spec 07).
+
+        The UIManager never invokes this on disabled widgets, so the
+        "no audio while disabled" rule comes for free from the
+        framework.
+        """
+        self._play_ui_sfx(game_constants.UI_SFX_HOVER)
+
+    def _play_ui_sfx(self, resource_id: str) -> None:
+        """Hand the id to the global AudioManager as-is (spec 09).
+
+        The widget never resolves resource ids and never checks whether
+        the sound actually plays: disabled UI sound effects, unresolvable
+        ids, and exhausted channels are all AudioManager's business
+        (spec 05).
+        """
+        get_audio_manager().play_ui_sfx(resource_id)
 
     # -- label point size (spec 09: set_font_point_size) -------------------
     def set_font_point_size(self, size: int | None) -> None:

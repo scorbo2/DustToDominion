@@ -2,4 +2,4 @@
 __pycache__/
 *.pyc
 .pytest_cache/
-resources/**
+resources/audio/ui/

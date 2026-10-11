@@ -10,6 +10,9 @@ Guarantees required by spec 00:
 - the dtd.audio module-level AudioManager singleton is unset before and after
   every test, so tests cannot leak a (possibly mutated) singleton into one another
 - seeded RNG and an injected (fake) clock available to tests
+- opt-in audio helpers for widget tests: ``silent_audio_manager`` (an
+  initialized singleton over a nothing-resolves loader) and the
+  ``record_play_ui_sfx`` recorder factory
 """
 from __future__ import annotations
 
@@ -37,6 +40,8 @@ import pygame
 # pre-env-vars import above - same invariant, one hop removed (PR #31
 # review).
 from dtd import audio
+from dtd.game_config import AudioConfig
+from dtd.resource_loader import ResourceLoader
 
 
 @pytest.fixture(autouse=True)
@@ -141,6 +146,49 @@ def mixer_ready() -> None:
     """
     if not pygame.mixer.get_init():
         pygame.mixer.init()
+
+
+@pytest.fixture
+def silent_audio_manager(mixer_ready: None) -> Iterator[audio.AudioManager]:
+    """The global AudioManager singleton, initialized but resolving nothing.
+
+    Widgets hand UI sfx ids straight to ``get_audio_manager()`` (specs
+    07/09: widget audio), so widget tests need the singleton to exist
+    even when they assert nothing about audio - this mirrors the startup
+    pattern (mixer_ready + init_audio_manager) over a bare loader, and
+    ``play_ui_sfx`` with an unresolvable id is a silent no-op (spec 05).
+    Tests that need real sounds build their own singleton over a
+    synthesized loader instead (see test_text_panel.py).
+    """
+    manager = audio.init_audio_manager(ResourceLoader(), AudioConfig())
+    try:
+        yield manager
+    finally:
+        # Keep the module global clean (issue #23 convention); the
+        # autouse clean_audio_singleton is the backstop, not the fix.
+        audio._audio_manager = None
+
+
+@pytest.fixture
+def record_play_ui_sfx():
+    """Factory: swap a manager's ``play_ui_sfx`` for a recorder.
+
+    Returns a ``record_ids(manager) -> list[str]`` factory; the returned
+    list collects every resource id handed to ``play_ui_sfx``. The
+    widget's contract is to pass ids through as-is - whether they
+    resolve is AudioManager's business (spec 05).
+    """
+
+    def record_ids(manager: audio.AudioManager) -> list[str]:
+        played: list[str] = []
+
+        def record(resource_id: str) -> None:
+            played.append(resource_id)
+
+        manager.play_ui_sfx = record
+        return played
+
+    return record_ids
 
 
 @pytest.fixture

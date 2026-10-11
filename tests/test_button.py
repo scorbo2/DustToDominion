@@ -2,7 +2,8 @@
 
 Mouse events are synthesized against a dummy display (hermetic, per spec
 09: Testing); pixel assertions read the display surface after
-``ui.draw``.
+``ui.draw``. Audio assertions use the shared ``silent_audio_manager`` +
+``record_play_ui_sfx`` fixtures (spec 09: Button audio).
 """
 from __future__ import annotations
 
@@ -10,9 +11,20 @@ import pygame
 import pytest
 from loguru import logger
 
+from dtd import audio, game_constants
 from dtd.resource_loader import ResourceLoader
 from dtd.ui import Theme, UIManager
 from dtd.widgets.button import Button
+
+
+@pytest.fixture(autouse=True)
+def _audio_singleton(silent_audio_manager: audio.AudioManager) -> None:
+    """Every Button test needs the AudioManager singleton present.
+
+    Clicks and UIManager hover hand ids to ``get_audio_manager()``
+    (spec 09: Button audio), so even the rendering and click-handling
+    tests would raise without it.
+    """
 
 
 # Distinguishable custom theme: red foreground / green background in the
@@ -821,4 +833,97 @@ class TestButtonClick:
         ui.update([_down((320, 180)), _up((320, 180))])
 
         # THEN exactly one click has fired in total:
+        assert len(clicks) == 1
+
+
+class TestButtonAudio:
+    def test_click_should_play_ui_sfx_accept(
+        self,
+        font_ready: None,
+        silent_audio_manager: audio.AudioManager,
+        record_play_ui_sfx,
+    ) -> None:
+        # GIVEN an enabled button and a play_ui_sfx recorder:
+        played = record_play_ui_sfx(silent_audio_manager)
+        pygame.display.set_mode((1280, 720))
+        button, ui, clicks = _button_ui(pygame.Rect(0, 0, 960, 540), _theme())
+
+        # WHEN a complete left-button click happens inside the rect,
+        # THEN the accept id is handed to AudioManager as-is, and the
+        # callback still fires (spec 09: Button audio):
+        ui.update([_down((320, 180)), _up((320, 180))])
+        assert played == [game_constants.UI_SFX_ACCEPT]
+        assert len(clicks) == 1
+
+    def test_click_without_on_click_should_still_play_ui_sfx_accept(
+        self,
+        font_ready: None,
+        silent_audio_manager: audio.AudioManager,
+        record_play_ui_sfx,
+    ) -> None:
+        # GIVEN an enabled button with no callback wired up and a recorder:
+        played = record_play_ui_sfx(silent_audio_manager)
+        pygame.display.set_mode((1280, 720))
+        button, ui, _ = _button_ui(
+            pygame.Rect(0, 0, 960, 540), _theme(), on_click=None
+        )
+
+        # WHEN a complete click happens,
+        # THEN the sound confirms the action regardless of the callback
+        # (spec 09: Button audio):
+        ui.update([_down((320, 180)), _up((320, 180))])
+        assert played == [game_constants.UI_SFX_ACCEPT]
+
+    def test_disabled_button_click_should_play_no_audio(
+        self,
+        font_ready: None,
+        silent_audio_manager: audio.AudioManager,
+        record_play_ui_sfx,
+    ) -> None:
+        # GIVEN a disabled button and a recorder:
+        played = record_play_ui_sfx(silent_audio_manager)
+        pygame.display.set_mode((1280, 720))
+        button, ui, _ = _button_ui(pygame.Rect(0, 0, 960, 540), _theme())
+        button.enabled = False
+
+        # WHEN press+release happen inside the rect,
+        # THEN no audio is attempted (spec 09: clicks only count when
+        # the button is not disabled):
+        ui.update([_motion((320, 180)), _down((320, 180)), _up((320, 180))])
+        assert played == []
+
+    def test_on_hover_enter_should_play_ui_sfx_hover(
+        self,
+        font_ready: None,
+        silent_audio_manager: audio.AudioManager,
+        record_play_ui_sfx,
+    ) -> None:
+        # GIVEN an enabled button and a recorder:
+        played = record_play_ui_sfx(silent_audio_manager)
+        pygame.display.set_mode((1280, 720))
+        button, ui, _ = _button_ui(pygame.Rect(0, 0, 960, 540), _theme())
+
+        # WHEN the hover-enter hook fires (invoked directly: the
+        # transition itself is UIManager behavior, tested in
+        # test_ui.py),
+        # THEN the hover id is handed to AudioManager as-is:
+        button.on_hover_enter()
+        assert played == [game_constants.UI_SFX_HOVER]
+
+    def test_unresolvable_audio_ids_should_not_raise_and_not_break_clicks(
+        self,
+        font_ready: None,
+        silent_audio_manager: audio.AudioManager,
+    ) -> None:
+        # GIVEN the real play_ui_sfx over a loader that resolves nothing
+        # (the shared fixture's bare loader: no recorder installed):
+        pygame.display.set_mode((1280, 720))
+        button, ui, clicks = _button_ui(pygame.Rect(0, 0, 960, 540), _theme())
+
+        # WHEN a click and a hover-enter occur while both core UI sfx
+        # ids are unresolvable,
+        # THEN no error is raised (AudioManager's silent no-op, spec 05)
+        # and the click still fires:
+        ui.update([_down((320, 180)), _up((320, 180))])
+        button.on_hover_enter()
         assert len(clicks) == 1

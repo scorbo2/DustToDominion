@@ -3,11 +3,12 @@
 Covers the pure ``sanitize_choices`` pipeline, construction (including
 ``initial_index`` mapping and the empty-list auto-disable), the
 ``enabled`` property override, the selection API, state colors through a
-real UIManager, pager mouse handling, and the geometry edge cases
-(narrow, tall, and thick-bordered widgets, glyph-less tiny pagers,
-clipped text). Mouse events are synthesized and pixel assertions read
-the display surface after ``ui.draw`` at the design resolution (scale 1,
-following the Button test patterns).
+real UIManager, pager mouse handling, the geometry edge cases (narrow,
+tall, and thick-bordered widgets, glyph-less tiny pagers, clipped
+text), and the audio contract (spec 07: ChoiceList audio). Mouse events
+are synthesized and pixel assertions read the display surface after
+``ui.draw`` at the design resolution (scale 1, following the Button
+test patterns).
 """
 from __future__ import annotations
 
@@ -16,7 +17,7 @@ from collections.abc import Callable
 import pygame
 import pytest
 
-from dtd import game_constants
+from dtd import audio, game_constants
 from dtd.resource_loader import ResourceLoader
 from dtd.ui import Theme, UIManager
 from dtd.widgets.choice_list import ChoiceList, sanitize_choices
@@ -109,6 +110,16 @@ def _up(pos: tuple[int, int], button: int = 1) -> pygame.event.Event:
 def _click(pos: tuple[int, int], button: int = 1) -> list[pygame.event.Event]:
     """A complete left-button click at ``pos`` (press then release)."""
     return [_down(pos, button), _up(pos, button)]
+
+
+@pytest.fixture(autouse=True)
+def _audio_singleton(silent_audio_manager: audio.AudioManager) -> None:
+    """Every ChoiceList test needs the AudioManager singleton present.
+
+    Counted pager clicks and UIManager hover hand ids to
+    ``get_audio_manager()`` (spec 07: ChoiceList audio), so even the
+    rendering and click-handling tests would raise without it.
+    """
 
 
 def _screen() -> pygame.Surface:
@@ -812,3 +823,99 @@ class TestItemTextRendering:
         # background: the glyph never reaches that column, so any ink
         # there could only come from unclipped item text:
         assert screen.get_at((59, 30)) == NORMAL_BG
+
+
+class TestChoiceListAudio:
+    #: Same working geometry as TestPagerClicks: pager square centers.
+    LEFT = (30, 30)
+    RIGHT = (370, 30)
+
+    def test_clicking_either_pager_with_multiple_items_should_play_ui_sfx_accept(
+        self,
+        silent_audio_manager: audio.AudioManager,
+        record_play_ui_sfx,
+    ) -> None:
+        # GIVEN a three-item ChoiceList and a play_ui_sfx recorder:
+        played = record_play_ui_sfx(silent_audio_manager)
+        widget, ui, recorded = _choice_ui(
+            pygame.Rect(0, 0, 400, 60), ["alpha", "beta", "gamma"]
+        )
+
+        # WHEN both pager controls are clicked,
+        # THEN each counted click hands UI_SFX_ACCEPT to AudioManager
+        # as-is (spec 07: ChoiceList audio):
+        ui.update(_click(self.RIGHT))
+        ui.update(_click(self.LEFT))
+        assert played == [game_constants.UI_SFX_ACCEPT] * 2
+        assert recorded == ["beta", "alpha"]
+
+    def test_disabled_choice_list_pager_click_should_play_no_audio(
+        self,
+        silent_audio_manager: audio.AudioManager,
+        record_play_ui_sfx,
+    ) -> None:
+        # GIVEN a disabled three-item ChoiceList and a recorder:
+        played = record_play_ui_sfx(silent_audio_manager)
+        widget, ui, _ = _choice_ui(
+            pygame.Rect(0, 0, 400, 60), ["alpha", "beta", "gamma"]
+        )
+        widget.enabled = False
+
+        # WHEN a pager is clicked,
+        # THEN no audio is attempted (spec 07: pager clicks only count
+        # when the widget is not disabled):
+        ui.update(_click(self.RIGHT))
+        assert played == []
+
+    def test_single_item_pager_click_should_play_no_audio(
+        self,
+        silent_audio_manager: audio.AudioManager,
+        record_play_ui_sfx,
+    ) -> None:
+        # GIVEN a ChoiceList with exactly one item and a recorder:
+        played = record_play_ui_sfx(silent_audio_manager)
+        widget, ui, _ = _choice_ui(pygame.Rect(0, 0, 400, 60), ["alpha"])
+
+        # WHEN either pager is clicked,
+        # THEN the inoperative click plays nothing (spec 07: pager
+        # clicks only count with more than one option present):
+        ui.update(_click(self.RIGHT))
+        ui.update(_click(self.LEFT))
+        assert played == []
+
+    def test_on_hover_enter_should_play_ui_sfx_hover(
+        self,
+        silent_audio_manager: audio.AudioManager,
+        record_play_ui_sfx,
+    ) -> None:
+        # GIVEN a three-item ChoiceList and a recorder:
+        played = record_play_ui_sfx(silent_audio_manager)
+        widget, _, _ = _choice_ui(
+            pygame.Rect(0, 0, 400, 60), ["alpha", "beta", "gamma"]
+        )
+
+        # WHEN the hover-enter hook fires (invoked directly: the
+        # transition itself is UIManager behavior, tested in
+        # test_ui.py),
+        # THEN the hover id is handed to AudioManager as-is:
+        widget.on_hover_enter()
+        assert played == [game_constants.UI_SFX_HOVER]
+
+    def test_unresolvable_audio_ids_should_not_raise_and_not_break_paging(
+        self,
+        silent_audio_manager: audio.AudioManager,
+    ) -> None:
+        # GIVEN the real play_ui_sfx over a loader that resolves nothing
+        # (the shared fixture's bare loader; no recorder installed):
+        widget, ui, recorded = _choice_ui(
+            pygame.Rect(0, 0, 400, 60), ["alpha", "beta", "gamma"]
+        )
+
+        # WHEN a counted pager click and a hover-enter occur while both
+        # core UI sfx ids are unresolvable,
+        # THEN no error is raised (AudioManager's silent no-op, spec 05)
+        # and paging is unaffected:
+        ui.update(_click(self.RIGHT))
+        widget.on_hover_enter()
+        assert widget.get_current_item() == "beta"
+        assert recorded == ["beta"]
