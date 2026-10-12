@@ -11,11 +11,6 @@ described in `10-ui-widget-label.md` by adding mouse interaction and
 a box on the left side of the label that can be checked or unchecked
 to indicate the control's boolean status.
 
-## Amendments to previous spec docs
-
-This spec amends `10-ui-widget-label.md` to document `Label._state_colors` and `Label._draw_text`
-as subclass extension hooks with explanatory comments.
-
 ## Additional dependencies
 
 None! This widget relies entirely on the UI framework introduced by `04-ui-widgets.md`, which itself
@@ -233,60 +228,22 @@ the box-aware re-layout on border-width and rect changes.
    temporarily out of sync with the code. Append a new stage to its dev plan to describe
    the needed change. Implement the change. Mark the appended stage as complete with
    today's date, and then flip that doc back to `active` status.
-   **Completed 2026-10-11** (spec 10 gained a "Subclass extension hooks" section and a
-   dev plan stage 1; `label.py` class/method docstrings now document `_state_colors`
-   and `_draw_text` as supported extension points with `draw()` inherited as-is.
-   Docs and comments only - no behavior change. Full suite green at 753 tests.
-   Spec 10 flipped back to `active`.)
+   **Completed 2026-10-11** (Full suite green at 753 tests.)
 2. Create the `Checkbox` class as an extension of `Label`. Add drawing of the box in unchecked state only.
    Stub out `set_checked()` but do not implement it yet. Just get the box to render with the text,
    and ensure both left-alignment and centering work as expected. Ensure auto-scaling works (reuse
    the shared helper for this, do not duplicate text scaling logic). Ensure fixed point size works.
    Implement mouse hovering cosmetic effects.
-   **Completed 2026-10-11** (`dtd/widgets/checkbox.py`: `Checkbox(Label)` overriding the two
-   Label extension hooks. Box side is `zero_glyph_height` - a new `text_layout` helper that
-   is the single definition of `font.size("0")[1]`, with `zero_glyph_margin` recomposed on
-   top of it, so the box metric and the margin rule cannot drift (approved scalability
-   refinement). Auto-scale delegates to the shared `largest_fitting_size` with a box-aware
-   fit predicate (box + half-box gap + text horizontally, taller of box/text vertically,
-   same zero-glyph margin). Box strokes are 2 design pixels with a screen floor of 2; the
-   box keeps square corners under a rounded theme. Empty/blank/None text uses the `0` glyph
-   as a math stand-in that is never rendered. Hover cosmetics via the `_state_colors`
-   override; hover audio (`UI_SFX_HOVER`) implemented here alongside hover - the dev plan
-   assigns no stage to audio, and click audio will arrive with clicks in stage 3.
-   `set_checked()` is an explicit no-op stub; `initially_checked`/`on_click` are accepted
-   and stored but unused until stage 3. One gotcha pinned by the tests: a synthesized
-   MOUSEMOTION over an enabled Checkbox fires the audio hook, so hover tests need the
-   `silent_audio_manager` singleton, exactly like the Button suite. 35 tests in
-   tests/test_checkbox.py. Full suite green at 788 tests.)
+   **Completed 2026-10-11** (Full suite green at 788 tests.)
 3. Implement `set_checked()` and the drawing of the X symbol. Implement support for mouse clicks
    on non-disabled Checkboxes to toggle their boolean status. Implement `is_checked()`.
    Implement callbacks via `on_click`.
-   **Completed 2026-10-11** (`set_checked()` stores the status - works while disabled, silent
-   and callback-free; `is_checked()` reports it. The X is two corner-to-corner `draw.line`
-   diagonals in the state foreground color, never a glyph (spec 11: font-independent mark).
-   `update()` implements the Button-style press-and-release contract: left button only,
-   both inside the rect, then toggle -> `UI_SFX_ACCEPT` -> `on_click`, in that order - the
-   doc does not pin the callback's ordering, so a test pins it: the callback observes the
-   already-toggled status via `is_checked()`. `initially_checked` never fires the callback.
-   The two stage 2 stub tests retired; 18 new tests (51 in the module): X pixel pins
-   (center + near-corner diagonal points), same-value no-ops, clearing, disabled
-   `set_checked`, the full click matrix (drag-off/drag-in/right-button/disabled), the
-   `on_click` matrix, and the accept-sound matrix. Gotcha pinned: thick-line probes must
-   sit exactly on the diagonal's path - pygame's wide-line rasterization does not cover
-   pixels one column off it. Full suite green at 804 tests.)
+   **Completed 2026-10-11** (Full suite green at 804 tests.)
  4. Final verification step - are acceptance criteria met? Do all tests pass? Update this spec doc
     to change all "proposes" and future tense prose to "describes" and present tense. Update the code
     comments and docstrings to remove any "TODO"-style comments such as "this will land in the next stage".
     Flip this document to `active` status.
-   **Completed 2026-10-11** (All ten acceptance criteria verified against named tests, one per
-   criterion. Prose converted to present tense following the spec 10 stage 9 precedent: the
-   structural sections describe, while the Testing section's requirement bullets and the
-   mutator wording keep the house "should/will" style shared with the active spec 10. The
-    `on_click` ordering note gained the observable consequence (`is_checked()` shows the new
-    value) and the Testing section gained the matching pin. One cryptic stage reference
-    reworded in `checkbox.py`; historical provenance notes elsewhere kept. Full suite green
-    at 804 tests. Status flipped to `active`.)
+   **Completed 2026-10-11** (Full suite green at 804 tests.)
 5. Post-review fix: the checked-box X overshot the box's corners - `pygame.Rect` corner
    attributes are exclusive while `draw.line` endpoints are inclusive, and thick-line caps
    overshoot further, so the raw corners poked the X outside the box outline. The X now
@@ -295,10 +252,5 @@ the box-aware re-layout on border-width and rect changes.
    behavior bullets (`set_opaque`, the `set_border_width` validation matrix, border color
    rendering, blank/empty text) are replaced by a single note delegating them to
    `tests/test_label.py`, and the empty-text bullet is narrowed to the None case actually
-   tested in the Checkbox suite.
-   **Completed 2026-10-11** (`checkbox.py`: the X is drawn on a box-sized SRCALPHA
-   surface, then blitted at `box.topleft` - `inner.subsurface(box)` was rejected because
-   it raises when a pinned oversized size puts the box partly outside the inner rect,
-   while blit clips gracefully. New test pins the ink bounding box of a checked text-less
-   Checkbox to the box rect exactly. Full suite green at 805 tests.)
+   tested in the Checkbox suite. **Completed 2026-10-11** (Full suite green at 805 tests.)
 

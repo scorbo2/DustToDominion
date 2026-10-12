@@ -12,29 +12,6 @@ to the existing Button widget, but with `<` and `>` pager controls on the left a
 of the widget to cycle through the available list options one at a time, with list-wrapping
 at both ends of the list. The currently-selected list item is displayed in the center of the widget.
 
-## Amendments to previous spec docs
-
-This spec amends the 04 spec to add support for notifying widgets when they transition
-from a non-hovered state to a hovered state:
-
-1. Add a no-op base-class hook to the `Widget` class: `on_hover_enter()`.
-2. Modify `UIManager` to invoke this hook when transitioning from a non-hovered
-   state to a hovered state (UIManager already owns the hover state, so this change
-   should be minor in implementation). `UIManager` should not invoke this hook
-   on a Widget that is disabled, or on a Widget that is selected.
-
-Tests to be added to the 04 spec doc as part of the Amendments to previous spec docs section:
-- `UIManager` invokes `Widget.on_hover_enter()` when a non-disabled Widget transitions from non-hovered
-  state to hovered state.
-- `UIManager` does not invoke `Widget.on_hover_enter()` on a disabled widget.
-- `UIManager` does not invoke `Widget.on_hover_enter()` on a selected widget.
-- If a Widget is disabled while in the hovered state, then re-enabled while still in the hovered
-  state, then `Widget.on_hover_enter()` is invoked again (as we are technically transitioning from
-  a non-hovered state to a hovered state).
-- If a Widget is selected while in the hovered state, then de-selected while still in the hovered
-  state, then `Widget.on_hover_enter()` is invoked again (as we are technically transitioning from
-  a non-hovered state to a hovered state).
-
 ## ChoiceList details
 
 There is no keyboard interaction for this widget - the user must use the mouse to click the
@@ -339,10 +316,9 @@ implementation plan is suggested (each stage after 1 should include tests):
    Clean up any stale code comments or docstrings added by previous stages such as
    "will be done in stage N". Upon completion, flip the status of this document from "proposed" to "active".
    **Completed 2026-10-05**
-5. Amendment 2026-10-10: implement the "Amendments to previous spec docs" section for the 04 spec.
+5. Amendment 2026-10-10: Amend spec 04 to add a `Widget.on_hover_enter()` no-op hook,
+   and have `UIManager` invoke it on non-hovered -> hovered transitions.
    Flip spec 04 from `active` to `proposed`.
-   Add the new hook to the Widget class, implement the hook calling logic in the UIManager class,
-   and add all tests mentioned in the "Amendments to previous spec docs" section.
    Append a new stage to the Dev plan in spec 04 to track this work, and reference this 07
    doc as the source of that amendment (with today's date). If all tests pass upon completion
    of this work, flip the 04 spec back to `active`.

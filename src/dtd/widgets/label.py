@@ -61,6 +61,7 @@ def _validated_border_width(width: object, source: str) -> int:
     the mutator.
     """
     if isinstance(width, bool) or not isinstance(width, int) or width < 0:
+        # Brace formatting required; loguru's %-style args are silently dropped
         logger.warning(
             "label.{}: invalid border width {!r}; disabling the border", source, width
         )

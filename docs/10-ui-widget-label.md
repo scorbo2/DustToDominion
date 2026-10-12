@@ -11,47 +11,6 @@ events. It displays a simple, single-line text label, either scaled to
 fit the widget's rect, or rendered at a caller-supplied font size, with
 clipping at the inner rect boundary.
 
-## Amendments to previous spec docs
-
-### TitleScreen should make use of Label for title display
-
-This doc amends the `08-title-screen.md` spec to mention that the game title should
-be displayed using a Label widget with the following characteristics:
-- centered text
-- selected
-- fixed font point size of 80
-- non-opaque
-- border width of 0
-
-The implementation note in the 08 doc regarding caching of the rendered title
-text should be removed. That caching code and its associated tests should be removed.
-This initial Label spec does not implement caching; a future amendment may add this.
-
-### Extract text auto-scale logic from the existing Button class
-
-This doc amends the `09-ui-widget-button.md` spec to mention that text auto-scale
-logic should live in its own `dtd/widgets/text_layout.py` module, so that it can
-be re-used not only by this widget, but by future widgets as well. The existing
-Button tests that check Button's auto-scale behavior should be repointed to this
-new module, to serve as a behavioral pin.
-
-### Extract ChoiceList's margin-aware auto-scale into the shared module as well
-
-Discovered during stage 2 of the Dev plan: the existing ChoiceList widget (spec 07)
-carries its own private margin-aware auto-scale search. This doc amends the
-`07-ui-widget-choice-list.md` spec to mention that this search should also move into
-the shared `dtd/widgets/text_layout.py` module. The shared binary search takes an
-optional fit-predicate parameter plus an optional fallback value (returned when even
-point size 1 does not fit - ChoiceList's item text clips at size 1, its pager glyphs
-draw nothing). A fit predicate is used rather than a plain margin parameter because the
-widgets genuinely disagree on what "fits" means: Button measures the font's line height,
-while ChoiceList and this widget measure the rendered glyph extent plus a margin - and
-for text with descenders those differ. The "half the height of the `0` character"
-margin rule that both spec 07 and this widget require is implemented once, as the
-module's `zero_glyph_margin` helper, with a ready-made margin-aware predicate built on
-it. ChoiceList's existing pixel-level tests remain as integration pins; the
-margin-aware search semantics are pinned directly against the shared module.
-
 ## Additional dependencies
 
 None! This widget relies entirely on the UI framework introduced by `04-ui-widgets.md`, which itself
@@ -67,14 +26,10 @@ All mouse events are ignored:
 - Labels do not respond to mouse hover events. The `*Hover` theme colors are never used.
 - Labels do not respond to mouse clicks.
 
-Labels can be selected. This is a cosmetic change only, causing the label to switch
-from the `*Normal` theme colors to the `*Selected` theme colors.
-
-Labels CAN be disabled. This is a cosmetic change only, causing the label to switch
-from the `*Normal` theme colors to the `*Disabled` theme colors.
-
-A Label that is both selected and disabled renders as disabled, as per the precedence
-note in the 04 spec.
+Cosmetic events:
+- Labels can be selected: cosmetic change only. Use `*Selected` theme colors.
+- Labels can be disabled: cosmetic change only. Use `*Disabled` theme colors.
+- Note: selected+disabled renders as disabled, as per spec 04's precedence note.
 
 ## Label options
 
@@ -229,17 +184,14 @@ must stay green.
 1. Amendments to the 08 and 09 spec docs come first! Flip both specs back
    to `proposed` state to reflect that the docs and the code are temporarily out of sync.
    Append a new dev stage to each doc's Dev plan to briefly explain the change.
-   **Completed 2026-10-11** (both docs amended and flipped to `proposed`; full suite
-   green at 688 tests - docs-only change)
+   **Completed 2026-10-11** (full suite green at 688 tests - docs-only change)
 2. Implement the spec 09 changes to extract the text auto-scale logic, and adjust
    all existing Button tests that reference it. Label depends directly on this
    logic, so this must be done before any Label code is written.
    Mark the new stage in the 09 Dev plan section as complete with today's date.
    Flip the 09 spec back to `active` status on successful completion of this stage.
-   **Completed 2026-10-11** (`dtd/widgets/text_layout.py` created; Button delegates;
-   algorithm pinned directly in tests/test_text_layout.py; 09 flipped back to `active`.
-   Full suite green at 693 tests. This stage surfaced the ChoiceList duplicate, which
-   became the new stage 3 below.)
+   **Completed 2026-10-11** (Full suite green at 693 tests. This stage surfaced
+   the ChoiceList duplicate, which became the new stage 3 below.)
 3. Amendment per spec 07 (discovered during stage 2): flip the 07 spec to `proposed`
    and add the amendment note and a dev stage to it. Extend the shared `text_layout`
    module with an optional fit-predicate parameter and an optional fallback value, plus
@@ -250,91 +202,30 @@ must stay green.
    tests/test_text_layout.py; ChoiceList's pixel tests remain as integration pins.
    Mark the new stage in the 07 Dev plan complete with today's date and flip the 07
    spec back to `active` on successful completion.
-   **Completed 2026-10-11** (`text_layout` gained `fits`/`fallback` parameters,
-   `zero_glyph_margin`, `fits_line_height`, and `margin_fit_predicate`; ChoiceList
-   delegates for both item text and pager glyphs; 5 new direct pins in
-   tests/test_text_layout.py; all ChoiceList integration tests passed unchanged.
-   Full suite green at 698 tests. 07 flipped back to `active`.)
+   **Completed 2026-10-11** (Full suite green at 698 tests; all ChoiceList
+   integration tests passed unchanged).
 4. Implement Label with stubbed-out mutators. Defaults only at this stage (auto-scale
    left-align, opaque). Implement disable/re-enable. Make use of the new shared
    auto-scale module created by stages 2 and 3.
-   **Completed 2026-10-11** (`dtd/widgets/label.py`: constructor with text/rect/
-   border_width, state colors via the shared `state_colors` precedence (hover never
-   passed), opaque fill + border honoring corner radius, margin-aware auto-scale via
-   `text_layout` with left-align at the margin and vertical centering; the four
-   mutators are explicit no-op stubs until their stages. 26 tests in
-   tests/test_label.py covering the state-color matrix, blank/empty/None text,
-   margin application, clipping at the inner rect, rect-mutation relayout, corner
-   radius, ignored mouse events, and the stub no-ops. Full suite green at 724 tests.)
+   **Completed 2026-10-11** (Full suite green at 724 tests.)
 5. Implement `set_font_point_size()` to allow disabling auto-scale in favor of fixed
-   font point size.
-   **Completed 2026-10-11** (`Label.set_font_point_size` validates like Button's
-   spec 09 twin - bool/non-int/non-positive warn and fall back to auto-scale, None
-   re-enables silently; pinned sizes convert design points to pixels with floor and
-   clip at the inner rect, with margin placement applying to the effective size
-   pinned or chosen alike. Also hoisted the duplicated `_MARGIN_FITS` constants from
-   label.py and choice_list.py into `text_layout.ZERO_GLYPH_MARGIN_FITS` - one
-   definition for the margin rule, ready for the upcoming Checkbox. 9 new tests in
-   tests/test_label.py; ChoiceList's pixel tests passed unchanged. Full suite green
-   at 733 tests.)
+   font point size. **Completed 2026-10-11** (Full suite green at 733 tests.)
 6. Implement `set_text_centered()` to allow centering label text.
-   **Completed 2026-10-11** (`Label.set_text_centered` stores the
-   preference; `_draw_text` centers with `(inner.w - surface.w) // 2` -
-   identical whether the size was chosen or pinned. Note: centering
-   inside the margin-shrunk box and inside the full inner rect are the
-   same point, since the margin is symmetric; oversized centered text
-   gets a negative x and clips equally on both sides at the inner
-   boundary. Same-value calls are no-ops by construction (layout
-   happens at draw time). 5 new tests in tests/test_label.py: centered
-   auto-scaled and pinned placement, both-sides clipping (ink reaches
-   both extreme columns, unlike left-alignment's single-edge cut),
-   toggle back to left-alignment, and the same-value no-op pin. Full
-   suite green at 738 tests.)
+   **Completed 2026-10-11** (Full suite green at 738 tests.)
 7. Implement `set_opaque()` to allow toggling rect-filling, and `set_border_width()`
-   to enable/disable border display.
-   **Completed 2026-10-11** (`set_opaque` gates the fill blit - the SRCALPHA overlay
-   starts transparent, so border and text simply draw over the background;
-   `set_border_width` and the constructor share one `_validated_border_width` helper:
-   positive passes, 0 is silent, bools/non-ints/negatives disable with a log warning.
-   Re-layout is inherent (layout happens at draw time). 15 new tests: transparent
-   background with border+text intact, state-appropriate fill restoration, same-value
-   no-ops, the full border validation matrix at construction and through the mutator,
-   and re-layout pins via the font-size spy. Two gotchas surfaced and are now pinned
-   by the tests: loguru needs brace formatting (a printf-style `%s` message silently
-   drops its arguments), and a non-opaque Label's semi-transparent text
-   re-composites over its own leftovers on an uncleared surface - no-op tests must
-   clear between draws. Full suite green at 753 tests.)
+   to enable/disable border display.  **Completed 2026-10-11** (Full suite green at 753 tests.)
  8. Implement the spec 08 changes to modify TitleScreen to use the new Label widget
     and remove the old caching code. Mark the new stage in the 08 Dev plan section
     as complete with today's date. Flip the 08 spec back to `active` status on
-    successful completion of this stage.
-    **Completed 2026-10-11** (`TitleScreen._build_title()` builds the Label per the
-    amended spec 08: upper-half design-space rect, centered, selected, fixed 80pt,
-    non-opaque, border 0. It is drawn as screen chrome between the background and the
-    menu - the spec's paint order - and deliberately kept out of the menu's widget
-    list, since a Label ignores the mouse and the existing chooser-index tests stay
-    valid untouched. `_draw_title`/`_rendered_title` and the title-text caching tests
-    are removed; the background cache is untouched. Title pixel tests moved to the
-    design resolution, matching the widget-suite convention (the Label follows the
-    widget coordinate contract, not the target surface). Spec 08 stage 10 marked
-    complete and doc flipped to `active`. Full suite green at 753 tests.)
+    successful completion of this stage. **Completed 2026-10-11** (Full suite green at 753 tests.)
 9. Final compliance check. Do all tests pass? Are all acceptance criteria met?
    Reword the doc to replace "proposes" prose with "describes" as needed.
    Flip this doc to `active` status if all is well.
-   **Completed 2026-10-11** (full suite green at 753 tests; all acceptance criteria
-   verified against the code and tests; the doc's "proposes"/"should offer" prose
-   reworded to descriptive present tense; stale future-tense stage references in
-   `label.py`'s module docstring and `screens/base.py`'s `handle()` docstring
-   rewritten to past tense. Doc flipped to `active`.)
+   **Completed 2026-10-11** (full suite green at 753 tests)
 10. Amendment per spec 11 (Checkbox): document `_state_colors` and `_draw_text` as
     supported subclass extension hooks. No behavior change and no renames - the
     docstrings and code comments in `label.py` explain why each hook exists and that
     `draw()` itself is inherited as-is, and this doc gains the "Subclass extension
     hooks" section above. Docs and comments only; the full suite must stay green.
-    **Completed 2026-10-11** (`label.py`: class docstring names the two extension
-    hooks; `_state_colors` and `_draw_text` docstrings state they are supported
-    subclass extension points, why (hover-aware state colors and non-text content
-    like the Checkbox box, spec 11), and that `draw()` is inherited unchanged.
-    No code behavior touched. Full suite green at 753 tests. Doc flipped back to
-    `active`.)
+    **Completed 2026-10-11** (Full suite green at 753 tests.)
 
