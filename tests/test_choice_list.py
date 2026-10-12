@@ -9,7 +9,11 @@ text), and the audio contract (spec 07: ChoiceList audio). Mouse events
 are synthesized and pixel assertions read the display surface after
 ``ui.draw`` at the design resolution (scale 1, following the Button
 test patterns).
-"""
+
+The margin-aware text auto-scale search itself is pinned in
+test_text_layout.py (spec 07, as amended by spec 10); the glyph-less
+pager and clipped-text cases here prove ChoiceList delegates to that
+shared module correctly."""
 from __future__ import annotations
 
 from collections.abc import Callable
@@ -21,6 +25,7 @@ from dtd import audio, game_constants
 from dtd.resource_loader import ResourceLoader
 from dtd.ui import Theme, UIManager
 from dtd.widgets.choice_list import ChoiceList, sanitize_choices
+from helpers_pixels import any_pixel_differs
 
 # Distinguishable custom theme: red/green in the normal state, blue/white
 # when selected, cyan/yellow on hover, dark grays when disabled.
@@ -136,23 +141,6 @@ def _draw(ui: UIManager) -> pygame.Surface:
     screen = _screen()
     ui.draw(screen)
     return screen
-
-
-def _any_pixel_differs(surf: pygame.Surface, area: pygame.Rect, background) -> bool:
-    """Whether any pixel inside ``area`` differs from ``background``.
-
-    The only safe way to assert "ink was rendered here": glyph strokes
-    are anti-aliased, and whether even one glyph-core pixel rasterizes
-    to full coverage depends on the platform's FreeType build (issue
-    #34: an exact-foreground-color match passed on Linux and failed on
-    Windows). Asserting a deviation from the pure background keeps the
-    intent without betting on the rasterizer.
-    """
-    return any(
-        surf.get_at((x, y)) != background
-        for x in range(area.x, area.right)
-        for y in range(area.y, area.bottom)
-    )
 
 
 class TestSanitizeChoices:
@@ -638,11 +626,11 @@ class TestPagerGeometry:
 
         # THEN no glyph ink appears above the centered square...
         upper_band = pygame.Rect(0, 0, 132, 84)
-        assert not _any_pixel_differs(screen, upper_band, NORMAL_BG)
+        assert not any_pixel_differs(screen, upper_band, NORMAL_BG)
         # ...and glyph ink does appear inside it (exact-color matching is
         # unsafe: whether a glyph core rasterizes to full coverage is a
         # property of the platform's FreeType build - issue #34):
-        assert _any_pixel_differs(screen, pygame.Rect(0, 84, 132, 132), NORMAL_BG)
+        assert any_pixel_differs(screen, pygame.Rect(0, 84, 132, 132), NORMAL_BG)
 
         # AND the hit areas match the centered squares, not the full height:
         ui.update(_click((50, 40)))  # above the centered square: no page
@@ -680,8 +668,8 @@ class TestPagerGeometry:
         # WHEN the UI draws,
         # THEN neither pager column contains any ink at all:
         screen = _draw(ui)
-        assert not _any_pixel_differs(screen, pygame.Rect(0, 0, 1, 10), NORMAL_BG)
-        assert not _any_pixel_differs(screen, pygame.Rect(3, 0, 1, 10), NORMAL_BG)
+        assert not any_pixel_differs(screen, pygame.Rect(0, 0, 1, 10), NORMAL_BG)
+        assert not any_pixel_differs(screen, pygame.Rect(3, 0, 1, 10), NORMAL_BG)
 
 
 class TestStateColors:
@@ -767,9 +755,9 @@ class TestStateColors:
         assert screen.get_at(self.BACKGROUND_SAMPLE) == DISABLED_BG
         # ...the pager glyphs are still visible (ink over the disabled
         # fill; exact-color matching is unsafe per issue #34)...
-        assert _any_pixel_differs(screen, pygame.Rect(0, 0, 60, 60), DISABLED_BG)
+        assert any_pixel_differs(screen, pygame.Rect(0, 0, 60, 60), DISABLED_BG)
         # ...and no item text is displayed anywhere in the text area:
-        assert not _any_pixel_differs(screen, pygame.Rect(60, 0, 280, 60), DISABLED_BG)
+        assert not any_pixel_differs(screen, pygame.Rect(60, 0, 280, 60), DISABLED_BG)
 
     def test_single_item_should_render_normally_with_glyphs_and_text(
         self, font_ready: None
@@ -782,8 +770,8 @@ class TestStateColors:
         # and the item text inside the text area (spec 07: Testing):
         screen = _draw(ui)
         assert screen.get_at(self.BACKGROUND_SAMPLE) == NORMAL_BG
-        assert _any_pixel_differs(screen, pygame.Rect(0, 0, 60, 60), NORMAL_BG)
-        assert _any_pixel_differs(screen, pygame.Rect(60, 0, 280, 60), NORMAL_BG)
+        assert any_pixel_differs(screen, pygame.Rect(0, 0, 60, 60), NORMAL_BG)
+        assert any_pixel_differs(screen, pygame.Rect(60, 0, 280, 60), NORMAL_BG)
 
 
 class TestItemTextRendering:
@@ -801,7 +789,7 @@ class TestItemTextRendering:
         text_rows = [
             y
             for y in range(0, 60)
-            if _any_pixel_differs(screen, pygame.Rect(60, y, 280, 1), NORMAL_BG)
+            if any_pixel_differs(screen, pygame.Rect(60, y, 280, 1), NORMAL_BG)
         ]
         assert text_rows, "no item text was rendered at all"
         assert text_rows[-1] - text_rows[0] + 1 >= 15
@@ -818,7 +806,7 @@ class TestItemTextRendering:
         # Exact-color matching is unsafe at point size 1 (anti-aliased
         # strokes match no exact color), so we check for any deviation
         # from the pure background:
-        assert _any_pixel_differs(screen, pygame.Rect(60, 0, 280, 60), NORMAL_BG)
+        assert any_pixel_differs(screen, pygame.Rect(60, 0, 280, 60), NORMAL_BG)
         # ...but the rightmost column of the left pager square stays pure
         # background: the glyph never reaches that column, so any ink
         # there could only come from unclipped item text:

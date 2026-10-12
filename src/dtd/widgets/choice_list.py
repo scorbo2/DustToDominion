@@ -60,6 +60,7 @@ import pygame
 from dtd import game_constants
 from dtd.audio import get_audio_manager
 from dtd.ui import Scale, Theme, Widget, current_scale, state_colors
+from dtd.widgets.text_layout import ZERO_GLYPH_MARGIN_FITS, largest_fitting_size
 
 
 def sanitize_choices(raw: list) -> list[str]:
@@ -377,9 +378,11 @@ class ChoiceList(Widget):
         item = self.get_current_item()
         if item is None or area.w <= 0 or area.h <= 0:
             return
-        font_size = self._largest_fitting_size(area, theme, item)
-        if font_size is None:
-            font_size = 1
+        # The shared margin-aware search; the default fallback of 1 matches
+        # the clip-at-size-1 rule above (spec 07, as amended by spec 10).
+        font_size = largest_fitting_size(
+            theme, item, area.w, area.h, fits=ZERO_GLYPH_MARGIN_FITS
+        )
         text_surface = theme.get_font(font_size).render(item, True, fg)
         dest = pygame.Rect(
             area.centerx - text_surface.get_width() // 2,
@@ -406,7 +409,13 @@ class ChoiceList(Widget):
         is simply not drawn - its square remains clickable regardless.
         """
         for glyph, square in zip(("<", ">"), squares):
-            font_size = self._largest_fitting_size(square, theme, glyph)
+            # fallback=None keeps the spec 07 rule: a glyph that cannot
+            # fit even at size 1 is not drawn at all (spec 07, as
+            # amended by spec 10).
+            font_size = largest_fitting_size(
+                theme, glyph, square.w, square.h,
+                fits=ZERO_GLYPH_MARGIN_FITS, fallback=None,
+            )
             if font_size is None:
                 continue
             glyph_surface = theme.get_font(font_size).render(glyph, True, fg)
@@ -417,42 +426,3 @@ class ChoiceList(Widget):
                     square.centery - glyph_surface.get_height() // 2,
                 ),
             )
-
-    def _largest_fitting_size(
-        self, area: pygame.Rect, theme: Theme, text: str
-    ) -> int | None:
-        """The largest point size whose text plus margins fits ``area``.
-
-        Margins are half the height of ``0`` at the candidate size
-        (spec 07), so they are re-derived at every step of the binary
-        search. Returns ``None`` when even size 1 does not fit; callers
-        decide between clipping at size 1 (item text) and drawing nothing
-        (pager glyphs).
-        """
-        low, high = 1, max(1, min(area.w, area.h))
-        best: int | None = None
-        while low <= high:
-            mid = (low + high) // 2
-            if self._fits_with_margins(area, theme, text, mid):
-                best = mid
-                low = mid + 1
-            else:
-                high = mid - 1
-        return best
-
-    @staticmethod
-    def _fits_with_margins(
-        area: pygame.Rect, theme: Theme, text: str, size: int
-    ) -> bool:
-        """Whether ``text`` plus its all-sides margins fit ``area``.
-
-        The spec names "top and bottom" margins for pager glyphs, but
-        the margins are defined on all four sides - so the fit check is
-        two-axis for both item text and glyphs. A glyph that passes
-        vertically but fails horizontally would otherwise sit with less
-        margin than the spec asks for.
-        """
-        font = theme.get_font(size)
-        margin = font.size("0")[1] // 2
-        width, height = font.size(text)
-        return width <= area.w - 2 * margin and height <= area.h - 2 * margin

@@ -192,6 +192,16 @@ centered vertically within the ChoiceList.
 
 The pager control's text labels are the literal characters `<` and `>`.
 
+*Amended 2026-10-11 per spec 10 (Label): the margin-aware auto-scale searches described
+above (for both item text and pager glyphs) no longer live as private methods on the
+ChoiceList class. They share the binary search in `dtd/widgets/text_layout.py`, which
+takes an optional fit-predicate and an optional fallback value; the "half the height
+of the `0` character" margin rule is implemented once, as the module's
+`zero_glyph_margin` helper, with a ready-made margin-aware predicate built on it.
+ChoiceList's behavior is unchanged - its existing pixel-level tests remain the
+integration pin, while the search semantics are pinned directly against the shared
+module. Pure refactor, no functional change.*
+
 ## Determining currently-selected item
 
 ChoiceList can accept a callback that can inform callers when the current
@@ -345,4 +355,18 @@ implementation plan is suggested (each stage after 1 should include tests):
    test module carries an autouse fixture that initializes the AudioManager singleton
    with a bare, nothing-resolves loader - required because pager clicks and UIManager
    hover now reach the singleton even in non-audio tests.)
+7. Amendment 2026-10-11 per spec 10 (Label): move the margin-aware text auto-scale
+   searches (item text and pager glyphs) out of the ChoiceList class and into the
+   shared `dtd/widgets/text_layout.py` module, delegating via its optional
+   fit-predicate and fallback value, and its `zero_glyph_margin` helper. No functional
+   change - existing pixel-level tests stay as integration pins; the search semantics
+   are pinned directly in tests/test_text_layout.py. This doc was flipped to
+   `proposed` while the amendment is carried out (spec 10 dev plan stage 3); flip it
+   back to `active` on completion.
+   **Completed 2026-10-11** (full suite green at 698 tests. All ChoiceList pixel and
+   geometry tests passed unchanged, confirming the refactor. Implementation note: the
+   shared search takes a fit-predicate rather than a plain margin parameter, because
+   Button measures line height while ChoiceList/Label measure rendered glyph extent
+   plus margin - for text with descenders those differ, and a single margin knob would
+   have silently changed Button's behavior.)
 
