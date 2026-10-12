@@ -237,6 +237,22 @@ don't resolve to valid audio resources, etc.)
    and ensure both left-alignment and centering work as expected. Ensure auto-scaling works (reuse
    the shared helper for this, do not duplicate text scaling logic). Ensure fixed point size works.
    Implement mouse hovering cosmetic effects.
+   **Completed 2026-10-11** (`dtd/widgets/checkbox.py`: `Checkbox(Label)` overriding the two
+   Label extension hooks. Box side is `zero_glyph_height` - a new `text_layout` helper that
+   is the single definition of `font.size("0")[1]`, with `zero_glyph_margin` recomposed on
+   top of it, so the box metric and the margin rule cannot drift (approved scalability
+   refinement). Auto-scale delegates to the shared `largest_fitting_size` with a box-aware
+   fit predicate (box + half-box gap + text horizontally, taller of box/text vertically,
+   same zero-glyph margin). Box strokes are 2 design pixels with a screen floor of 2; the
+   box keeps square corners under a rounded theme. Empty/blank/None text uses the `0` glyph
+   as a math stand-in that is never rendered. Hover cosmetics via the `_state_colors`
+   override; hover audio (`UI_SFX_HOVER`) implemented here alongside hover - the dev plan
+   assigns no stage to audio, and click audio will arrive with clicks in stage 3.
+   `set_checked()` is an explicit no-op stub; `initially_checked`/`on_click` are accepted
+   and stored but unused until stage 3. One gotcha pinned by the tests: a synthesized
+   MOUSEMOTION over an enabled Checkbox fires the audio hook, so hover tests need the
+   `silent_audio_manager` singleton, exactly like the Button suite. 35 tests in
+   tests/test_checkbox.py. Full suite green at 788 tests.)
 3. Implement `set_checked()` and the drawing of the X symbol. Implement support for mouse clicks
    on non-disabled Checkboxes to toggle their boolean status. Implement `is_checked()`.
    Implement callbacks via `on_click`.

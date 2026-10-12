@@ -36,15 +36,26 @@ FitPredicate = Callable[[Theme, str, int, int, int], bool]
 MarginFn = Callable[[pygame.font.Font], int]
 
 
+def zero_glyph_height(font: pygame.font.Font) -> int:
+    """The height of the ``0`` glyph at this font size.
+
+    The single definition of ``font.size("0")[1]`` shared by the
+    margin rule (specs 07/10) and the Checkbox box side length (spec
+    11: Checkbox layout) - they are the same measurement, so they
+    cannot drift apart.
+    """
+    return font.size("0")[1]
+
+
 def zero_glyph_margin(font: pygame.font.Font) -> int:
     """Half the height of the ``0`` glyph at this font size (floored).
 
-    The margin rule shared by spec 07 (item text and pager glyphs) and
-    spec 10 (Label): "half the height of the `0` character
-    (``font.size("0")[1]``)". One implementation, so the widgets
-    cannot drift apart.
+    The margin rule shared by spec 07 (item text and pager glyphs),
+    spec 10 (Label), and the box-text gap of spec 11 (Checkbox):
+    "half the height of the `0` character". One implementation, so
+    the widgets cannot drift apart.
     """
-    return font.size("0")[1] // 2
+    return zero_glyph_height(font) // 2
 
 
 def fits_line_height(
@@ -84,9 +95,10 @@ def margin_fit_predicate(margin: MarginFn) -> FitPredicate:
 
 
 #: The margin rule shared by ChoiceList and Label (specs 07/10) as a
-#: ready-made predicate: the "half the height of `0`" margin on all four
-#: sides. Defined once here so the widgets cannot drift apart - and the
-#: upcoming Checkbox will use this same one.
+#: ready-made predicate: the "half the height of `0`" margin on all
+#: four sides. Defined once here so the widgets cannot drift apart -
+#: the Checkbox (spec 11) builds its box-aware predicate on the same
+#: ``zero_glyph_margin``/``zero_glyph_height`` helpers.
 ZERO_GLYPH_MARGIN_FITS = margin_fit_predicate(zero_glyph_margin)
 
 
