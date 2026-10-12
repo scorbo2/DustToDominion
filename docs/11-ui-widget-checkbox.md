@@ -42,7 +42,7 @@ offer much the same constructor arguments as Label:
 - `initially_checked`: the initial boolean status of this Checkbox. Defaults to False for an unchecked Checkbox.
   If True, this does NOT trigger a callback.
 - `on_click: Callable[[], None] | None` - invoked when a click occurs on a non-disabled Checkbox. Not invoked from
-  programmatic changes to status from `set_checked()`.
+  programmatic changes to status from `set_checked()`. Note: the callback is invoked after the boolean togle completes.
 
 The following mutator methods are provided:
 - `set_font_point_size(self, size: int | None)` - If a positive integer is specified, that exact font point size
@@ -91,7 +91,7 @@ is rendered to the left of the text. This box, for layout purposes, is considere
 Checkbox's label text. That is, if the contents are to be centered, the box does not stay left-aligned
 within the inner rect. The box should be an unfilled square with a border width of 2px (in design pixels, but
 with a floor of 2 - it may be larger than 2 screen pixels but never less than that) whose height is equal to
-`font.size("0")[1]` of the current font in the computed text size. A margin equal to half the computed
+`font.size("0")[1]` of the current font at the computed text size. A margin equal to half the computed
 height of the box should separate the right edge of the box from the left edge of the text.
 The box should respect the calculated margin of the inner rect, exactly as described in spec doc 10.
 The box is always rendered with square corners regardless of the theme's corner radius - that radius
@@ -195,7 +195,7 @@ don't resolve to valid audio resources, etc.)
   has a 0 or negative size.
 - If given a theme with a non-zero corner radius, the radius is respected by both rect fill and border but NOT respected
   by the box, which always has square corners.
-- `on_click` is not invoked from the constructor if `initially_selected` is True.
+- `on_click` is not invoked from the constructor if `initially_checked` is True.
 - `on_click` is not invoked from programmatic calls to `set_checked()`.
 - `on_click` is invoked when a left button mouse click occurs within the rect of a non-disabled Checkbox.
 - `on_click` is not invoked when a left button mouse click occurs within the rect of a disabled Checkbox.
@@ -227,6 +227,11 @@ don't resolve to valid audio resources, etc.)
    temporarily out of sync with the code. Append a new stage to its dev plan to describe
    the needed change. Implement the change. Mark the appended stage as complete with
    today's date, and then flip that doc back to `active` status.
+   **Completed 2026-10-11** (spec 10 gained a "Subclass extension hooks" section and a
+   dev plan stage 1; `label.py` class/method docstrings now document `_state_colors`
+   and `_draw_text` as supported extension points with `draw()` inherited as-is.
+   Docs and comments only - no behavior change. Full suite green at 753 tests.
+   Spec 10 flipped back to `active`.)
 2. Create the `Checkbox` class as an extension of `Label`. Add drawing of the box in unchecked state only.
    Stub out `set_checked()` but do not implement it yet. Just get the box to render with the text,
    and ensure both left-alignment and centering work as expected. Ensure auto-scaling works (reuse

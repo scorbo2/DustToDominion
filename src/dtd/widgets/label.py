@@ -76,6 +76,11 @@ class Label(Widget):
     is a width in *design* pixels (0 = no border, the default; invalid
     values disable the border with a log warning, same as
     ``set_border_width``).
+
+    Subclasses (the Checkbox, spec 11) inherit ``draw()`` - fill,
+    border, inner rect, clipping sub-surface - as-is and customize it
+    through two documented extension hooks: ``_state_colors`` and
+    ``_draw_text`` (spec 10: Subclass extension hooks).
     """
 
     def __init__(
@@ -195,10 +200,14 @@ class Label(Widget):
     def _state_colors(self, theme: Theme) -> tuple[pygame.Color, pygame.Color]:
         """(foreground, background) for the widget's current state.
 
+        Subclass extension hook (spec 10: Subclass extension hooks):
         Labels ignore hover entirely - the ``*Hover`` colors are never
         used (spec 10: Label events and cosmetics) - so ``hovered`` is
-        never passed here. "Disabled outranks selected" comes from
-        ``ui.state_colors`` (spec 04, as noted by spec 10).
+        never passed here. Hover-aware subclasses (the Checkbox, spec
+        11) override this to pass ``hovered`` through the same shared
+        precedence instead of re-implementing the draw pipeline.
+        "Disabled outranks selected" comes from ``ui.state_colors``
+        (spec 04, as noted by spec 10).
         """
         return state_colors(theme, enabled=self.enabled, selected=self.selected)
 
@@ -214,6 +223,13 @@ class Label(Widget):
         scale: Scale,
     ) -> None:
         """Render the label left-aligned at the margin, vertically centered.
+
+        Subclass extension hook (spec 10: Subclass extension hooks):
+        ``draw()`` hands this method the inner-rect sub-surface and
+        nothing else, so a subclass whose content is more than text -
+        the Checkbox's box, spec 11 - overrides it to lay out that
+        content as a single unit while inheriting fill, border and
+        clipping unchanged.
 
         The margin shrinks the *layout* box but never the *clip* box:
         text that cannot fit at size 1 clips at the inner rect boundary
