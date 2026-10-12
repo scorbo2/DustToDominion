@@ -1,4 +1,4 @@
-"""Unit tests for the ``Checkbox`` widget (spec 11), stage 2 scope.
+"""Unit tests for the ``Checkbox`` widget (spec 11), stages 2-3 scope.
 
 Stage 2 coverage (spec 11 Dev plan): the box in its unchecked state
 with the full state-color matrix including hover (normal / selected /
@@ -11,9 +11,18 @@ text-only fit would allow, clipping at size 1, re-layout on rect and
 border changes, nothing drawn for a degenerate inner rect); fixed
 point sizes (exact pixels, floor conversion, clipping, the None and
 invalid-value fallbacks inherited from Label); centering of the
-box+text unit and the toggle back; hover audio through the
-``on_hover_enter`` hook; and the stage 2 stubs - ``set_checked`` is
-an explicit no-op and clicks do not toggle yet.
+box+text unit and the toggle back; and hover audio through the
+``on_hover_enter`` hook.
+
+Stage 3 coverage: ``set_checked``/``is_checked`` - the X drawn as two
+corner-reaching diagonals (never a glyph), same-value no-ops,
+clearing, status changes while disabled, and ``initially_checked``
+without a callback; left-button click toggling with the press-and-
+release contract (drag-off and drag-in do not toggle, the right
+button does not count, disabled never responds); ``on_click`` invoked
+after the toggle and never programmatically; and the accept-sound
+matrix (click plays ``UI_SFX_ACCEPT``, ``set_checked`` is silent,
+disabled clicks are silent).
 
 The box outline and X strokes are solid ``pygame.draw`` output (not
 anti-aliased), so box pixels are matched exactly; only text ink uses
@@ -752,36 +761,365 @@ class TestCheckboxHoverAudio:
         checkbox.on_hover_enter()
 
 
-class TestCheckboxStage2Stubs:
-    def test_set_checked_should_be_a_stage_2_no_op_stub(self, font_ready: None) -> None:
-        # GIVEN a Checkbox (the X symbol and status storage arrive in
-        # stage 3):
-        checkbox, ui = _checkbox_ui(pygame.Rect(0, 0, 400, 100), _theme(TEST_THEME_JSON))
+class TestCheckboxCheckedState:
+    def _pinned_ui(
+        self, initially_checked: bool = False, on_click=None
+    ) -> tuple[Checkbox, UIManager, Theme]:
+        """A text-less Checkbox pinned to 40pt: deterministic box
+        geometry with an X large enough to inspect pixel by pixel."""
+        theme = _theme(TEST_THEME_JSON)
+        checkbox = Checkbox(
+            pygame.Rect(0, 0, 400, 100),
+            initially_checked=initially_checked,
+            on_click=on_click,
+        )
+        checkbox.set_font_point_size(40)
+        ui = UIManager(theme)
+        ui.widgets.append(checkbox)
+        return checkbox, ui, theme
 
-        # WHEN set_checked is invoked and the UI draws,
-        records, sink_id = _warning_records()
-        try:
-            checkbox.set_checked(True)
-        finally:
-            logger.remove(sink_id)
+    def _x_probe_points(self, theme: Theme) -> tuple[tuple, tuple, tuple]:
+        """(center, main-diagonal interior point, anti-diagonal
+        interior point) for the pinned 40pt box - all strictly inside
+        the outline band, so only the X can put ink there. The
+        off-corner points sit exactly on the diagonals' paths: the
+        main diagonal runs (margin, top) -> (margin+side, top+side)
+        and the anti-diagonal (margin+side, top) -> (margin,
+        top+side), so at four rows down they sit four columns in
+        from their starting corners."""
+        side = theme.get_font(40).size("0")[1]
+        margin = side // 2
+        top = 100 // 2 - side // 2
+        return (
+            (margin + side // 2, 50),
+            (margin + 4, top + 4),
+            (margin + side - 4, top + 4),
+        )
+
+    def test_set_checked_with_true_should_draw_the_x_to_the_box_corners(
+        self, font_ready: None
+    ) -> None:
+        # GIVEN a Checkbox (spec 11: the X is two diagonals, never a
+        # literal glyph):
+        checkbox, ui, theme = self._pinned_ui()
+
+        # WHEN it is checked and the UI draws,
+        checkbox.set_checked(True)
         screen = _draw(ui)
 
-        # THEN nothing observable changed - the box is still drawn
-        # unchecked and no warning is raised (stage 2 stub):
-        assert records == []
-        assert screen.get_at((60, 50)) == NORMAL_BG
-        assert any_pixel_differs(screen, pygame.Rect(0, 0, 150, 100), NORMAL_BG)
+        # THEN both diagonals render in the foreground color: the box
+        # center, and interior points near each corner that a glyph
+        # "X" would never reach (spec 11: the mark must be
+        # font-independent and corner-to-corner):
+        center, main_diag, anti_diag = self._x_probe_points(theme)
+        assert screen.get_at(center) == NORMAL_FG
+        # The near-corner points sit on the diagonals' thick-line
+        # edges: assert deviation from the background, not the exact
+        # color, to stay robust at any line width.
+        assert screen.get_at(main_diag) != NORMAL_BG
+        assert screen.get_at(anti_diag) != NORMAL_BG
 
-    def test_mouse_clicks_should_not_toggle_yet(self, font_ready: None) -> None:
-        # GIVEN a Checkbox with a full click squarely inside its rect
-        # (click toggling arrives in stage 3):
-        _, ui = _checkbox_ui(pygame.Rect(0, 0, 400, 100), _theme(TEST_THEME_JSON), text="OK")
+    def test_set_checked_with_true_twice_should_be_a_no_op(
+        self, font_ready: None
+    ) -> None:
+        # GIVEN a Checkbox already checked and drawn:
+        checkbox, ui, _ = self._pinned_ui()
+        checkbox.set_checked(True)
+        baseline = _draw(ui).copy()
 
-        # WHEN a press-and-release click lands inside the rect and
-        # the UI draws,
-        ui.update([_down((200, 50))])
-        ui.update([_up((200, 50))])
+        # WHEN the same value is set again and the UI redraws,
+        checkbox.set_checked(True)
         screen = _draw(ui)
 
-        # THEN the box is still unchecked - no X anywhere inside it:
-        assert screen.get_at((60, 50)) == NORMAL_BG
+        # THEN the rendering is unchanged (spec 11: Testing):
+        for x in range(0, 400, 7):
+            for y in range(0, 100, 5):
+                assert screen.get_at((x, y)) == baseline.get_at((x, y))
+
+    def test_set_checked_with_false_should_clear_the_x(self, font_ready: None) -> None:
+        # GIVEN a Checkbox that was checked and drawn:
+        checkbox, ui, theme = self._pinned_ui()
+        checkbox.set_checked(True)
+        _draw(ui)
+
+        # WHEN it is unchecked and the UI redraws,
+        checkbox.set_checked(False)
+        screen = _draw(ui)
+
+        # THEN the X is gone - the box interior is plain background
+        # again (spec 11: Testing):
+        center, main_diag, anti_diag = self._x_probe_points(theme)
+        assert screen.get_at(center) == NORMAL_BG
+        assert screen.get_at(main_diag) == NORMAL_BG
+        assert screen.get_at(anti_diag) == NORMAL_BG
+
+    def test_set_checked_should_change_status_while_disabled(
+        self, font_ready: None
+    ) -> None:
+        # GIVEN a disabled Checkbox (spec 11: set_checked works even
+        # while disabled - the only way its status can change):
+        checkbox, ui, theme = self._pinned_ui()
+        checkbox.enabled = False
+
+        # WHEN it is checked programmatically and the UI draws,
+        checkbox.set_checked(True)
+        screen = _draw(ui)
+
+        # THEN the X renders - in the disabled foreground color, and
+        # the status is reported:
+        center, _, _ = self._x_probe_points(theme)
+        assert checkbox.is_checked() is True
+        assert screen.get_at(center) == DISABLED_FG
+
+    def test_is_checked_should_report_the_boolean_status(self, font_ready: None) -> None:
+        # GIVEN a Checkbox in each status transition (spec 11:
+        # is_checked):
+        checkbox, _, _ = self._pinned_ui()
+
+        # THEN it starts unchecked and reports every change:
+        assert checkbox.is_checked() is False
+        checkbox.set_checked(True)
+        assert checkbox.is_checked() is True
+        checkbox.set_checked(False)
+        assert checkbox.is_checked() is False
+
+    def test_initially_checked_should_start_checked_without_invoking_on_click(
+        self, font_ready: None
+    ) -> None:
+        # GIVEN a Checkbox constructed already checked, with a callback
+        # wired (spec 11: initially_checked never triggers it):
+        calls: list[bool] = []
+        checkbox, ui, theme = self._pinned_ui(
+            initially_checked=True, on_click=lambda: calls.append(True)
+        )
+
+        # WHEN the UI draws,
+        screen = _draw(ui)
+
+        # THEN the status is checked, the X renders, and no callback
+        # fired at construction or drawing:
+        assert checkbox.is_checked() is True
+        assert calls == []
+        center, _, _ = self._x_probe_points(theme)
+        assert screen.get_at(center) == NORMAL_FG
+
+    def test_x_should_use_the_selected_foreground_when_selected(
+        self, font_ready: None
+    ) -> None:
+        # GIVEN a checked Checkbox that is also selected (spec 11:
+        # the X color varies with state):
+        checkbox, ui, theme = self._pinned_ui()
+        checkbox.set_checked(True)
+        checkbox.selected = True
+
+        # WHEN the UI draws,
+        screen = _draw(ui)
+
+        # THEN the X renders in foregroundSelected:
+        center, _, _ = self._x_probe_points(theme)
+        assert screen.get_at(center) == SELECTED_FG
+
+
+class TestCheckboxClicks:
+    #: Center of a 400x100 rect at the design resolution (scale 1),
+    #: and a point far outside it.
+    INSIDE = (200, 50)
+    OUTSIDE = (700, 400)
+
+    def _click_ui(self, on_click=None) -> tuple[Checkbox, UIManager]:
+        checkbox = Checkbox(pygame.Rect(0, 0, 400, 100), on_click=on_click)
+        ui = UIManager(_theme(TEST_THEME_JSON))
+        ui.widgets.append(checkbox)
+        return checkbox, ui
+
+    def test_click_inside_the_rect_should_toggle_and_draw_or_clear_the_x(
+        self, font_ready: None, silent_audio_manager: audio.AudioManager
+    ) -> None:
+        # GIVEN an enabled Checkbox (clicks play audio, so the
+        # singleton must exist - same as the Button suite):
+        theme = _theme(TEST_THEME_JSON)
+        requested = _font_size_spy(theme)
+        checkbox = Checkbox(pygame.Rect(0, 0, 400, 100))
+        ui = UIManager(theme)
+        ui.widgets.append(checkbox)
+
+        # WHEN a full left-button click lands inside the rect,
+        ui.update([_down(self.INSIDE)])
+        ui.update([_up(self.INSIDE)])
+
+        # THEN the status flipped to checked and the X renders at the
+        # box's center (spec 11: Testing):
+        assert checkbox.is_checked() is True
+        screen = _draw(ui)
+        chosen = _chosen_size(theme, requested, _box_aware_rule, "0", 400, 100)
+        side, gap, _ = _box_metrics(theme, chosen)
+        assert screen.get_at((gap + side // 2, 50)) == NORMAL_FG
+
+        # WHEN a second click lands inside the rect,
+        ui.update([_down(self.INSIDE)])
+        ui.update([_up(self.INSIDE)])
+
+        # THEN it flipped back and the X is gone (spec 11: Testing):
+        assert checkbox.is_checked() is False
+        screen = _draw(ui)
+        assert screen.get_at((gap + side // 2, 50)) == NORMAL_BG
+
+    def test_click_on_a_disabled_checkbox_should_have_no_effect(
+        self, font_ready: None
+    ) -> None:
+        # GIVEN a disabled Checkbox (spec 11: disabled Checkboxes do
+        # not respond to mouse clicks):
+        checkbox, ui = self._click_ui()
+        checkbox.enabled = False
+
+        # WHEN a full click lands inside the rect,
+        ui.update([_down(self.INSIDE)])
+        ui.update([_up(self.INSIDE)])
+
+        # THEN nothing changed:
+        assert checkbox.is_checked() is False
+
+    def test_press_inside_but_release_outside_should_not_toggle(
+        self, font_ready: None, silent_audio_manager: audio.AudioManager
+    ) -> None:
+        # GIVEN an enabled Checkbox with the press inside but the
+        # release outside the rect (spec 11: Testing - drag-off):
+        checkbox, ui = self._click_ui()
+
+        # WHEN the click completes,
+        ui.update([_down(self.INSIDE)])
+        ui.update([_up(self.OUTSIDE)])
+
+        # THEN the status is unchanged:
+        assert checkbox.is_checked() is False
+
+    def test_press_outside_but_release_inside_should_not_toggle(
+        self, font_ready: None, silent_audio_manager: audio.AudioManager
+    ) -> None:
+        # GIVEN an enabled Checkbox with the press outside but the
+        # release inside (spec 11: Testing - drag-in):
+        checkbox, ui = self._click_ui()
+
+        # WHEN the click completes,
+        ui.update([_down(self.OUTSIDE)])
+        ui.update([_up(self.INSIDE)])
+
+        # THEN the status is unchanged:
+        assert checkbox.is_checked() is False
+
+    def test_right_button_click_should_not_toggle(
+        self, font_ready: None, silent_audio_manager: audio.AudioManager
+    ) -> None:
+        # GIVEN an enabled Checkbox (spec 11: only left button
+        # clicks count):
+        checkbox, ui = self._click_ui()
+
+        # WHEN a full right-button click lands inside the rect,
+        ui.update([_down(self.INSIDE, button=3)])
+        ui.update([_up(self.INSIDE, button=3)])
+
+        # THEN the status is unchanged:
+        assert checkbox.is_checked() is False
+
+    def test_on_click_should_be_invoked_once_after_the_toggle(
+        self, font_ready: None, silent_audio_manager: audio.AudioManager
+    ) -> None:
+        # GIVEN an enabled Checkbox whose callback records the status
+        # as seen from inside the callback (spec 11: on_click):
+        status_at_callback: list[bool] = []
+        checkbox, ui = self._click_ui(
+            on_click=lambda: status_at_callback.append(checkbox.is_checked())
+        )
+
+        # WHEN a click lands inside the rect,
+        ui.update([_down(self.INSIDE)])
+        ui.update([_up(self.INSIDE)])
+
+        # THEN it fired exactly once, and the callback observed the
+        # already-toggled status:
+        assert status_at_callback == [True]
+
+    def test_on_click_should_not_be_invoked_from_set_checked(
+        self, font_ready: None
+    ) -> None:
+        # GIVEN a Checkbox with a callback wired:
+        calls: list[bool] = []
+        checkbox, _ = self._click_ui(on_click=lambda: calls.append(True))
+
+        # WHEN the status changes programmatically,
+        checkbox.set_checked(True)
+        checkbox.set_checked(False)
+
+        # THEN the callback never fired (spec 11: Testing):
+        assert calls == []
+
+    def test_on_click_should_not_be_invoked_when_disabled(
+        self, font_ready: None
+    ) -> None:
+        # GIVEN a disabled Checkbox with a callback wired:
+        calls: list[bool] = []
+        checkbox, ui = self._click_ui(on_click=lambda: calls.append(True))
+        checkbox.enabled = False
+
+        # WHEN a full click lands inside the rect,
+        ui.update([_down(self.INSIDE)])
+        ui.update([_up(self.INSIDE)])
+
+        # THEN neither the callback nor the status changed:
+        assert calls == []
+        assert checkbox.is_checked() is False
+
+    def test_click_should_play_ui_sfx_accept(
+        self,
+        font_ready: None,
+        silent_audio_manager: audio.AudioManager,
+        record_play_ui_sfx,
+    ) -> None:
+        # GIVEN an enabled Checkbox and a play_ui_sfx recorder (spec
+        # 11: a click plays UI_SFX_ACCEPT):
+        played = record_play_ui_sfx(silent_audio_manager)
+        _, ui = self._click_ui()
+
+        # WHEN a click lands inside the rect,
+        ui.update([_down(self.INSIDE)])
+        ui.update([_up(self.INSIDE)])
+
+        # THEN the accept sound is requested with the exact id:
+        assert played == [game_constants.UI_SFX_ACCEPT]
+
+    def test_set_checked_should_not_play_audio(
+        self,
+        font_ready: None,
+        silent_audio_manager: audio.AudioManager,
+        record_play_ui_sfx,
+    ) -> None:
+        # GIVEN an enabled Checkbox and a recorder (spec 11:
+        # programmatic changes are silent):
+        played = record_play_ui_sfx(silent_audio_manager)
+        checkbox, _ = self._click_ui()
+
+        # WHEN the status changes programmatically,
+        checkbox.set_checked(True)
+        checkbox.set_checked(False)
+
+        # THEN no sound played:
+        assert played == []
+
+    def test_disabled_click_should_not_play_audio(
+        self,
+        font_ready: None,
+        silent_audio_manager: audio.AudioManager,
+        record_play_ui_sfx,
+    ) -> None:
+        # GIVEN a disabled Checkbox and a recorder (spec 11: clicks
+        # only count when not disabled):
+        played = record_play_ui_sfx(silent_audio_manager)
+        checkbox, ui = self._click_ui()
+        checkbox.enabled = False
+
+        # WHEN a full click lands inside the rect,
+        ui.update([_down(self.INSIDE)])
+        ui.update([_up(self.INSIDE)])
+
+        # THEN no sound played:
+        assert played == []

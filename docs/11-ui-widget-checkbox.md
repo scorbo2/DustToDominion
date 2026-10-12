@@ -256,6 +256,19 @@ don't resolve to valid audio resources, etc.)
 3. Implement `set_checked()` and the drawing of the X symbol. Implement support for mouse clicks
    on non-disabled Checkboxes to toggle their boolean status. Implement `is_checked()`.
    Implement callbacks via `on_click`.
+   **Completed 2026-10-11** (`set_checked()` stores the status - works while disabled, silent
+   and callback-free; `is_checked()` reports it. The X is two corner-to-corner `draw.line`
+   diagonals in the state foreground color, never a glyph (spec 11: font-independent mark).
+   `update()` implements the Button-style press-and-release contract: left button only,
+   both inside the rect, then toggle -> `UI_SFX_ACCEPT` -> `on_click`, in that order - the
+   doc does not pin the callback's ordering, so a test pins it: the callback observes the
+   already-toggled status via `is_checked()`. `initially_checked` never fires the callback.
+   The two stage 2 stub tests retired; 18 new tests (51 in the module): X pixel pins
+   (center + near-corner diagonal points), same-value no-ops, clearing, disabled
+   `set_checked`, the full click matrix (drag-off/drag-in/right-button/disabled), the
+   `on_click` matrix, and the accept-sound matrix. Gotcha pinned: thick-line probes must
+   sit exactly on the diagonal's path - pygame's wide-line rasterization does not cover
+   pixels one column off it. Full suite green at 804 tests.)
 4. Final verification step - are acceptance criteria met? Do all tests pass? Update this spec doc
    to change all "proposes" and future tense prose to "describes" and present tense. Update the code
    comments and docstrings to remove any "TODO"-style comments such as "this will land in the next stage".

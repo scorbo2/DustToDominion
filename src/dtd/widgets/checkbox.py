@@ -5,12 +5,6 @@ square "box" left of the text, checked or unchecked to show the
 control's status. Everything is drawn with ``pygame`` (spec 11:
 Additional dependencies).
 
-Stage 2 of the spec 11 Dev plan: the box in its unchecked state,
-box-aware auto-scale, left-align/centering of the box+text unit,
-fixed point sizes, and the hover cosmetics plus hover audio. The
-X symbol, ``set_checked``/``is_checked`` behavior, click toggling,
-and ``on_click`` invocation land in stage 3.
-
 Rendering contract (spec 11: Checkbox layout):
 
 - The box is a square whose side is ``zero_glyph_height`` - the very
@@ -22,6 +16,10 @@ Rendering contract (spec 11: Checkbox layout):
   2 screen pixels (spec 11: they may be thicker at larger scales,
   never thinner). The box always has square corners - the theme's
   corner radius applies to Widget rects only.
+- A checked box is marked with an X drawn as two corner-to-corner
+  diagonal lines, never a literal "X" glyph - the mark must be
+  identical regardless of the configured font (spec 11: Checkbox
+  layout).
 - Auto-scale treats box + gap + text as one content unit: the shared
   ``largest_fitting_size`` search runs with a box-aware fit
   predicate (spec 11: "the parent class only considers text
@@ -32,8 +30,20 @@ Rendering contract (spec 11: Checkbox layout):
   rendered (spec 11: empty Checkbox).
 - Unlike Label, Checkboxes respond to hover (the ``*Hover`` colors,
   through the shared disabled > selected > hover precedence, spec
-  04) and play ``UI_SFX_HOVER`` on hover-enter (spec 11: Checkbox
-  audio). Click behavior is stage 3.
+  04) and to left-button clicks: press *and* release both inside the
+  rect toggle the boolean status (spec 11: events). Disabled
+  Checkboxes never respond to the mouse; their status changes only
+  via ``set_checked``.
+
+Audio contract (spec 11: Checkbox audio):
+
+- A user click plays ``UI_SFX_ACCEPT``; ``set_checked()`` is silent.
+- ``on_hover_enter()`` plays ``UI_SFX_HOVER``; the UIManager already
+  keeps disabled and selected widgets from ever reaching the hook.
+- ``on_click`` (if wired) is invoked after the toggle completes, and
+  never from ``set_checked()`` or the constructor.
+- Resource ids go to the global AudioManager as-is; the widget never
+  resolves them (spec 05).
 """
 from __future__ import annotations
 
@@ -43,7 +53,7 @@ import pygame
 
 from dtd import game_constants
 from dtd.audio import get_audio_manager
-from dtd.ui import Scale, Theme, state_colors
+from dtd.ui import Scale, Theme, current_scale, state_colors
 from dtd.widgets.label import Label
 from dtd.widgets.text_layout import (
     largest_fitting_size,
@@ -87,8 +97,8 @@ class Checkbox(Label):
     ``text`` blank/empty/``None`` draws no text, ``border_width`` in
     design pixels with the inherited validation), plus
     ``initially_checked`` (the starting boolean status - it never
-    triggers a callback) and ``on_click`` (stored now; invoked on
-    user clicks once stage 3 wires the click handling).
+    triggers a callback) and ``on_click`` (invoked after a user
+    click's toggle completes, never programmatically).
     """
 
     def __init__(
@@ -105,15 +115,55 @@ class Checkbox(Label):
         # attribute would shadow it.
         self._is_checked = bool(initially_checked)
         self.on_click = on_click
+        self._pressed = False  # left button pressed inside this rect?
 
-    # -- stubs (spec 11 Dev plan stage 3) ------------------------------------
+    # -- boolean status (spec 11: set_checked / is_checked) -------------------
+
+    def is_checked(self) -> bool:
+        """The current boolean status (spec 11: is_checked)."""
+        return self._is_checked
 
     def set_checked(self, is_checked: bool) -> None:
         """Set the boolean status (spec 11: set_checked).
 
-        Stage 2 stub: the value is deliberately not stored and no X
-        is drawn yet - the mutator arrives with stage 3.
+        Works even while disabled - programmatic changes are the only
+        way a disabled Checkbox's status can change. Deliberately
+        silent and callback-free: the accept sound and ``on_click``
+        belong to user clicks, not to code. Layout happens at draw
+        time, so same-value calls are no-ops by construction.
         """
+        self._is_checked = bool(is_checked)
+
+    # -- clicks (spec 11: Checkbox events and cosmetics) -----------------------
+
+    def update(self, events: list[pygame.event.Event]) -> None:
+        """Track press-to-release for click detection (spec 11).
+
+        A click is a left-button press *and* release both inside the
+        rect - drag-off and drag-in do not toggle (same contract as
+        Button, spec 09). The click toggles the status, plays the
+        accept sound, then invokes ``on_click`` - in that order, so
+        a callback reading ``is_checked()`` sees the new value.
+        Disabled Checkboxes never respond: the UIManager only
+        broadcasts to enabled widgets, and the guard below keeps the
+        contract safe if ``update`` is called directly.
+        """
+        if not self.enabled:
+            return
+        scale = current_scale()
+        for event in events:
+            if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                self._pressed = self.hit(scale.mouse(event.pos))
+            elif event.type == pygame.MOUSEBUTTONUP and event.button == 1:
+                clicked = self._pressed and self.hit(scale.mouse(event.pos))
+                self._pressed = False
+                if clicked:
+                    self._is_checked = not self._is_checked
+                    # The sound confirms the action, callback or no
+                    # callback (spec 11: Checkbox audio).
+                    get_audio_manager().play_ui_sfx(game_constants.UI_SFX_ACCEPT)
+                    if self.on_click is not None:
+                        self.on_click()
 
     # -- hover (spec 11: Checkbox events and cosmetics / audio) --------------
 
@@ -149,7 +199,7 @@ class Checkbox(Label):
         fg: pygame.Color,
         scale: Scale,
     ) -> None:
-        """Draw the box (and text) as one centered or left-aligned unit.
+        """Draw the box - checked or not - and text as one aligned unit.
 
         Overrides the Label hook (spec 10: Subclass extension hooks).
         The box sits at the inner-rect margin when left-aligned, or
@@ -194,6 +244,12 @@ class Checkbox(Label):
         box = pygame.Rect(x, 0, box_side, box_side)
         box.centery = inner.get_height() // 2
         pygame.draw.rect(inner, fg, box, width=stroke)
+        if self._is_checked:
+            # The X is two corner-to-corner diagonals, never a
+            # literal "X" glyph - the mark must look identical under
+            # any configured font (spec 11: Checkbox layout).
+            pygame.draw.line(inner, fg, box.topleft, box.bottomright, width=stroke)
+            pygame.draw.line(inner, fg, box.topright, box.bottomleft, width=stroke)
         if surface is not None:
             text_y = (inner.get_height() - surface.get_height()) // 2
             inner.blit(surface, (box.right + gap, text_y))
