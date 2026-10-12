@@ -1,0 +1,304 @@
+---
+description: Describes the Checkbox UI widget for the game
+status: active
+---
+
+# Checkbox
+
+This document describes the `dtd/widgets/checkbox.py` module and its UI
+widget: `Checkbox`. This widget extends the existing `Label` widget
+described in `10-ui-widget-label.md` by adding mouse interaction and
+a box on the left side of the label that can be checked or unchecked
+to indicate the control's boolean status.
+
+## Amendments to previous spec docs
+
+This spec amends `10-ui-widget-label.md` to document `Label._state_colors` and `Label._draw_text`
+as subclass extension hooks with explanatory comments.
+
+## Additional dependencies
+
+None! This widget relies entirely on the UI framework introduced by `04-ui-widgets.md`, which itself
+relies entirely on the existing pinned pygame-ce dependency.
+
+## Configuration
+
+This document introduces no new configuration keys.
+
+## Checkbox structure
+
+The Checkbox class extends the existing Label widget, rather than
+re-implementing near-identical layout and rendering code. Checkbox
+offers much the same constructor arguments as Label:
+
+- `text`: if blank, empty, or `None`, no text is displayed (just the box). Text is rendered using foregroundNormal/Disabled/Selected/Hover
+  and the configured font retrieved from the Theme class. See Checkbox layout section for text and box placement rules.
+- `rect`: (inherited from `Widget`): a `pygame.Rect` describing the left, top, width, and height of the Checkbox
+  (in design resolution). The rect is filled with backgroundNormal/Disabled/Selected/Hover before drawing Checkbox border and text,
+  unless the Checkbox is made non-opaque via `set_opaque()`. Respect the theme's corner radius when filling the rect!
+- `border_width`: a pixel width (in design resolution) for the border. Border is drawn using foregroundNormal/Disabled/Selected/Hover.
+  Set to 0 for no border. Respect the theme's corner radius when drawing the border! A default value of 0 is specified
+  for this constructor argument.
+- `initially_checked`: the initial boolean status of this Checkbox. Defaults to False for an unchecked Checkbox.
+  If True, this does NOT trigger a callback.
+- `on_click: Callable[[], None] | None` - invoked when a click occurs on a non-disabled Checkbox. Not invoked from
+   programmatic changes to status from `set_checked()`. Note: the callback is invoked after the boolean toggle completes
+   (a callback reading `is_checked()` therefore sees the new value).
+
+The following mutator methods are provided:
+- `set_font_point_size(self, size: int | None)` - If a positive integer is specified, that exact font point size
+  (in design space - scale up or down as needed based on current resolution; rounding=floor) is used. Text that is too large to
+  display is clipped. Invalid values (non-integer, 0, negative numbers) or None re-enable auto-scale.
+  There are no constructor arguments related to this feature. Auto-scale is therefore enabled by default.
+  Note: non-integer and non-positive values are treated as None but should raise a log warning.
+- `set_text_centered(self, is_centered: bool)` - By default, Checkboxes left-align their contents within their rect.
+  Callers can invoke this method to cause the Checkbox to prefer centered text, when the text to display is
+  smaller than the Checkbox's rect. See the Checkbox layout section for more details. There are no constructor
+  arguments for this feature.
+- `set_opaque(self, is_opaque: bool)` - By default, Checkboxes fill their rect with backgroundNormal/Disabled/Selected/Hover.
+  Callers can invoke this method with False to disable this behavior. A non-opaque Checkbox will therefore have
+  a transparent background. There are no constructor arguments for this feature.
+- `set_border_width(self, width: int)` - modifies the border width after construction. This causes a re-layout
+  of the text to fit the new inner rect. A value of 0 disables border display. A negative integer or any non-int value
+  (such as a bool) disables border display with a log warning. There are no constructor arguments for this feature.
+- `set_checked(self, is_checked: bool)` - changes the current boolean status of the Checkbox. Can be invoked
+  to check or uncheck the Checkbox, even if the Checkbox is disabled.
+
+Additionally, an `is_checked()` convenience method returns the current boolean state of the checkbox.
+
+The display area for the Checkbox's content is called the "inner rect". This is the Checkbox's rect minus
+the border width on each edge. For example, a 100x100 Checkbox with a border width of 10 has an inner rect
+of size 80x80. All text scaling described in this document uses the inner rect dimensions unless
+otherwise stated. If the inner rect has a zero or negative size (for example, with unreasonably large
+border width), then no contents are drawn (neither box nor text).
+
+## Checkbox events and cosmetics
+
+Note that, unlike the Label parent class, Checkboxes do respond to mouse hover events:
+- on mouse hover, Checkbox uses the `*Hover` colors from the current theme.
+- the same precedence rules for selected+hovered and selected+disabled as described
+  in the 04 spec doc apply here.
+
+Also, unlike the Label parent class, Checkboxes do respond to left button mouse clicks:
+- a click anywhere in the Checkbox's rect (both mouse pressed and mouse released occur
+  within the rect) counts as a "click" and toggles the Checkbox's current boolean status.
+- disabled Checkboxes do not respond to mouse clicks, and their boolean status can only
+  be changed programmatically.
+
+## Checkbox layout
+
+Checkbox is very similar to the existing `Label` class, except that an additional square (the "box")
+is rendered to the left of the text. This box, for layout purposes, is considered part of the
+Checkbox's label text. That is, if the contents are to be centered, the box does not stay left-aligned
+within the inner rect. The box is an unfilled square with a border width of 2px (in design pixels, but
+with a floor of 2 - it may be larger than 2 screen pixels but never less than that) whose height is equal to
+`font.size("0")[1]` of the current font at the computed text size. A margin equal to half the computed
+height of the box separates the right edge of the box from the left edge of the text.
+The box respects the calculated margin of the inner rect, exactly as described in spec doc 10.
+The box is always rendered with square corners regardless of the theme's corner radius - that radius
+only applies to *Widget* rect corners, not the Checkbox's box corners.
+
+Text auto-scale calculations must include the width of the box and the margin between the box
+and the text! The parent class only considers text dimensions for auto-scale purposes - this is
+insufficient for a Checkbox, whose content dimensions are comprised of box + margin + text.
+
+The outline color of the box matches the foreground color of the Checkbox, depending on
+state: foregroundNormal, foregroundHover, foregroundSelected, or foregroundDisabled.
+
+If the Checkbox's boolean status is True, the box is "checked" with an X. Do not write a literal
+"X" character in the box! Differences in fonts would cause noticeable and undesirable variations
+in the box's appearance, which must be consistent regardless of font. Instead, draw a diagonal 2px-width line
+from the top left of the box to the bottom right, and another line from the top right of the box to
+the bottom left. Line thickness is in design space, but with a floor of 2 - the lines may be thicker
+than 2 pixels, but never less than that. The color of these lines is the same foreground color as the box outline,
+and also varies by checkbox state (normal/hovered/selected/disabled). If the Checkbox's
+boolean status is False, just draw the box outline without the diagonal lines. This gives the user
+a very easy way to visually determine the Checkbox's boolean status at all times.
+
+Note that it's possible to create a Checkbox with no label text - this is not a bug, it is
+a feature. In this case, the height of the box is calculated by using the `0` character
+in the current font as a stand-in (do not render `0` - just use that character's size as part
+of the auto-scale calculations for the box, or if a specific font point size was given).
+
+Checkbox contents are always vertically centered within the inner rect.
+
+## Checkbox audio
+
+The Checkbox class plays UI sound effects for some events (constants defined in spec 04):
+
+- a click plays `UI_SFX_ACCEPT`. Clicks only count when the Checkbox is not disabled.
+  Programmatically changing the Checkbox's boolean status via `set_checked()` does not play audio.
+- Override the `on_hover_enter()` hook from the parent Widget class:
+  `get_audio_manager().play_ui_sfx(UI_SFX_HOVER)`
+
+Checkbox makes no attempt to resolve the resource ids from these constants (located in `game_constants.py`).
+Checkbox makes use of AudioManager's `play_ui_sfx()` method via the global singleton AudioManager instance.
+This method handles all edge cases related to audio playing (UI sound effects are disabled, the resource IDs
+don't resolve to valid audio resources, etc.)
+
+## Testing
+
+Note: behavior inherited unchanged from `Label` is tested once, in the parent class's
+suite (`tests/test_label.py`), and deliberately not duplicated here: `set_opaque()` fill
+toggling with state-appropriate backgrounds, the `set_border_width()` validation matrix
+(positive, 0-silent, negative/non-int with warnings), and blank/empty text normalization.
+Border color rendering is likewise not re-tested: the border draws with the exact
+foreground that `_state_colors` returns, and that color is pinned per state through the
+box outline tests below. The Checkbox suite covers only box-aware behavior - including
+the box-aware re-layout on border-width and rect changes.
+
+- A Checkbox with default settings (no mutators invoked after construction) auto-scales and left-aligns
+  its contents, is neither selected nor disabled, and fills its rect with the normal background color.
+  Its box is not checked.
+- Selecting a Checkbox changes its foreground color to `foregroundSelected`, and also changes
+  its background color to `backgroundSelected` if it is opaque. The box and X overlay colors also
+  change to `foregroundSelected`.
+- Hovering over a non-selected Checkbox changes its foreground color to `foregroundHover`,
+  and also changes its background color to `backgroundHover` if it is opaque. The box and X overlay colors also
+  change to `foregroundHover`.
+- Hovering over a selected Checkbox does not have any cosmetic effect.
+- Disabling a non-selected, non-disabled Checkbox changes its foreground color to `foregroundDisabled`,
+  and also changes its background color to `backgroundDisabled` if it is opaque. The box and X overlay colors also
+  change to `foregroundDisabled`.
+- Selecting a disabled Checkbox has no visual effect (the Checkbox still renders as disabled).
+- Disabling a selected Checkbox changes its foreground color to `foregroundDisabled`, and also changes
+  its background color to `backgroundDisabled` if it is opaque. The box and X overlay colors also
+  change to `foregroundDisabled`.
+- Re-enabling a selected Checkbox changes its foreground color to `foregroundSelected`, and also changes
+  its background color to `backgroundSelected` if it is opaque. The box and X overlay colors also
+  change to `foregroundSelected`.
+- Re-enabling a non-selected Checkbox changes its foreground color to `foregroundNormal`, and also changes
+  its background color to `backgroundNormal` if it is opaque. The box and X overlay colors also
+  change to `foregroundNormal`.
+- Checkbox contents (box+margin+text) auto-scale to fit the inner rect and margin. Unreasonably long text
+  that cannot fit even at 1pt font size clips at the inner rect boundary.
+- If non-blank text is supplied, the box is rendered at `font.size("0")[1]` using the current font and computed
+  text size, and a margin of half that size stands between the right edge of the box and the left edge of the text.
+- If a Checkbox is given None for its constructor's text argument, no text is drawn (but the box still appears).
+  The box's side length is computed based on `font.size("0")[1]` using the current font.
+- `set_checked()` given True will draw the X symbol on the box. Subsequent calls with True are no-ops.
+- `set_checked()` given False will clear the X symbol from the box. Subsequent calls with False are no-ops.
+- A checked box's X never overshoots the box: with the X drawn, the ink bounding box of a text-less
+  Checkbox equals the box's rect exactly - the diagonals reach the corner pixels, and any thick-line
+  overshoot is clipped at the box boundary.
+- `set_checked()` can be used to toggle the X symbol even if the Checkbox is disabled.
+- `is_checked()` accurately reports the boolean status of a Checkbox.
+- A mouse click anywhere in the rect of a non-disabled Checkbox toggles the current boolean status and draws or clears the X symbol.
+- A mouse click anywhere in the rect of a disabled Checkbox has no effect.
+- A mouse click that originates inside the rect (mouse pressed) but which completes outside of the rect does NOT toggle boolean status.
+- A mouse click that originates outside the rect (mouse pressed) but which completes inside of the rect does NOT toggle boolean status.
+- `set_text_centered()` can be used to toggle content centering (box + text). Subsequent calls with the same value are no-ops.
+- `set_font_point_size()` with a valid positive integer argument disables auto-scale.
+- `set_font_point_size()` with 0, a negative integer, or any non-int value other than None enables auto-scale with a log warning.
+- `set_font_point_size()` with None enables auto-scaling with no log warning.
+- Every change in border width should cause a re-layout of the contents to fit within the newly-computed inner rect (with margin).
+- Mutating `checkbox.rect` after construction should cause a re-layout of the contents to fit within the newly-computed inner rect (with margin).
+- Text that is too large to fit is clipped at the inner rect boundary.
+- Text that is smaller than the rect left-aligns by default, centers horizontally if requested, and always vertically centers.
+- A margin equal to half the height of `0` (`font.size("0")[1]`) is applied at each inner rect edge.
+- An unreasonably large border width prevents Checkbox contents from drawing, if the resulting inner rect
+  has a 0 or negative size.
+- If given a theme with a non-zero corner radius, the radius is respected by both rect fill and border but NOT respected
+  by the box, which always has square corners.
+- `on_click` is not invoked from the constructor if `initially_checked` is True.
+- `on_click` is not invoked from programmatic calls to `set_checked()`.
+- `on_click` is invoked when a left button mouse click occurs within the rect of a non-disabled Checkbox.
+- `on_click` is invoked only after the toggle completes: a callback reading `is_checked()` sees the new value.
+- `on_click` is not invoked when a left button mouse click occurs within the rect of a disabled Checkbox.
+- Audio events:
+  - when a Checkbox is clicked, `UI_SFX_ACCEPT` is played.
+  - programmatically changing boolean status via `set_checked()` does NOT play `UI_SFX_ACCEPT`.
+  - a disabled Checkbox does not play audio on click.
+  - `UI_SFX_HOVER` is played when the Checkbox's `on_hover_enter()` is invoked. Tests can just invoke this hook directly, rather than synthesize MOUSEMOTION.
+  - a disabled Checkbox does not play hover audio (UIManager ensures this; can't be tested by invoking `on_hover_enter()` programmatically).
+  - note that the tests need to use the `mixer_ready` + `init_audio_manager` pattern to process audio events.
+  - if `UI_SFX_HOVER` or `UI_SFX_ACCEPT` do not resolve to valid audio resources, no error is raised.
+
+## Acceptance criteria
+
+- Can a Checkbox be created without label text? (Just a clickable box?)
+- Can a Checkbox be created with a fixed font point size?
+- Can a Checkbox be created with auto-scaling based on the Checkbox rect?
+- Can a caller listen for boolean status change events caused by mouse clicks on a non-disabled Checkbox?
+- Does the box render with side length of `font.size("0")[1]` of the Checkbox's text?
+- Can a disabled Checkbox still have its boolean status toggled via `set_checked()`?
+- Can a user click anywhere in a non-disabled Checkbox's rect to toggle its boolean status?
+- Does a non-disabled and non-selected Checkbox respond to mouse hover events?
+- Does a non-disabled Checkbox play `UI_SFX_HOVER` on mouse hover? (Once on transition, not continuously/repeatedly during hover)
+- Does clicking a non-disabled Checkbox play `UI_SFX_ACCEPT`?
+
+## Dev plan
+
+1. Amend the 10 spec doc first! Flip that doc to `proposed` status to indicate that it is
+   temporarily out of sync with the code. Append a new stage to its dev plan to describe
+   the needed change. Implement the change. Mark the appended stage as complete with
+   today's date, and then flip that doc back to `active` status.
+   **Completed 2026-10-11** (spec 10 gained a "Subclass extension hooks" section and a
+   dev plan stage 1; `label.py` class/method docstrings now document `_state_colors`
+   and `_draw_text` as supported extension points with `draw()` inherited as-is.
+   Docs and comments only - no behavior change. Full suite green at 753 tests.
+   Spec 10 flipped back to `active`.)
+2. Create the `Checkbox` class as an extension of `Label`. Add drawing of the box in unchecked state only.
+   Stub out `set_checked()` but do not implement it yet. Just get the box to render with the text,
+   and ensure both left-alignment and centering work as expected. Ensure auto-scaling works (reuse
+   the shared helper for this, do not duplicate text scaling logic). Ensure fixed point size works.
+   Implement mouse hovering cosmetic effects.
+   **Completed 2026-10-11** (`dtd/widgets/checkbox.py`: `Checkbox(Label)` overriding the two
+   Label extension hooks. Box side is `zero_glyph_height` - a new `text_layout` helper that
+   is the single definition of `font.size("0")[1]`, with `zero_glyph_margin` recomposed on
+   top of it, so the box metric and the margin rule cannot drift (approved scalability
+   refinement). Auto-scale delegates to the shared `largest_fitting_size` with a box-aware
+   fit predicate (box + half-box gap + text horizontally, taller of box/text vertically,
+   same zero-glyph margin). Box strokes are 2 design pixels with a screen floor of 2; the
+   box keeps square corners under a rounded theme. Empty/blank/None text uses the `0` glyph
+   as a math stand-in that is never rendered. Hover cosmetics via the `_state_colors`
+   override; hover audio (`UI_SFX_HOVER`) implemented here alongside hover - the dev plan
+   assigns no stage to audio, and click audio will arrive with clicks in stage 3.
+   `set_checked()` is an explicit no-op stub; `initially_checked`/`on_click` are accepted
+   and stored but unused until stage 3. One gotcha pinned by the tests: a synthesized
+   MOUSEMOTION over an enabled Checkbox fires the audio hook, so hover tests need the
+   `silent_audio_manager` singleton, exactly like the Button suite. 35 tests in
+   tests/test_checkbox.py. Full suite green at 788 tests.)
+3. Implement `set_checked()` and the drawing of the X symbol. Implement support for mouse clicks
+   on non-disabled Checkboxes to toggle their boolean status. Implement `is_checked()`.
+   Implement callbacks via `on_click`.
+   **Completed 2026-10-11** (`set_checked()` stores the status - works while disabled, silent
+   and callback-free; `is_checked()` reports it. The X is two corner-to-corner `draw.line`
+   diagonals in the state foreground color, never a glyph (spec 11: font-independent mark).
+   `update()` implements the Button-style press-and-release contract: left button only,
+   both inside the rect, then toggle -> `UI_SFX_ACCEPT` -> `on_click`, in that order - the
+   doc does not pin the callback's ordering, so a test pins it: the callback observes the
+   already-toggled status via `is_checked()`. `initially_checked` never fires the callback.
+   The two stage 2 stub tests retired; 18 new tests (51 in the module): X pixel pins
+   (center + near-corner diagonal points), same-value no-ops, clearing, disabled
+   `set_checked`, the full click matrix (drag-off/drag-in/right-button/disabled), the
+   `on_click` matrix, and the accept-sound matrix. Gotcha pinned: thick-line probes must
+   sit exactly on the diagonal's path - pygame's wide-line rasterization does not cover
+   pixels one column off it. Full suite green at 804 tests.)
+ 4. Final verification step - are acceptance criteria met? Do all tests pass? Update this spec doc
+    to change all "proposes" and future tense prose to "describes" and present tense. Update the code
+    comments and docstrings to remove any "TODO"-style comments such as "this will land in the next stage".
+    Flip this document to `active` status.
+   **Completed 2026-10-11** (All ten acceptance criteria verified against named tests, one per
+   criterion. Prose converted to present tense following the spec 10 stage 9 precedent: the
+   structural sections describe, while the Testing section's requirement bullets and the
+   mutator wording keep the house "should/will" style shared with the active spec 10. The
+    `on_click` ordering note gained the observable consequence (`is_checked()` shows the new
+    value) and the Testing section gained the matching pin. One cryptic stage reference
+    reworded in `checkbox.py`; historical provenance notes elsewhere kept. Full suite green
+    at 804 tests. Status flipped to `active`.)
+5. Post-review fix: the checked-box X overshot the box's corners - `pygame.Rect` corner
+   attributes are exclusive while `draw.line` endpoints are inclusive, and thick-line caps
+   overshoot further, so the raw corners poked the X outside the box outline. The X now
+   draws on a box-sized surface blitted at the box's position, clipping the mark at the
+   box boundary (the blit still clips at the inner rect). The Testing section's inherited
+   behavior bullets (`set_opaque`, the `set_border_width` validation matrix, border color
+   rendering, blank/empty text) are replaced by a single note delegating them to
+   `tests/test_label.py`, and the empty-text bullet is narrowed to the None case actually
+   tested in the Checkbox suite.
+   **Completed 2026-10-11** (`checkbox.py`: the X is drawn on a box-sized SRCALPHA
+   surface, then blitted at `box.topleft` - `inner.subsurface(box)` was rejected because
+   it raises when a pinned oversized size puts the box partly outside the inner rect,
+   while blit clips gracefully. New test pins the ink bounding box of a checked text-less
+   Checkbox to the box rect exactly. Full suite green at 805 tests.)
+

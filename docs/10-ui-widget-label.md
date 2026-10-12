@@ -135,6 +135,27 @@ A margin equal to half the height of the `0` character (`font.size("0")[1]`) at 
 applied at all edges of the inner rect. This effectively shrinks the inner rect. All text layout
 calculations should take this into account.
 
+## Subclass extension hooks
+
+Amended 2026-10-11 per `11-ui-widget-checkbox.md` (Checkbox): the `Label` draw pipeline
+supports subclassing, and two of its methods are documented extension hooks. Their
+underscore names do not change - single underscore is Python's "protected" convention,
+and these methods are supported extension points, not private implementation details:
+
+- `_state_colors(theme)` - returns the `(foreground, background)` pair for the widget's
+  current state. Label never passes `hovered` (Labels ignore hover entirely); subclasses
+  that do respond to hover override this to pass it through the same shared
+  `ui.state_colors` precedence.
+- `_draw_text(inner, theme, fg, scale)` - renders the label's text into the inner-rect
+  sub-surface. Subclasses whose content is more than text (the Checkbox's box, spec 11)
+  override this to lay out their content as a unit.
+
+The `draw()` method itself - fill, border, inner rect, clipping sub-surface - is not a
+hook: subclasses inherit it as-is rather than re-implementing near-identical rendering
+code. Code comments in `label.py` explain why each hook exists. This is a documentation-
+and-comments-only change: no behavior, no renames, no new tests; the existing suite
+must stay green.
+
 ## Testing
 
 - A label with default settings (no mutators invoked after construction) auto-scales and left-aligns
@@ -305,4 +326,15 @@ calculations should take this into account.
    reworded to descriptive present tense; stale future-tense stage references in
    `label.py`'s module docstring and `screens/base.py`'s `handle()` docstring
    rewritten to past tense. Doc flipped to `active`.)
+10. Amendment per spec 11 (Checkbox): document `_state_colors` and `_draw_text` as
+    supported subclass extension hooks. No behavior change and no renames - the
+    docstrings and code comments in `label.py` explain why each hook exists and that
+    `draw()` itself is inherited as-is, and this doc gains the "Subclass extension
+    hooks" section above. Docs and comments only; the full suite must stay green.
+    **Completed 2026-10-11** (`label.py`: class docstring names the two extension
+    hooks; `_state_colors` and `_draw_text` docstrings state they are supported
+    subclass extension points, why (hover-aware state colors and non-text content
+    like the Checkbox box, spec 11), and that `draw()` is inherited unchanged.
+    No code behavior touched. Full suite green at 753 tests. Doc flipped back to
+    `active`.)
 
