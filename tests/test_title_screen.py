@@ -27,6 +27,7 @@ from dtd.ui import Theme, UIManager, Widget
 from dtd.widgets.button import Button
 from dtd.widgets.choice_list import ChoiceList
 from dtd.widgets.label import Label
+from helpers_pixels import BLACK, count_ink, ink_bbox, is_red_ink
 
 
 @pytest.fixture(autouse=True)
@@ -374,18 +375,17 @@ class TestTitleScreenTitle:
         # test, which also catches gross misplacement). The surface
         # staying black everywhere else is also the non-opaque proof:
         # the Label fills nothing (spec 08: Title):
-        min_x = min_y = 10**6
-        max_x = max_y = -1
-        for y in range(expected_center[1] - 100, expected_center[1] + 100):
-            for x in range(expected_center[0] - 500, expected_center[0] + 500):
-                if surface.get_at((x, y))[:3] != (0, 0, 0):
-                    min_x, max_x = min(min_x, x), max(max_x, x)
-                    min_y, max_y = min(min_y, y), max(max_y, y)
-        assert max_x >= 0, "no title pixels found near the expected center"
-        assert abs((min_x + max_x) // 2 - expected_center[0]) <= 5
-        assert abs((min_y + max_y) // 2 - expected_center[1]) <= 5
+        bbox = ink_bbox(
+            surface,
+            (expected_center[0] - 500, expected_center[1] - 100, 1000, 200),
+            lambda pixel: pixel != BLACK,
+        )
+        assert bbox is not None, "no title pixels found near the expected center"
+        box_center = (bbox[0] + (bbox[2] - 1) // 2, bbox[1] + (bbox[3] - 1) // 2)
+        assert abs(box_center[0] - expected_center[0]) <= 5
+        assert abs(box_center[1] - expected_center[1]) <= 5
         # ...and the whole title stays inside the upper half:
-        assert max_y < surface.get_height() // 2
+        assert bbox[1] + bbox[3] - 1 < surface.get_height() // 2
 
 
 class TestTitleScreenExitGame:
@@ -635,13 +635,10 @@ class TestTitleScreenChoosers:
         surface = pygame.Surface((game_constants.DESIGN_W, game_constants.DESIGN_H))
         screen.draw(surface)
         center = (game_constants.DESIGN_W // 2, game_constants.DESIGN_H // 4)
-        red_pixels = sum(
-            1
-            for y in range(center[1] - 100, center[1] + 100)
-            for x in range(center[0] - 500, center[0] + 500)
-            if surface.get_at((x, y))[0] > 150
-            and surface.get_at((x, y))[1] < 100
-            and surface.get_at((x, y))[2] < 100
+        red_pixels = count_ink(
+            surface,
+            (center[0] - 500, center[1] - 100, 1000, 200),
+            is_red_ink,
         )
         assert red_pixels > 0
 

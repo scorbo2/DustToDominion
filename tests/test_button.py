@@ -18,6 +18,7 @@ from dtd import audio, game_constants
 from dtd.resource_loader import ResourceLoader
 from dtd.ui import Theme, UIManager
 from dtd.widgets.button import Button
+from helpers_pixels import ink_bbox, is_red_ink, is_white_ink
 
 
 @pytest.fixture(autouse=True)
@@ -109,38 +110,6 @@ def _font_size_spy(theme: Theme) -> list[int]:
 
     theme.get_font = spy  # instance attribute shadows the bound method
     return requested
-
-
-def _is_white(pixel: tuple[int, int, int, int]) -> bool:
-    return pixel[0] > 200 and pixel[1] > 200 and pixel[2] > 200
-
-
-def _is_text_ink(pixel: tuple[int, int, int, int]) -> bool:
-    # Red-dominant thresholds tell the red text apart from the white
-    # icon and green fill (exact-color matching is unsafe per issue #37).
-    return pixel[0] > 150 and pixel[1] < 100 and pixel[2] < 100
-
-
-def _ink_bbox(
-    screen: pygame.Surface,
-    region: tuple[int, int, int, int],
-    predicate,
-) -> tuple[int, int, int, int] | None:
-    """Tight bounding box of pixels matching ``predicate`` inside ``region``.
-
-    Returns ``(x, y, width, height)`` or ``None`` when nothing matches.
-    """
-    x0, y0, w, h = region
-    xs: list[int] = []
-    ys: list[int] = []
-    for x in range(x0, x0 + w):
-        for y in range(y0, y0 + h):
-            if predicate(screen.get_at((x, y))):
-                xs.append(x)
-                ys.append(y)
-    if not xs:
-        return None
-    return (min(xs), min(ys), max(xs) - min(xs) + 1, max(ys) - min(ys) + 1)
 
 
 class TestButtonRendering:
@@ -360,7 +329,7 @@ class TestButtonIconAndTextLayout:
         # THEN the icon is scaled to 90x90 and centered horizontally
         # (spec 09: Icon scaling / Button layout - icon only):
         screen = pygame.display.get_surface()
-        assert _ink_bbox(screen, (0, 0, 100, 100), _is_white) == (5, 5, 90, 90)
+        assert ink_bbox(screen, (0, 0, 100, 100), is_white_ink) == (5, 5, 90, 90)
 
     def test_icon_with_border_should_scale_to_inner_rect_height(
         self, font_ready: None
@@ -380,7 +349,7 @@ class TestButtonIconAndTextLayout:
         # THEN the icon scales to the INNER rect height and centers
         # within it (spec 09: inner rect):
         screen = pygame.display.get_surface()
-        assert _ink_bbox(screen, (0, 0, 100, 100), _is_white) == (14, 14, 72, 72)
+        assert ink_bbox(screen, (0, 0, 100, 100), is_white_ink) == (14, 14, 72, 72)
 
     def test_wide_icon_should_clip_at_inner_rect_boundary(
         self, font_ready: None
@@ -402,10 +371,10 @@ class TestButtonIconAndTextLayout:
         # never enters the border band - clipping happens at the inner
         # rect boundary, not the outer one (spec 09: inner rect):
         screen = pygame.display.get_surface()
-        assert _is_white(_pixel(screen, 50, 14))
-        assert _is_white(_pixel(screen, 50, 85))
-        assert not _is_white(_pixel(screen, 50, 13))
-        assert not _is_white(_pixel(screen, 50, 86))
+        assert is_white_ink(_pixel(screen, 50, 14))
+        assert is_white_ink(_pixel(screen, 50, 85))
+        assert not is_white_ink(_pixel(screen, 50, 13))
+        assert not is_white_ink(_pixel(screen, 50, 86))
         assert _pixel(screen, 5, 50) == (255, 0, 0, 255)  # border stays pure
 
     def test_zero_or_negative_inner_rect_should_prevent_icon_and_text_from_drawing(
@@ -428,7 +397,7 @@ class TestButtonIconAndTextLayout:
         # THEN no icon pixels render and no font is ever requested - the
         # label is not drawn at all (spec 09: inner rect):
         screen = pygame.display.get_surface()
-        assert _ink_bbox(screen, (0, 0, 100, 100), _is_white) is None
+        assert ink_bbox(screen, (0, 0, 100, 100), is_white_ink) is None
         assert requested_sizes == []
 
     def test_icon_and_text_should_left_align_icon_and_center_text_in_remaining_space(
@@ -453,12 +422,12 @@ class TestButtonIconAndTextLayout:
         # is centered in the remaining space right of the icon
         # (spec 09: Button layout - both icon and text):
         screen = pygame.display.get_surface()
-        assert _ink_bbox(screen, (0, 0, 400, 100), _is_white) == (5, 5, 90, 90)
+        assert ink_bbox(screen, (0, 0, 400, 100), is_white_ink) == (5, 5, 90, 90)
         font = theme.get_font(20)
         text_w, text_h = font.size("GO")
         expected_x = 100 + (300 - text_w) // 2
         expected_y = (100 - text_h) // 2
-        bbox = _ink_bbox(screen, (0, 0, 400, 100), _is_text_ink)
+        bbox = ink_bbox(screen, (0, 0, 400, 100), is_red_ink)
         assert bbox is not None
         bx, by, bw, bh = bbox
         assert bx >= expected_x and bx + bw <= expected_x + text_w
@@ -483,7 +452,7 @@ class TestButtonIconAndTextLayout:
         # THEN no label ink renders anywhere (spec 09: Button layout -
         # both icon and text, remaining space < 1px):
         screen = pygame.display.get_surface()
-        assert _ink_bbox(screen, (0, 0, 100, 100), _is_text_ink) is None
+        assert ink_bbox(screen, (0, 0, 100, 100), is_red_ink) is None
 
     def test_icon_size_should_not_change_with_or_without_text(
         self, font_ready: None
@@ -501,7 +470,7 @@ class TestButtonIconAndTextLayout:
             )
             screen.fill((0, 0, 0, 255))
             ui.draw(screen)
-            bboxes.append(_ink_bbox(screen, (0, 0, 400, 100), _is_white))
+            bboxes.append(ink_bbox(screen, (0, 0, 400, 100), is_white_ink))
 
         # THEN the icon is identically sized in both (only its position
         # may differ, spec 09: Icon scaling):
@@ -526,7 +495,7 @@ class TestButtonIconAndTextLayout:
 
         # THEN the icon rescales to the new inner rect (margin 10,
         # target 180, centered at (10, 10), spec 09: Icon scaling):
-        assert _ink_bbox(screen, (0, 0, 200, 200), _is_white) == (10, 10, 180, 180)
+        assert ink_bbox(screen, (0, 0, 200, 200), is_white_ink) == (10, 10, 180, 180)
 
     def test_set_font_point_size_with_positive_size_should_render_at_that_size(
         self, font_ready: None
@@ -545,7 +514,7 @@ class TestButtonIconAndTextLayout:
         # THEN the font is requested at exactly 20px - no auto-scale
         # search (spec 09: set_font_point_size):
         assert set(requested_sizes) == {20}
-        assert _ink_bbox(pygame.display.get_surface(), (0, 0, 400, 100), _is_text_ink) is not None
+        assert ink_bbox(pygame.display.get_surface(), (0, 0, 400, 100), is_red_ink) is not None
 
     def test_set_font_point_size_should_convert_design_points_to_pixels_with_floor(
         self, font_ready: None
@@ -583,7 +552,7 @@ class TestButtonIconAndTextLayout:
         text_w, text_h = theme.get_font(20).size("OK")
         expected_x = (400 - text_w) // 2
         expected_y = (100 - text_h) // 2
-        bbox = _ink_bbox(pygame.display.get_surface(), (0, 0, 400, 100), _is_text_ink)
+        bbox = ink_bbox(pygame.display.get_surface(), (0, 0, 400, 100), is_red_ink)
         assert bbox is not None
         bx, by, bw, bh = bbox
         assert bx >= expected_x and bx + bw <= expected_x + text_w
@@ -623,7 +592,7 @@ class TestButtonIconAndTextLayout:
 
         # THEN the label ink is centered within the inner rect (spec 09:
         # Button layout - text only; tolerance covers glyph side bearings):
-        bbox = _ink_bbox(pygame.display.get_surface(), (0, 0, 400, 100), _is_text_ink)
+        bbox = ink_bbox(pygame.display.get_surface(), (0, 0, 400, 100), is_red_ink)
         assert bbox is not None
         bx, by, bw, bh = bbox
         assert abs((bx + bw / 2) - 200) <= 5
@@ -647,8 +616,8 @@ class TestButtonIconAndTextLayout:
         # reserved space (x >= 100) and is present within the remainder
         # (spec 09: Text scaling with reduced space):
         screen = pygame.display.get_surface()
-        assert _ink_bbox(screen, (0, 0, 100, 100), _is_text_ink) is None
-        assert _ink_bbox(screen, (100, 0, 300, 100), _is_text_ink) is not None
+        assert ink_bbox(screen, (0, 0, 100, 100), is_red_ink) is None
+        assert ink_bbox(screen, (100, 0, 300, 100), is_red_ink) is not None
 
     def test_auto_scale_should_delegate_to_shared_search_with_inner_rect_height(
         self, font_ready: None

@@ -34,6 +34,7 @@ from loguru import logger
 from dtd.resource_loader import ResourceLoader
 from dtd.ui import Theme, UIManager
 from dtd.widgets.label import Label
+from helpers_pixels import BLACK, any_pixel_differs, ink_bbox, is_red_ink
 
 # Distinguishable custom theme: red/green in the normal state, blue/
 # yellow when selected, dark grays when disabled, magenta/cyan on
@@ -56,7 +57,6 @@ SELECTED_BG = (255, 255, 0, 255)
 DISABLED_FG = (17, 17, 17, 255)
 DISABLED_BG = (34, 34, 34, 255)
 HOVER_BG = (0, 255, 255, 255)
-BLACK = (0, 0, 0, 255)
 
 
 def _theme(json_data: dict | None = None) -> Theme:
@@ -99,46 +99,6 @@ def _down(pos: tuple[int, int], button: int = 1) -> pygame.event.Event:
 
 def _up(pos: tuple[int, int], button: int = 1) -> pygame.event.Event:
     return pygame.event.Event(pygame.MOUSEBUTTONUP, button=button, pos=pos)
-
-
-def _any_pixel_differs(surf: pygame.Surface, area: pygame.Rect, background) -> bool:
-    """Whether any pixel inside ``area`` differs from ``background``.
-
-    The safe way to assert "ink was rendered here" at small sizes
-    (issue #34: exact-foreground matching is platform-dependent).
-    """
-    return any(
-        surf.get_at((x, y)) != background
-        for x in range(area.x, area.right)
-        for y in range(area.y, area.bottom)
-    )
-
-
-def _is_red_ink(pixel: tuple[int, int, int, int]) -> bool:
-    """Red-dominant thresholds: the red text over the green fill."""
-    return pixel[0] > 150 and pixel[1] < 100 and pixel[2] < 100
-
-
-def _ink_bbox(
-    screen: pygame.Surface,
-    region: tuple[int, int, int, int],
-    predicate,
-) -> tuple[int, int, int, int] | None:
-    """Tight bounding box of pixels matching ``predicate`` inside ``region``.
-
-    Returns ``(x, y, width, height)`` or ``None`` when nothing matches.
-    """
-    x0, y0, w, h = region
-    xs: list[int] = []
-    ys: list[int] = []
-    for x in range(x0, x0 + w):
-        for y in range(y0, y0 + h):
-            if predicate(screen.get_at((x, y))):
-                xs.append(x)
-                ys.append(y)
-    if not xs:
-        return None
-    return (min(xs), min(ys), max(xs) - min(xs) + 1, max(ys) - min(ys) + 1)
 
 
 def _warning_records() -> tuple[list[str], int]:
@@ -418,7 +378,7 @@ class TestLabelTextRendering:
         # THEN the fill is present but not a single pixel deviates from
         # it - no text was drawn:
         assert screen.get_at((200, 50)) == NORMAL_BG
-        assert not _any_pixel_differs(screen, pygame.Rect(0, 0, 400, 100), NORMAL_BG)
+        assert not any_pixel_differs(screen, pygame.Rect(0, 0, 400, 100), NORMAL_BG)
 
     def test_default_should_auto_scale_left_align_and_vertically_center(
         self, font_ready: None
@@ -447,7 +407,7 @@ class TestLabelTextRendering:
         margin = font.size("0")[1] // 2
         expected_x = margin
         expected_y = (100 - text_h) // 2
-        bbox = _ink_bbox(screen, (0, 0, 400, 100), _is_red_ink)
+        bbox = ink_bbox(screen, (0, 0, 400, 100), is_red_ink)
         assert bbox is not None
         bx, by, bw, bh = bbox
         assert bx >= expected_x and bx + bw <= expected_x + text_w
@@ -479,7 +439,7 @@ class TestLabelTextRendering:
         assert text_h + 2 * margin <= 100
 
         # THEN no ink reaches the right-hand margin band either:
-        assert not _any_pixel_differs(
+        assert not any_pixel_differs(
             screen, pygame.Rect(400 - margin, 0, margin, 100), NORMAL_BG
         )
 
@@ -499,7 +459,7 @@ class TestLabelTextRendering:
 
         # THEN text ink exists inside the rect - clipped at size 1, not
         # skipped (spec 10: Label layout):
-        assert _any_pixel_differs(screen, pygame.Rect(0, 0, 20, 10), NORMAL_BG)
+        assert any_pixel_differs(screen, pygame.Rect(0, 0, 20, 10), NORMAL_BG)
         # ...and nothing at all renders outside the rect:
         outside = [
             screen.get_at((x, y))
@@ -616,7 +576,7 @@ class TestLabelFixedPointSize:
         margin = font.size("0")[1] // 2
         expected_x = margin
         expected_y = (100 - text_h) // 2
-        bbox = _ink_bbox(screen, (0, 0, 400, 100), _is_red_ink)
+        bbox = ink_bbox(screen, (0, 0, 400, 100), is_red_ink)
         assert bbox is not None
         bx, by, bw, bh = bbox
         assert bx >= expected_x and bx + bw <= expected_x + text_w
@@ -654,7 +614,7 @@ class TestLabelFixedPointSize:
         screen = _draw(ui)
 
         # THEN clipped ink is present inside the rect...
-        assert _any_pixel_differs(screen, pygame.Rect(0, 0, 100, 100), NORMAL_BG)
+        assert any_pixel_differs(screen, pygame.Rect(0, 0, 100, 100), NORMAL_BG)
         # ...and nothing at all renders outside it (spec 10: text too
         # large to display is clipped at the inner rect boundary):
         outside = [
@@ -735,7 +695,7 @@ class TestLabelTextCentering:
         text_w, text_h = font.size("OK")
         expected_x = (400 - text_w) // 2
         expected_y = (100 - text_h) // 2
-        bbox = _ink_bbox(screen, (0, 0, 400, 100), _is_red_ink)
+        bbox = ink_bbox(screen, (0, 0, 400, 100), is_red_ink)
         assert bbox is not None
         bx, by, bw, bh = bbox
         assert bx >= expected_x and bx + bw <= expected_x + text_w
@@ -764,7 +724,7 @@ class TestLabelTextCentering:
         text_w, text_h = font.size("OK")
         expected_x = (400 - text_w) // 2
         expected_y = (100 - text_h) // 2
-        bbox = _ink_bbox(screen, (0, 0, 400, 100), _is_red_ink)
+        bbox = ink_bbox(screen, (0, 0, 400, 100), is_red_ink)
         assert bbox is not None
         bx, by, bw, bh = bbox
         assert bx >= expected_x and bx + bw <= expected_x + text_w
@@ -789,8 +749,8 @@ class TestLabelTextCentering:
         # THEN ink reaches both extreme columns - the text is cut on
         # each side, not merely at the right edge as left-alignment
         # would cut it:
-        assert _any_pixel_differs(screen, pygame.Rect(0, 0, 1, 100), NORMAL_BG)
-        assert _any_pixel_differs(screen, pygame.Rect(99, 0, 1, 100), NORMAL_BG)
+        assert any_pixel_differs(screen, pygame.Rect(0, 0, 1, 100), NORMAL_BG)
+        assert any_pixel_differs(screen, pygame.Rect(99, 0, 1, 100), NORMAL_BG)
         # ...and nothing at all renders outside the rect:
         outside = [
             screen.get_at((x, y))
@@ -819,7 +779,7 @@ class TestLabelTextCentering:
         )
         font = theme.get_font(chosen)
         margin = font.size("0")[1] // 2
-        bbox = _ink_bbox(screen, (0, 0, 400, 100), _is_red_ink)
+        bbox = ink_bbox(screen, (0, 0, 400, 100), is_red_ink)
         assert bbox is not None
         assert bbox[0] >= margin
         assert bbox[0] <= margin + _left_bearing(font, "OK") + 2
@@ -856,7 +816,7 @@ class TestLabelOpacity:
 
         # THEN not a single pixel inside the rect differs from the
         # (black) screen - the background is fully transparent:
-        assert not _any_pixel_differs(screen, pygame.Rect(0, 0, 400, 100), BLACK)
+        assert not any_pixel_differs(screen, pygame.Rect(0, 0, 400, 100), BLACK)
 
     def test_set_opaque_with_false_should_still_draw_border_and_text(
         self, font_ready: None
@@ -874,7 +834,7 @@ class TestLabelOpacity:
         # THEN the border still draws...
         assert screen.get_at((5, 50)) == NORMAL_FG
         # ...the text still draws...
-        assert _any_pixel_differs(screen, pygame.Rect(10, 10, 380, 80), BLACK)
+        assert any_pixel_differs(screen, pygame.Rect(10, 10, 380, 80), BLACK)
         # ...but the fill is gone: a point inside the inner rect and
         # clear of the small centered text stays pure screen background:
         assert screen.get_at((200, 15)) == BLACK
