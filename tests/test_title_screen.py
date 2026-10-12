@@ -4,7 +4,9 @@ Stage 2 established the per-screen pattern (own UIManager, driven via
 update/draw). Stage 3 added background handling and the title display.
 Stage 4 added the Exit Game button and ESC-as-quit. Stage 5 added the
 font/theme choosers and their screen-local, never-persisted Theme
-rebuilds.
+rebuilds. The title display became a Label widget (spec 08: Title, as
+amended by spec 10) - its tests follow the widget-suite convention of
+drawing at the design resolution.
 """
 from __future__ import annotations
 
@@ -24,6 +26,7 @@ from dtd.screens.title import TitleScreen
 from dtd.ui import Theme, UIManager, Widget
 from dtd.widgets.button import Button
 from dtd.widgets.choice_list import ChoiceList
+from dtd.widgets.label import Label
 
 
 @pytest.fixture(autouse=True)
@@ -295,6 +298,58 @@ class TestTitleScreenBackground:
 
 
 class TestTitleScreenTitle:
+    """The title is a Label widget (spec 08: Title, as amended by
+    spec 10): centered text, selected, fixed 80pt design-space,
+    non-opaque, no border, in the upper half of the screen. Pixel
+    assertions run at the design resolution (scale 1) like the widget
+    suites, because the Label follows the widget coordinate contract
+    (design space + current_scale) rather than the target surface."""
+
+    def test_titleLabel_shouldBeConfiguredPerSpec(self, font_ready: None) -> None:
+        # GIVEN the screen,
+        screen = TitleScreen(
+            _default_theme(), _StubImageLoader({}), rng=random.Random(1)
+        )
+
+        # THEN the title is a Label covering the upper half of the
+        # design screen with no border (spec 08: Title),
+        title = screen._title
+        assert isinstance(title, Label)
+        assert title.rect == pygame.Rect(
+            0, 0, game_constants.DESIGN_W, game_constants.DESIGN_H // 2
+        )
+        assert title.border_width == 0
+        # ...and it is not part of the menu widget list - it is drawn
+        # as screen chrome, in the spec's paint order.
+        assert title not in screen._ui.widgets
+
+    def test_draw_shouldRequestTheTitleFontAtExactlyThePinnedPointSize(
+        self, font_ready: None
+    ) -> None:
+        # GIVEN the screen and a spy on every font size any drawing
+        # requests,
+        theme = _default_theme()
+        requested_sizes: list[int] = []
+        original_get_font = theme.get_font
+
+        def spy(size: int) -> pygame.font.Font:
+            requested_sizes.append(size)
+            return original_get_font(size)
+
+        theme.get_font = spy
+        screen = TitleScreen(theme, _StubImageLoader({}), rng=random.Random(1))
+        screen._stars = []
+
+        # WHEN the screen renders at the design resolution,
+        screen.draw(pygame.Surface((game_constants.DESIGN_W, game_constants.DESIGN_H)))
+
+        # THEN the title requested exactly the 80pt design-space size
+        # (scale 1 here) - no auto-scale search above it, and nothing
+        # else on the screen asks for a larger size (the menu's
+        # auto-scaled text is bounded by its 45px-tall options):
+        assert game_constants.TITLE_SCREEN_TITLE_FONT_PT in requested_sizes
+        assert max(requested_sizes) == game_constants.TITLE_SCREEN_TITLE_FONT_PT
+
     def test_draw_shouldRenderTitleCenteredHorizontallyAndInUpperHalf(
         self, font_ready: None, low_coverage_rasterizer: None
     ) -> None:
@@ -303,8 +358,11 @@ class TestTitleScreenTitle:
             _default_theme(), _StubImageLoader({}), rng=random.Random(1)
         )
         screen._stars = []
-        surface = pygame.Surface((1280, 720))
-        expected_center = (surface.get_width() // 2, surface.get_height() // 4)
+        surface = pygame.Surface((game_constants.DESIGN_W, game_constants.DESIGN_H))
+        expected_center = (
+            game_constants.DESIGN_W // 2,
+            game_constants.DESIGN_H // 4,  # middle of the upper half
+        )
 
         # WHEN the screen renders,
         screen.draw(surface)
@@ -313,7 +371,9 @@ class TestTitleScreenTitle:
         # exact-color matching is unsafe per issue #37) forms a bounding
         # box centered on the middle of the upper half (scan a generous
         # window around the expected center; an empty scan fails the
-        # test, which also catches gross misplacement):
+        # test, which also catches gross misplacement). The surface
+        # staying black everywhere else is also the non-opaque proof:
+        # the Label fills nothing (spec 08: Title):
         min_x = min_y = 10**6
         max_x = max_y = -1
         for y in range(expected_center[1] - 100, expected_center[1] + 100):
@@ -570,10 +630,11 @@ class TestTitleScreenChoosers:
         # THEN the next frame's title is drawn in the new theme's color
         # (red-dominant ink; exact-color matching is unsafe per issue
         # #37, and the default theme's white title would never pass a
-        # red-dominant test):
-        surface = pygame.Surface((1280, 720))
+        # red-dominant test). The Label receives the rebuilt Theme from
+        # the draw call, so no cache invalidation is involved:
+        surface = pygame.Surface((game_constants.DESIGN_W, game_constants.DESIGN_H))
         screen.draw(surface)
-        center = (surface.get_width() // 2, surface.get_height() // 4)
+        center = (game_constants.DESIGN_W // 2, game_constants.DESIGN_H // 4)
         red_pixels = sum(
             1
             for y in range(center[1] - 100, center[1] + 100)
@@ -653,8 +714,9 @@ class TestTitleScreenConstants:
 
 class TestTitleScreenDrawCaching:
     """Performance follow-up from the spec 08 merge review: the scaled
-    background and the rendered title are cached, and redone only when
-    their inputs (surface size, screen-local Theme) actually change."""
+    background is cached, and redone only when its input (surface size)
+    actually changes. The title-text caching was removed 2026-10-11 per
+    spec 10 - the Label-based title renders per frame."""
 
     def _spy_transform_scale(
         self, monkeypatch: pytest.MonkeyPatch
@@ -669,35 +731,6 @@ class TestTitleScreenDrawCaching:
 
         monkeypatch.setattr(pygame.transform, "scale", counting_scale)
         return requested_sizes
-
-    def _spy_title_font_render(self, monkeypatch: pytest.MonkeyPatch) -> list[str]:
-        """Count ``Font.render`` calls for the title text only (the menu
-        widgets legitimately render their own labels).
-
-        ``pygame.font.Font`` is an immutable C type and cannot be
-        patched, so the spy wraps the fonts every Theme hands out via
-        ``Theme.get_font`` and delegates everything else unchanged.
-        """
-        rendered_texts: list[str] = []
-        real_get_font = Theme.get_font
-
-        class CountingFont:
-            def __init__(self, font: pygame.font.Font) -> None:
-                self._font = font
-
-            def __getattr__(self, name: str):
-                return getattr(self._font, name)
-
-            def render(self, text, *args, **kwargs):
-                if text == game_constants.TITLE_SCREEN_TITLE_TEXT:
-                    rendered_texts.append(text)
-                return self._font.render(text, *args, **kwargs)
-
-        def counting_get_font(theme: Theme, size: int) -> CountingFont:
-            return CountingFont(real_get_font(theme, size))
-
-        monkeypatch.setattr(Theme, "get_font", counting_get_font)
-        return rendered_texts
 
     def _redBackgroundScreen(self) -> TitleScreen:
         """A screen whose background is an unmistakable solid red image."""
@@ -742,70 +775,3 @@ class TestTitleScreenDrawCaching:
         assert scaled_sizes == [(300, 200), (640, 360)]
         for corner in [(0, 0), (639, 0), (0, 359), (639, 359)]:
             assert resized.get_at(corner)[:3] == (255, 0, 0)
-
-    def test_draw_atUnchangedSize_shouldRenderTheTitleTextOnlyOnce(
-        self,
-        font_ready: None,
-        low_coverage_rasterizer: None,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        # GIVEN a screen with no background noise and a spy counting
-        # renders of the title text,
-        screen = TitleScreen(
-            _default_theme(), _StubImageLoader({}), rng=random.Random(1)
-        )
-        screen._stars = []
-        title_renders = self._spy_title_font_render(monkeypatch)
-
-        # WHEN the same screen renders two frames at the same size,
-        target = pygame.Surface((1280, 720))
-        screen.draw(target)
-        screen.draw(target)
-
-        # THEN the title text was rendered exactly once, and both frames
-        # show it (ink deviating from the black surface, per issue #37):
-        assert len(title_renders) == 1
-        center = (target.get_width() // 2, target.get_height() // 4)
-        painted = sum(
-            1
-            for y in range(center[1] - 100, center[1] + 100)
-            for x in range(center[0] - 500, center[0] + 500)
-            if target.get_at((x, y))[:3] != (0, 0, 0)
-        )
-        assert painted > 0
-
-    def test_themeChoice_afterFirstDraw_shouldReRenderTheTitleExactlyOnceWithTheNewColors(
-        self,
-        font_ready: None,
-        low_coverage_rasterizer: None,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        # GIVEN a screen that has already rendered one frame, with a spy
-        # counting title-text renders,
-        loader = _StubChooserLoader()
-        screen = TitleScreen(_default_theme(), loader, rng=random.Random(1))
-        screen._stars = []
-        title_renders = self._spy_title_font_render(monkeypatch)
-        screen.draw(pygame.Surface((1280, 720)))
-        assert len(title_renders) == 1
-
-        # WHEN the theme chooser rebuilds the screen-local Theme and a
-        # second frame draws,
-        screen._ui.widgets[1].set_current_item(loader.THEME_ID)
-        second_frame = pygame.Surface((1280, 720))
-        screen.draw(second_frame)
-
-        # THEN the cache was invalidated: the title was rendered exactly
-        # once more, in the new theme's color (red-dominant ink, per the
-        # issue #37 note above):
-        assert len(title_renders) == 2
-        center = (second_frame.get_width() // 2, second_frame.get_height() // 4)
-        red_pixels = sum(
-            1
-            for y in range(center[1] - 100, center[1] + 100)
-            for x in range(center[0] - 500, center[0] + 500)
-            if second_frame.get_at((x, y))[0] > 150
-            and second_frame.get_at((x, y))[1] < 100
-            and second_frame.get_at((x, y))[2] < 100
-        )
-        assert red_pixels > 0

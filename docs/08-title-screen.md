@@ -1,6 +1,6 @@
 ---
 description: Describes the game's title screen and the game's screen-handling in general.
-status: proposed
+status: active
 ---
 
 # Title Screen
@@ -264,9 +264,14 @@ staged implementation plan is suggested (each stage should include tests):
    Specifically, the sentinel display value should only be initially selected when
    `get_font_resource_id()` returns "default". If all tests pass, flip this doc back to `active` status.
    **Completed 2026-10-10**
-10. Amendment 2026-10-11 per spec 10 (Label): display the game title via a Label widget
-    (centered, selected, fixed 80pt, non-opaque, border width 0) instead of direct rendering.
-    Remove the title-text caching implementation and its associated tests; the Label-based
-    title renders per frame. This doc was flipped to `proposed` while the amendment is
-    carried out (spec 10 dev plan stage 7); flip it back to `active` on completion.
+ 10. Amendment 2026-10-11 per spec 10 (Label): display the game title via a Label widget
+     (centered, selected, fixed 80pt, non-opaque, border width 0) instead of direct rendering.
+     Remove the title-text caching implementation and its associated tests; the Label-based
+     title renders per frame. This doc was flipped to `proposed` while the amendment is
+     carried out (spec 10 dev plan stage 8); flip it back to `active` on completion.
+     **Completed 2026-10-11**: the title is now a `Label` drawn as screen chrome between
+     the background and the menu (the spec's paint order), not registered in the menu's
+     widget list; `_draw_title`/`_rendered_title` and the title-text caching tests are
+     gone, replaced by structural + pixel pins in `TestTitleScreenTitle` at the design
+     resolution. Full suite: 753 passed.
 

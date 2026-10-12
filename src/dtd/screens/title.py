@@ -5,6 +5,13 @@ if one resolves, random starfield otherwise), the title display, and the
 full menu column - font selector, theme selector, and the Exit Game
 button. Font/theme changes are adopted immediately at this screen only
 and are never persisted.
+
+The title display is a ``Label`` widget (spec 08: Title, as amended by
+spec 10): centered text, selected, fixed 80pt design-space, non-opaque,
+no border. It is drawn as screen chrome between the background and the
+menu widgets - the spec's paint order - rather than registered with the
+UIManager, because a Label ignores the mouse entirely and the menu's
+widget list stays exactly the menu.
 """
 from __future__ import annotations
 
@@ -19,6 +26,7 @@ from dtd.screens.base import Screen, ScreenAction
 from dtd.ui import Scale, Theme, UIManager, Widget
 from dtd.widgets.button import Button
 from dtd.widgets.choice_list import ChoiceList
+from dtd.widgets.label import Label
 
 
 class TitleScreen(Screen):
@@ -55,13 +63,15 @@ class TitleScreen(Screen):
         # first image resource that resolves, or a generated starfield.
         self._background_image = self._find_background_image()
         self._stars = None if self._background_image else starfield.generate(self._rng)
-        # Scaling a full-screen image and re-rendering the title text on
-        # every single frame is pure waste: neither input changes except
-        # on a surface resize (F11) or a Theme rebuild. Each cache is a
-        # single (key, surface) entry - resolution switches are rare,
-        # and one entry covers every frame in between.
+        # Scaling a full-screen image on every single frame is pure
+        # waste: its only input is the surface size, which changes only
+        # on a resolution switch (F11). One cache entry covers every
+        # frame in between. (The title used to be cached the same way;
+        # the Label-based title renders per frame - spec 08: Title, as
+        # amended by spec 10.)
         self._scaled_background: tuple[tuple[int, int], pygame.Surface] | None = None
-        self._rendered_title: tuple[int, pygame.Surface] | None = None
+        # The title Label (spec 08: Title, as amended by spec 10).
+        self._title = self._build_title()
         # A button click is remembered here and reported by handle() on
         # the same frame (the click itself fires inside update()).
         self._quit_requested = False
@@ -88,9 +98,11 @@ class TitleScreen(Screen):
 
     def draw(self, surface: pygame.Surface) -> None:
         # Paint order per spec 08: Code layout - background, title, then
-        # the (still empty) widget list.
+        # the menu widgets. The title Label receives this screen's
+        # current Theme on every frame, so a chooser change takes effect
+        # immediately.
         self._draw_background(surface)
-        self._draw_title(surface)
+        self._title.draw(surface, self._theme)
         self._ui.draw(surface)
 
     # -- background (spec 08: Background) ----------------------------------
@@ -124,34 +136,29 @@ class TitleScreen(Screen):
             # so drawing stays correct on any surface (and in tests).
             starfield.draw(self._stars, surface, Scale(*surface.get_size()))
 
-    # -- title (spec 08: Title) ---------------------------------------------
+    # -- title (spec 08: Title, as amended by spec 10) ----------------------
 
-    def _draw_title(self, surface: pygame.Surface) -> None:
-        """The game title, centered in the upper half of the screen.
+    def _build_title(self) -> Label:
+        """The title Label, configured per spec 08: Title.
 
-        The 80pt design-space size scales with the window scale factor,
-        and the font/color come from this screen's current Theme. The
-        rendered text is cached per font size; the only other input is
-        the Theme, and ``_apply_choices()`` invalidates the cache for
-        exactly that case.
+        The five characteristics the spec names: centered text, selected
+        (which is what puts the ``foregroundSelected`` theme color on
+        the title), a fixed 80pt design-space point size, non-opaque,
+        and no border. The rect is the upper half of the screen in
+        design space; the Label's vertical centering then lands the
+        text at a quarter of the screen height, exactly where the old
+        direct-rendered title sat.
         """
-        scale = Scale(*surface.get_size())
-        font_size = int(game_constants.TITLE_SCREEN_TITLE_FONT_PT * scale.scale)
-        if self._rendered_title is None or self._rendered_title[0] != font_size:
-            font = self._theme.get_font(font_size)
-            text_surface = font.render(
-                game_constants.TITLE_SCREEN_TITLE_TEXT,
-                True,
-                self._theme.foregroundSelected,
-            )
-            self._rendered_title = (font_size, text_surface)
-        text_surface = self._rendered_title[1]
-        # Centered horizontally, and vertically in the middle of the
-        # upper half - i.e. at a quarter of the screen height.
-        text_rect = text_surface.get_rect(
-            center=(surface.get_width() // 2, surface.get_height() // 4)
+        title = Label(
+            pygame.Rect(0, 0, game_constants.DESIGN_W, game_constants.DESIGN_H // 2),
+            text=game_constants.TITLE_SCREEN_TITLE_TEXT,
+            border_width=0,
         )
-        surface.blit(text_surface, text_rect)
+        title.set_text_centered(True)
+        title.set_font_point_size(game_constants.TITLE_SCREEN_TITLE_FONT_PT)
+        title.set_opaque(False)
+        title.selected = True
+        return title
 
     # -- menu (spec 08: Buttons and options) --------------------------------
 
@@ -281,7 +288,6 @@ class TitleScreen(Screen):
             self._resource_loader,
         )
         self._ui.set_theme(self._theme)
-        # The cached title was rendered with the previous font and
-        # colors, so drop it; the next draw rebuilds it. The background
-        # cache is Theme-independent and stays valid.
-        self._rendered_title = None
+        # The title Label receives self._theme on every draw call, so
+        # the new font and colors apply to the very next frame; the
+        # background cache is Theme-independent and stays valid.

@@ -283,10 +283,20 @@ calculations should take this into account.
    drops its arguments), and a non-opaque Label's semi-transparent text
    re-composites over its own leftovers on an uncleared surface - no-op tests must
    clear between draws. Full suite green at 753 tests.)
-8. Implement the spec 08 changes to modify TitleScreen to use the new Label widget
-   and remove the old caching code. Mark the new stage in the 08 Dev plan section
-   as complete with today's date. Flip the 08 spec back to `active` status on
-   successful completion of this stage.
+ 8. Implement the spec 08 changes to modify TitleScreen to use the new Label widget
+    and remove the old caching code. Mark the new stage in the 08 Dev plan section
+    as complete with today's date. Flip the 08 spec back to `active` status on
+    successful completion of this stage.
+    **Completed 2026-10-11** (`TitleScreen._build_title()` builds the Label per the
+    amended spec 08: upper-half design-space rect, centered, selected, fixed 80pt,
+    non-opaque, border 0. It is drawn as screen chrome between the background and the
+    menu - the spec's paint order - and deliberately kept out of the menu's widget
+    list, since a Label ignores the mouse and the existing chooser-index tests stay
+    valid untouched. `_draw_title`/`_rendered_title` and the title-text caching tests
+    are removed; the background cache is untouched. Title pixel tests moved to the
+    design resolution, matching the widget-suite convention (the Label follows the
+    widget coordinate contract, not the target surface). Spec 08 stage 10 marked
+    complete and doc flipped to `active`. Full suite green at 753 tests.)
 9. Final compliance check. Do all tests pass? Are all acceptance criteria met?
    Reword the doc to replace "proposes" prose with "describes" as needed.
    Flip this doc to `active` status if all is well.
