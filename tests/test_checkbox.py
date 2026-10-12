@@ -5,7 +5,8 @@ with the full state-color matrix including hover (normal / selected /
 hover / disabled and their precedence combinations); box geometry -
 side length equal to ``font.size("0")[1]`` at the effective size, the
 half-box-height gap between box and text, square corners under a
-rounded theme, and the box-only Checkbox with blank/empty/None text;
+rounded theme, and the box-only Checkbox with None text (blank/empty
+normalization is the inherited Label path, covered in test_label.py);
 box-aware auto-scale (the chosen size is strictly smaller than a
 text-only fit would allow, clipping at size 1, re-layout on rect and
 border changes, nothing drawn for a degenerate inner rect); fixed
@@ -15,7 +16,8 @@ box+text unit and the toggle back; and hover audio through the
 ``on_hover_enter`` hook.
 
 Stage 3 coverage: ``set_checked``/``is_checked`` - the X drawn as two
-corner-reaching diagonals (never a glyph), same-value no-ops,
+corner-reaching diagonals (never a glyph) and clipped inside the
+box's rect, same-value no-ops,
 clearing, status changes while disabled, and ``initially_checked``
 without a callback; left-button click toggling with the press-and-
 release contract (drag-off and drag-in do not toggle, the right
@@ -818,6 +820,29 @@ class TestCheckboxCheckedState:
         # color, to stay robust at any line width.
         assert screen.get_at(main_diag) != NORMAL_BG
         assert screen.get_at(anti_diag) != NORMAL_BG
+
+    def test_checked_x_should_not_overshoot_the_box_corners(self, font_ready: None) -> None:
+        # GIVEN a text-less Checkbox pinned to 40pt: the only ink is
+        # the box outline and the X, and the box geometry is fully
+        # determined by the pinned size (spec 11: the X never
+        # overshoots the box):
+        checkbox, ui, theme = self._pinned_ui()
+        side = theme.get_font(40).size("0")[1]
+        margin = side // 2
+        top = 100 // 2 - side // 2
+
+        # WHEN it is checked and the UI draws,
+        checkbox.set_checked(True)
+        screen = _draw(ui)
+
+        # THEN every ink pixel sits inside the box's own rect: the ink
+        # bounding box equals the box rect exactly. Rect corner
+        # attributes are exclusive and thick-line caps overshoot
+        # their endpoints, so the X must be clipped at the box
+        # boundary - the tips may reach the corner pixels but poke
+        # nothing outside (regression: the raw corner-to-corner
+        # lines drew 1-2px past the outline).
+        assert ink_bbox(screen, (0, 0, 400, 100), is_red_ink) == (margin, top, side, side)
 
     def test_set_checked_with_true_twice_should_be_a_no_op(
         self, font_ready: None

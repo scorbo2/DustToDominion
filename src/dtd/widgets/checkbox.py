@@ -247,9 +247,19 @@ class Checkbox(Label):
         if self._is_checked:
             # The X is two corner-to-corner diagonals, never a
             # literal "X" glyph - the mark must look identical under
-            # any configured font (spec 11: Checkbox layout).
-            pygame.draw.line(inner, fg, box.topleft, box.bottomright, width=stroke)
-            pygame.draw.line(inner, fg, box.topright, box.bottomleft, width=stroke)
+            # any configured font (spec 11: Checkbox layout). The
+            # mark draws on a box-sized surface first: Rect corner
+            # attributes are exclusive and thick-line caps overshoot
+            # their endpoints, so drawing straight onto the inner
+            # sub-surface would poke the X outside the box. The
+            # surface clips it at the box edge; the blit still
+            # clips at the inner rect (an inner.subsurface(box)
+            # would raise when an oversized pinned size puts the
+            # box partly outside the inner rect).
+            x_mark = pygame.Surface((box.width, box.height), pygame.SRCALPHA)
+            pygame.draw.line(x_mark, fg, (0, 0), (box.width - 1, box.height - 1), width=stroke)
+            pygame.draw.line(x_mark, fg, (box.width - 1, 0), (0, box.height - 1), width=stroke)
+            inner.blit(x_mark, box.topleft)
         if surface is not None:
             text_y = (inner.get_height() - surface.get_height()) // 2
             inner.blit(surface, (box.right + gap, text_y))
