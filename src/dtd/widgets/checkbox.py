@@ -240,7 +240,7 @@ class Checkbox(Label):
         # Vertical centering of the whole unit: the margin is
         # symmetric, so centering box and text on the inner rect's
         # middle line is identical to centering within a
-        # margin-shrunk box (same reasoning as Label stage 6).
+        # margin-shrunk box (spec 10: Label layout / Margin).
         box = pygame.Rect(x, 0, box_side, box_side)
         box.centery = inner.get_height() // 2
         pygame.draw.rect(inner, fg, box, width=stroke)

@@ -1,11 +1,11 @@
 ---
-description: Describes a new UI widget for the game: Checkbox
-status: proposed
+description: Describes the Checkbox UI widget for the game
+status: active
 ---
 
 # Checkbox
 
-This document proposes a new `dtd/widgets/checkbox.py` module and its UI
+This document describes the `dtd/widgets/checkbox.py` module and its UI
 widget: `Checkbox`. This widget extends the existing `Label` widget
 described in `10-ui-widget-label.md` by adding mouse interaction and
 a box on the left side of the label that can be checked or unchecked
@@ -27,9 +27,9 @@ This document introduces no new configuration keys.
 
 ## Checkbox structure
 
-The new Checkbox class should extend the existing Label widget, rather than
-re-implementing near-identical layout and rendering code. Checkbox should
-offer much the same constructor arguments as Label:
+The Checkbox class extends the existing Label widget, rather than
+re-implementing near-identical layout and rendering code. Checkbox
+offers much the same constructor arguments as Label:
 
 - `text`: if blank, empty, or `None`, no text is displayed (just the box). Text is rendered using foregroundNormal/Disabled/Selected/Hover
   and the configured font retrieved from the Theme class. See Checkbox layout section for text and box placement rules.
@@ -42,7 +42,8 @@ offer much the same constructor arguments as Label:
 - `initially_checked`: the initial boolean status of this Checkbox. Defaults to False for an unchecked Checkbox.
   If True, this does NOT trigger a callback.
 - `on_click: Callable[[], None] | None` - invoked when a click occurs on a non-disabled Checkbox. Not invoked from
-  programmatic changes to status from `set_checked()`. Note: the callback is invoked after the boolean togle completes.
+   programmatic changes to status from `set_checked()`. Note: the callback is invoked after the boolean toggle completes
+   (a callback reading `is_checked()` therefore sees the new value).
 
 The following mutator methods are provided:
 - `set_font_point_size(self, size: int | None)` - If a positive integer is specified, that exact font point size
@@ -74,13 +75,13 @@ border width), then no contents are drawn (neither box nor text).
 ## Checkbox events and cosmetics
 
 Note that, unlike the Label parent class, Checkboxes do respond to mouse hover events:
-- on mouse hover, Checkbox should use the `*Hover` colors from the current theme.
+- on mouse hover, Checkbox uses the `*Hover` colors from the current theme.
 - the same precedence rules for selected+hovered and selected+disabled as described
   in the 04 spec doc apply here.
 
 Also, unlike the Label parent class, Checkboxes do respond to left button mouse clicks:
 - a click anywhere in the Checkbox's rect (both mouse pressed and mouse released occur
-  within the rect) counts as a "click" and will toggle the Checkbox's current boolean status.
+  within the rect) counts as a "click" and toggles the Checkbox's current boolean status.
 - disabled Checkboxes do not respond to mouse clicks, and their boolean status can only
   be changed programmatically.
 
@@ -89,11 +90,11 @@ Also, unlike the Label parent class, Checkboxes do respond to left button mouse 
 Checkbox is very similar to the existing `Label` class, except that an additional square (the "box")
 is rendered to the left of the text. This box, for layout purposes, is considered part of the
 Checkbox's label text. That is, if the contents are to be centered, the box does not stay left-aligned
-within the inner rect. The box should be an unfilled square with a border width of 2px (in design pixels, but
+within the inner rect. The box is an unfilled square with a border width of 2px (in design pixels, but
 with a floor of 2 - it may be larger than 2 screen pixels but never less than that) whose height is equal to
 `font.size("0")[1]` of the current font at the computed text size. A margin equal to half the computed
-height of the box should separate the right edge of the box from the left edge of the text.
-The box should respect the calculated margin of the inner rect, exactly as described in spec doc 10.
+height of the box separates the right edge of the box from the left edge of the text.
+The box respects the calculated margin of the inner rect, exactly as described in spec doc 10.
 The box is always rendered with square corners regardless of the theme's corner radius - that radius
 only applies to *Widget* rect corners, not the Checkbox's box corners.
 
@@ -101,21 +102,21 @@ Text auto-scale calculations must include the width of the box and the margin be
 and the text! The parent class only considers text dimensions for auto-scale purposes - this is
 insufficient for a Checkbox, whose content dimensions are comprised of box + margin + text.
 
-The outline color of the box should match the foreground color of the Checkbox, depending on
+The outline color of the box matches the foreground color of the Checkbox, depending on
 state: foregroundNormal, foregroundHover, foregroundSelected, or foregroundDisabled.
 
-If the Checkbox's boolean status is True, the box should be "checked" with an X. Do not write a literal
+If the Checkbox's boolean status is True, the box is "checked" with an X. Do not write a literal
 "X" character in the box! Differences in fonts would cause noticeable and undesirable variations
 in the box's appearance, which must be consistent regardless of font. Instead, draw a diagonal 2px-width line
 from the top left of the box to the bottom right, and another line from the top right of the box to
 the bottom left. Line thickness is in design space, but with a floor of 2 - the lines may be thicker
-than 2 pixels, but never less than that. The color of these lines should be the same foreground color as the box outline,
-and should also vary by checkbox state (normal/hovered/selected/disabled). If the Checkbox's
+than 2 pixels, but never less than that. The color of these lines is the same foreground color as the box outline,
+and also varies by checkbox state (normal/hovered/selected/disabled). If the Checkbox's
 boolean status is False, just draw the box outline without the diagonal lines. This gives the user
 a very easy way to visually determine the Checkbox's boolean status at all times.
 
 Note that it's possible to create a Checkbox with no label text - this is not a bug, it is
-a feature. In this case, the height of the box should be calculated by using the `0` character
+a feature. In this case, the height of the box is calculated by using the `0` character
 in the current font as a stand-in (do not render `0` - just use that character's size as part
 of the auto-scale calculations for the box, or if a specific font point size was given).
 
@@ -123,15 +124,15 @@ Checkbox contents are always vertically centered within the inner rect.
 
 ## Checkbox audio
 
-The Checkbox class should play UI sound effects for some events (constants defined in spec 04):
+The Checkbox class plays UI sound effects for some events (constants defined in spec 04):
 
-- a click should play `UI_SFX_ACCEPT`. Clicks only count when the Checkbox is not disabled.
+- a click plays `UI_SFX_ACCEPT`. Clicks only count when the Checkbox is not disabled.
   Programmatically changing the Checkbox's boolean status via `set_checked()` does not play audio.
 - Override the `on_hover_enter()` hook from the parent Widget class:
   `get_audio_manager().play_ui_sfx(UI_SFX_HOVER)`
 
 Checkbox makes no attempt to resolve the resource ids from these constants (located in `game_constants.py`).
-Checkbox should make use of AudioManager's `play_ui_sfx()` method via the global singleton AudioManager instance.
+Checkbox makes use of AudioManager's `play_ui_sfx()` method via the global singleton AudioManager instance.
 This method handles all edge cases related to audio playing (UI sound effects are disabled, the resource IDs
 don't resolve to valid audio resources, etc.)
 
@@ -198,6 +199,7 @@ don't resolve to valid audio resources, etc.)
 - `on_click` is not invoked from the constructor if `initially_checked` is True.
 - `on_click` is not invoked from programmatic calls to `set_checked()`.
 - `on_click` is invoked when a left button mouse click occurs within the rect of a non-disabled Checkbox.
+- `on_click` is invoked only after the toggle completes: a callback reading `is_checked()` sees the new value.
 - `on_click` is not invoked when a left button mouse click occurs within the rect of a disabled Checkbox.
 - Audio events:
   - when a Checkbox is clicked, `UI_SFX_ACCEPT` is played.
@@ -269,8 +271,16 @@ don't resolve to valid audio resources, etc.)
    `on_click` matrix, and the accept-sound matrix. Gotcha pinned: thick-line probes must
    sit exactly on the diagonal's path - pygame's wide-line rasterization does not cover
    pixels one column off it. Full suite green at 804 tests.)
-4. Final verification step - are acceptance criteria met? Do all tests pass? Update this spec doc
-   to change all "proposes" and future tense prose to "describes" and present tense. Update the code
-   comments and docstrings to remove any "TODO"-style comments such as "this will land in the next stage".
-   Flip this document to `active` status.
+ 4. Final verification step - are acceptance criteria met? Do all tests pass? Update this spec doc
+    to change all "proposes" and future tense prose to "describes" and present tense. Update the code
+    comments and docstrings to remove any "TODO"-style comments such as "this will land in the next stage".
+    Flip this document to `active` status.
+   **Completed 2026-10-11** (All ten acceptance criteria verified against named tests, one per
+   criterion. Prose converted to present tense following the spec 10 stage 9 precedent: the
+   structural sections describe, while the Testing section's requirement bullets and the
+   mutator wording keep the house "should/will" style shared with the active spec 10. The
+   `on_click` ordering note gained the observable consequence (`is_checked()` shows the new
+   value) and the Testing section gained the matching pin. One cryptic stage reference
+   reworded in `checkbox.py`; historical provenance notes elsewhere kept. Full suite green
+   at 804 tests. Status flipped to `active`.)
 
