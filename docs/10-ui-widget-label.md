@@ -1,15 +1,15 @@
 ---
 description: Describes a new UI widget for the game: Label
-status: proposed
+status: active
 ---
 
 # Label
 
-This document proposes a new `dtd/widgets/label.py` module containing a
-UI widget for the game: `Label`. This is a non-interactive widget that
-ignores all mouse events. It displays a simple, single-line text label,
-either scaled to fit the widget's rect, or rendered at a caller-supplied
-font size, with clipping at the inner rect boundary.
+This document describes the `dtd/widgets/label.py` module and its UI
+widget: `Label`. This is a non-interactive widget that ignores all mouse
+events. It displays a simple, single-line text label, either scaled to
+fit the widget's rect, or rendered at a caller-supplied font size, with
+clipping at the inner rect boundary.
 
 ## Amendments to previous spec docs
 
@@ -78,7 +78,7 @@ note in the 04 spec.
 
 ## Label options
 
-The Label widget should offer the following constructor arguments:
+The Label widget offers the following constructor arguments:
 
 - `text`: if blank, empty, or `None`, no text is displayed. Text is rendered using foregroundNormal/Disabled/Selected
   and the configured font retrieved from the Theme class. See Label layout section for text placement rules.
@@ -89,7 +89,7 @@ The Label widget should offer the following constructor arguments:
   Set to 0 for no border. Respect the theme's corner radius when drawing the border! A default value of 0 is specified
   for this constructor argument.
 
-The following mutator methods should be provided:
+The following mutator methods are provided:
 - `set_font_point_size(self, size: int | None)` - If a positive integer is specified, that exact font point size
   (in design space - scale up or down as needed based on current resolution; rounding=floor) is used. Text that is too large to
   display is clipped. Invalid values (non-integer, 0, negative numbers) or None re-enable auto-scale.
@@ -300,4 +300,9 @@ calculations should take this into account.
 9. Final compliance check. Do all tests pass? Are all acceptance criteria met?
    Reword the doc to replace "proposes" prose with "describes" as needed.
    Flip this doc to `active` status if all is well.
+   **Completed 2026-10-11** (full suite green at 753 tests; all acceptance criteria
+   verified against the code and tests; the doc's "proposes"/"should offer" prose
+   reworded to descriptive present tense; stale future-tense stage references in
+   `label.py`'s module docstring and `screens/base.py`'s `handle()` docstring
+   rewritten to past tense. Doc flipped to `active`.)
 

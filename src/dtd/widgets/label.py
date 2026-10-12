@@ -4,8 +4,7 @@ A static, non-interactive text display: a filled, optionally bordered
 rectangle with a single line of text, rendered entirely with ``pygame``
 (spec 10: Additional dependencies).
 
-Rendering contract (spec 10; the spec's Dev plan notes which stage
-implements what):
+Rendering contract (spec 10: Label layout / Label options):
 
 - The rect is filled with ``backgroundNormal``/``backgroundSelected``
   (or the disabled colors), honoring the theme's ``cornerRadius``,

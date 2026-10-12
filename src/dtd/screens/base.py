@@ -45,8 +45,8 @@ class Screen:
 
         The main loop owns app-level events (QUIT, F11). This method is
         for keys that only carry meaning on this screen - example: ESC
-        on the Title Screen, which moves here from the main loop in a
-        later stage of spec 08.
+        on the Title Screen, which moved here from the main loop in
+        spec 08 stage 4.
         """
         return None
 
