@@ -287,6 +287,16 @@ class TestResourceStore:
         assert store.texts["note.txt"] == "second"
         assert any("duplicate" in record.lower() for record in records)
 
+    def test_store_returns_false_for_new_id_and_true_for_an_override(self) -> None:
+        # Spec 03: Resource scanning - the loader tallies overrides for its
+        # startup summary log, so store() reports whether it replaced an
+        # earlier resource with the same ID:
+        store = ResourceStore()
+
+        assert store.store("text", "note.txt", "first") is False
+        assert store.store("text", "other.txt", "unrelated") is False
+        assert store.store("text", "note.txt", "second") is True
+
     def test_items_yields_every_resource_with_its_type_name(self) -> None:
         store = ResourceStore()
         store.store("text", "note.txt", "hello")
@@ -761,7 +771,7 @@ class TestLoadPak:
         pak_path = _build_raw_pak(tmp_path, {"audio/sfx/hello.rar": b"data"})
 
         # WHEN load_pak is invoked:
-        # THEN the extension is rejected (distribution mode is strict):
+        # THEN the extension is rejected (manifest entries are strict):
         with pytest.raises(ResourceLoadError, match="unrecognized extension"):
             load_pak(pak_path)
 

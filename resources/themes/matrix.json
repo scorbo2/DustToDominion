@@ -1,0 +1,11 @@
+{
+  "foregroundNormal": "0xa7ffa7",
+  "backgroundNormal": "0x2a2a2a",
+  "foregroundSelected": "0xffffff",
+  "backgroundSelected": "0x337733",
+  "foregroundHover": "0xb7ffb7",
+  "backgroundHover": "0x3a3a3a",
+  "foregroundDisabled": "0x999999",
+  "backgroundDisabled": "0x0a0a2a",
+  "cornerRadius": 1
+}

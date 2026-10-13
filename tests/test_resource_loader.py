@@ -1,15 +1,21 @@
-"""Unit tests for the resource loader: dev mode (stage 2) and distribution
-mode (stage 4).
+"""Unit tests for the resource loader: the flat, ordered search path
+(spec 03: Resource scanning, stage 7).
 
-Dev mode contract: scan the default ``resources/`` directory (always) plus
-every configured ``location`` (relative to the *project* directory, never
-the CWD), recursively, loading each supported-extension file under an ID
-relative to its containing directory. Unsupported extensions are silently
-skipped; the first unloadable resource raises ``ResourceLoadError``.
+Search path contract: the implicit ``resources/`` directory inside the
+game directory (always searched first, not an error if missing), then
+each configured ``location`` entry in config order - directories are
+scanned recursively for supported extensions, ``.pak`` files are loaded
+as packages. A location entry that does not exist, cannot be read, or
+is a file without the ``.pak`` extension raises ``ResourceLoadError``;
+an existing but empty directory is silently skipped. Later resources
+override earlier ones by ID (with a log warning); a scan that finds no
+resource anywhere raises ``NoResourcesFoundError``.
 """
 from __future__ import annotations
 
 import json
+import os
+import re
 import wave
 import zipfile
 from pathlib import Path
@@ -19,29 +25,50 @@ import pytest
 from loguru import logger
 
 from dtd import game_constants, resource_loader
-from dtd.errors import NoResourcesFoundError, ResourceLoadError
+from dtd.errors import (
+    NoResourcesFoundError,
+    ResourceLoadError,
+    UnsupportedResourceVersionError,
+)
 from dtd.game_config import ResourcesConfig
-from dtd.pak import MANIFEST_ENTRY, create_pak, xor_bytes
+from dtd.pak import (
+    MANIFEST_ENTRY,
+    compute_sha256,
+    create_pak,
+    xor_bytes,
+)
 from dtd.resource_loader import ResourceLoader
+
+# chmod-based permission tests are meaningless when running as root (Unix) or
+# on a platform without os.geteuid (e.g. Windows); skip in both cases. The
+# guard must not call os.geteuid() unguarded - it is evaluated at collection
+# time and would raise AttributeError on Windows, failing the whole module.
+_SKIP_PERMISSION_TESTS = not hasattr(os, "geteuid") or os.geteuid() == 0
 
 
 @pytest.fixture
 def project(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    """A fake project directory.
+    """A fake game directory.
 
-    Patches ``project_directory()`` to the test's temp dir so these tests
+    Patches ``game_directory()`` to the test's temp dir so these tests
     never touch (or depend on) the real repo layout.
     """
-    monkeypatch.setattr(resource_loader, "project_directory", lambda: tmp_path)
+    monkeypatch.setattr(resource_loader, "game_directory", lambda: tmp_path)
     return tmp_path
 
 
-
-def _write_png(path: Path) -> None:
+def _write_png(
+    path: Path, color: tuple[int, int, int] = (10, 20, 30)
+) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     surface = pygame.Surface((4, 4))
-    surface.fill((10, 20, 30))
+    surface.fill(color)
     pygame.image.save(surface, str(path))
+
+
+def _png_color(surface: pygame.Surface) -> pygame.Color:
+    """The fill color of a surface written by ``_write_png``."""
+    return surface.get_at((0, 0))
 
 
 def _write_wav(path: Path) -> None:
@@ -86,13 +113,42 @@ def _standard_tree(root: Path) -> dict[str, Path]:
 
 
 def _make_pak(source_dir: Path, pak_path: Path) -> None:
-    """Package ``source_dir`` into ``pak_path`` (spec 03 stage 3 format).
+    """Package ``source_dir`` into ``pak_path`` (spec 03: The pak format).
 
-    Tests that scan for the pak write it NEXT TO (not inside) the source
+    Tests that load the pak write it NEXT TO (not inside) the source
     tree, so the pak never contaminates the packaged content.
     """
     pak_path.parent.mkdir(parents=True, exist_ok=True)
     create_pak(source_dir, pak_path)
+
+
+def _make_pak_with_manifest(
+    pak_path: Path, manifest: dict, entries: dict[str, bytes]
+) -> None:
+    """Hand-build a pak with an arbitrary manifest dict and raw entry bytes.
+
+    ``create_pak`` refuses to package invalid resources and always writes a
+    well-formed manifest, so the manifest-error tests (missing/unsupported
+    version, duplicate IDs, invalid resources) need this hand-built form.
+    Entry bytes are XOR-encrypted like the real format.
+    """
+    pak_path.parent.mkdir(parents=True, exist_ok=True)
+    with zipfile.ZipFile(pak_path, "w") as zf:
+        zf.writestr(MANIFEST_ENTRY, json.dumps(manifest))
+        for entry_name, raw_bytes in entries.items():
+            zf.writestr(entry_name, xor_bytes(raw_bytes))
+
+
+def _manifest_for(entries: dict[str, bytes], version: str | None = "1.0") -> dict:
+    """A manifest dict for ``_make_pak_with_manifest`` (hashes of encrypted bytes)."""
+    resource_entries = [
+        {"id": entry_name, "sha256": compute_sha256(xor_bytes(raw_bytes))}
+        for entry_name, raw_bytes in entries.items()
+    ]
+    manifest: dict = {"resources": resource_entries}
+    if version is not None:
+        manifest["version"] = version
+    return manifest
 
 
 def _make_text_file(root: Path, resource_id: str, content: str) -> Path:
@@ -106,23 +162,25 @@ def _make_text_file(root: Path, resource_id: str, content: str) -> Path:
     return path
 
 
-def _warning_records() -> tuple[list[str], int]:
-    """Capture WARNING-level log lines; returns (records, sink_id)."""
+def _log_records(level: str) -> tuple[list[str], int]:
+    """Capture log lines at ``level``; returns (records, sink_id)."""
     records: list[str] = []
-    sink_id = logger.add(lambda message: records.append(str(message)), level="WARNING")
+    sink_id = logger.add(lambda message: records.append(str(message)), level=level)
     return records, sink_id
 
 
-class TestLoadDevMode:
-    def test_with_valid_mixed_tree_should_load_every_resource_type(
+class TestSearchPath:
+    """The flat ordered search path (spec 03: Resource scanning)."""
+
+    def test_load_withValidResourcesTreeAndEmptyConfig_shouldLoadEveryResourceType(
         self, project: Path, mixer_ready: None, font_ready: None
     ) -> None:
-        # GIVEN a project whose default resources/ dir holds one of each type:
+        # GIVEN a game dir whose implicit resources/ holds one of each type:
         files = _standard_tree(project / "resources")
 
-        # WHEN the loader runs in (default) dev mode:
+        # WHEN the loader runs with an empty resources config:
         loader = ResourceLoader()
-        loader.load(None)
+        loader.load(ResourcesConfig())
 
         # THEN each getter returns the decoded object under its relative ID:
         assert isinstance(
@@ -138,64 +196,439 @@ class TestLoadDevMode:
             loader.get_font_resource("fonts/ui_font.ttf", 24), pygame.font.Font
         )
 
-    def test_with_extra_locations_should_load_them_in_config_order(
-        self, project: Path, mixer_ready: None
+    def test_load_withMissingResourcesDirAndValidLocation_shouldSucceed(
+        self, project: Path
     ) -> None:
-        # GIVEN the default resources/ dir plus two configured extra dirs:
-        _write_png(project / "resources/graphics/base.png")
-        extra_a = project / "pack_a"
-        _write_png(extra_a / "graphics/extra_a.png")
-        extra_b = project / "pack_b"
-        _write_png(extra_b / "graphics/extra_b.png")
+        # GIVEN no resources/ dir at all, but a location holding a resource:
+        extra = project / "extra_assets"
+        _make_text_file(extra, "note.txt", "from location")
 
-        # WHEN dev mode lists both extra locations:
+        # WHEN the loader runs:
         loader = ResourceLoader()
-        loader.load(ResourcesConfig(mode="dev", location=[str(extra_a), str(extra_b)]))
+        loader.load(ResourcesConfig(location=[str(extra)]))
 
-        # THEN resources from the default dir AND both extras are loaded:
+        # THEN the missing implicit dir is not an error and the location's
+        # resource is loaded (spec 03: not an error if resources/ is absent):
+        assert loader.get_text_resource("note.txt") == "from location"
+
+    def test_load_withEmptyResourcesDirAndNoLocations_shouldRaiseNoResourcesFound(
+        self, project: Path
+    ) -> None:
+        (project / "resources").mkdir()
+        with pytest.raises(NoResourcesFoundError):
+            ResourceLoader().load(ResourcesConfig())
+
+    def test_load_withNoResourcesDirAndNoLocations_shouldRaiseNoResourcesFound(
+        self, project: Path
+    ) -> None:
+        with pytest.raises(NoResourcesFoundError):
+            ResourceLoader().load(None)
+
+    def test_load_withOnlyUnsupportedExtensions_shouldRaiseNoResourcesFound(
+        self, project: Path
+    ) -> None:
+        # A directory full of .doc files contains no VALID resources.
+        resources = project / "resources"
+        resources.mkdir()
+        (resources / "notes.doc").write_text("not a resource", encoding="utf-8")
+        with pytest.raises(NoResourcesFoundError):
+            ResourceLoader().load(None)
+
+    def test_load_resourcesDirIsScannedEvenWhenNotListedInConfig(
+        self, project: Path
+    ) -> None:
+        # GIVEN resources/ plus a location that does NOT mention it:
+        _write_png(project / "resources/graphics/base.png")
+        extra = project / "extra"
+        _make_text_file(extra, "note.txt", "extra")
+
+        # WHEN the loader runs with only the extra dir configured:
+        loader = ResourceLoader()
+        loader.load(ResourcesConfig(location=[str(extra)]))
+
+        # THEN the implicit resources/ dir was scanned anyway (spec 03:
+        # always implied, never needs listing):
         assert loader.get_image_resource("graphics/base.png") is not None
-        assert loader.get_image_resource("graphics/extra_a.png") is not None
-        assert loader.get_image_resource("graphics/extra_b.png") is not None
+        assert loader.get_text_resource("note.txt") == "extra"
 
-    def test_with_relative_location_should_resolve_against_project_dir(
+    def test_load_withRelativeLocation_shouldResolveAgainstGameDirectory(
         self, project: Path
     ) -> None:
         # GIVEN a bare (relative) location entry; pytest's CWD is the repo
         # root, so CWD-relative resolution would find nothing:
         extra = project / "extra_assets"
-        extra.mkdir(parents=True)
-        (extra / "note.txt").write_text("relative", encoding="utf-8")
+        _make_text_file(extra, "note.txt", "relative")
 
-        # WHEN dev mode lists it by bare name:
+        # WHEN the loader runs with the bare name:
         loader = ResourceLoader()
-        loader.load(ResourcesConfig(mode="dev", location=["extra_assets"]))
+        loader.load(ResourcesConfig(location=["extra_assets"]))
 
-        # THEN the file is loaded under its project-relative ID:
+        # THEN the file is loaded under its location-relative ID:
         assert loader.get_text_resource("note.txt") == "relative"
 
-    def test_with_missing_and_nonexistent_locations_should_be_ignored(
+    def test_load_withEmptyLocationDirectory_shouldBeSkippedSilently(
         self, project: Path
     ) -> None:
-        # Spec 03: the scan tolerates directories that simply do not exist.
+        # GIVEN a valid resources/ dir and an existing-but-empty location:
+        _write_png(project / "resources/graphics/base.png")
+        (project / "empty_dir").mkdir()
+
+        # WHEN the loader runs, capturing WARNING logs:
+        records, sink_id = _log_records("WARNING")
+        try:
+            loader = ResourceLoader()
+            loader.load(ResourcesConfig(location=[str(project / "empty_dir")]))
+        finally:
+            logger.remove(sink_id)
+
+        # THEN the empty dir is silently skipped (spec 03) - no error, no
+        # warning, and the rest of the scan succeeded:
+        assert loader.get_image_resource("graphics/base.png") is not None
+        assert records == []
+
+    def test_load_withNonExistentLocation_shouldRaiseResourceLoadError(
+        self, project: Path
+    ) -> None:
+        # Spec 03 stage 7: a location entry must exist; the old silent
+        # tolerance is gone.
+        _write_png(project / "resources/graphics/base.png")
+        with pytest.raises(ResourceLoadError, match="does not exist"):
+            ResourceLoader().load(
+                ResourcesConfig(location=[str(project / "does_not_exist")])
+            )
+
+    def test_load_withLocationFileWithoutPakExtension_shouldRaiseResourceLoadError(
+        self, project: Path
+    ) -> None:
+        # An existing file that is not a .pak is a ResourceLoadError
+        # (spec 03: Resource scanning).
+        _write_png(project / "resources/graphics/base.png")
+        stray = project / "notes.txt"
+        stray.write_text("not a package", encoding="utf-8")
+        with pytest.raises(ResourceLoadError, match="without the .pak extension"):
+            ResourceLoader().load(ResourcesConfig(location=[str(stray)]))
+
+    @pytest.mark.skipif(
+        _SKIP_PERMISSION_TESTS,
+        reason="directory permission checks are bypassed (root) or N/A (no os.geteuid, e.g. Windows)",
+    )
+    def test_load_withUnreadableLocationDirectory_shouldRaiseResourceLoadError(
+        self, project: Path
+    ) -> None:
+        # Spec 03: a directory that cannot be read is a ResourceLoadError.
+        # (Implementation note from the spec: as root, chmod 000 would not
+        # produce an unreadable directory, hence the skipif.)
+        _write_png(project / "resources/graphics/base.png")
+        unreadable = project / "no_read"
+        _make_text_file(unreadable, "note.txt", "inaccessible")
+        unreadable.chmod(0o000)
+        try:
+            with pytest.raises(ResourceLoadError, match="could not read resource directory"):
+                ResourceLoader().load(
+                    ResourcesConfig(location=[str(unreadable)])
+                )
+        finally:
+            unreadable.chmod(0o755)
+
+    def test_load_withDirectoryNamedPakExtension_shouldBeTreatedAsDirectory(
+        self, project: Path
+    ) -> None:
+        # Spec 03: Edge cases - extensions only classify files; a directory
+        # named resources.pak is scanned as a directory.
+        _write_png(project / "resources/graphics/base.png")
+        directory_named_pak = project / "resources.pak"
+        _make_text_file(directory_named_pak, "note.txt", "i am a directory")
+
+        loader = ResourceLoader()
+        loader.load(ResourcesConfig(location=[str(directory_named_pak)]))
+
+        assert loader.get_text_resource("note.txt") == "i am a directory"
+
+
+class TestPakLocations:
+    """``.pak`` files as explicit location entries (spec 03: Resource
+    scanning / The pak format)."""
+
+    def test_load_withValidPakLocation_shouldLoadEveryResourceType(
+        self, project: Path, mixer_ready: None, font_ready: None
+    ) -> None:
+        # GIVEN a package with one of each resource type, listed as a
+        # location entry (and no resources/ dir at all):
+        tree = project / "assets"
+        files = _standard_tree(tree)
+        _make_pak(tree, project / "game_assets.pak")
+
+        # WHEN the loader runs:
+        loader = ResourceLoader()
+        loader.load(ResourcesConfig(location=[str(project / "game_assets.pak")]))
+
+        # THEN each getter returns the decoded object under its pak ID:
+        assert isinstance(
+            loader.get_image_resource("graphics/ships/viper.png"), pygame.Surface
+        )
+        assert isinstance(loader.get_sfx_resource("audio/sfx/boom.wav"), pygame.mixer.Sound)
+        assert loader.get_music_resource("audio/music/theme.wav") == files[
+            "audio/music/theme.wav"
+        ].read_bytes()
+        assert loader.get_text_resource("data/NPC_dialog/frank.txt") == "Hello, grandma."
+        assert loader.get_json_resource("data/ship_stats.json") == {"hull": 100}
+        assert isinstance(
+            loader.get_font_resource("fonts/ui_font.ttf", 24), pygame.font.Font
+        )
+
+    def test_load_withPakInsideDirectoryLocation_shouldNotBeAutoDiscovered(
+        self, project: Path
+    ) -> None:
+        # GIVEN a directory location that CONTAINS a pak (the old
+        # distribution mode auto-scanned directories for *.pak files; the
+        # flat search path does not - each package must be its own entry):
+        _write_png(project / "resources/graphics/base.png")
+        tree = project / "addon"
+        _make_text_file(tree, "addon.txt", "addon data")
+        _make_pak(tree, project / "addon_paks/addon.pak")
+
+        # WHEN only the containing directory is listed:
+        loader = ResourceLoader()
+        loader.load(ResourcesConfig(location=["addon_paks"]))
+
+        # THEN the pak is skipped (wrong extension for a directory scan)
+        # and none of its resources are loaded:
+        assert loader.get_image_resource("graphics/base.png") is not None
+        assert loader.get_text_resource("addon.txt") is None
+
+    def test_load_withManifestJsonInDirectoryLocation_shouldLoadAsJsonResource(
+        self, project: Path
+    ) -> None:
+        # Spec 03: Edge cases - the reserved manifest.json name applies to
+        # package entries only; in a directory it is just a Json resource.
+        _write_png(project / "resources/graphics/base.png")
+        location = project / "assets"
+        _make_text_file(location, "manifest.json", '{"note": "not a package manifest"}')
+
+        loader = ResourceLoader()
+        loader.load(ResourcesConfig(location=[str(location)]))
+
+        assert loader.get_json_resource("manifest.json") == {
+            "note": "not a package manifest"
+        }
+
+    def test_load_withPakMissingManifestVersion_shouldRaiseUnsupportedResourceVersionError(
+        self, project: Path
+    ) -> None:
+        # Spec 03: Manifest errors - no version field is fatal.
+        _write_png(project / "resources/graphics/base.png")
+        entries = {"note.txt": b"hello"}
+        _make_pak_with_manifest(
+            project / "no_version.pak", _manifest_for(entries, version=None), entries
+        )
+        with pytest.raises(UnsupportedResourceVersionError, match="version"):
+            ResourceLoader().load(
+                ResourcesConfig(location=[str(project / "no_version.pak")])
+            )
+
+    def test_load_withPakUnsupportedManifestVersion_shouldRaiseUnsupportedResourceVersionError(
+        self, project: Path
+    ) -> None:
+        # Spec 03: any version other than the supported one is fatal.
+        _write_png(project / "resources/graphics/base.png")
+        entries = {"note.txt": b"hello"}
+        _make_pak_with_manifest(
+            project / "future.pak", _manifest_for(entries, version="9.9"), entries
+        )
+        with pytest.raises(UnsupportedResourceVersionError, match="unsupported version"):
+            ResourceLoader().load(
+                ResourcesConfig(location=[str(project / "future.pak")])
+            )
+
+    def test_load_withDuplicateIdsInSamePak_shouldRaiseResourceLoadError(
+        self, project: Path
+    ) -> None:
+        # Spec 03: two entries in the SAME manifest with the same ID.
+        _write_png(project / "resources/graphics/base.png")
+        raw = b"hello"
+        manifest = {
+            "version": game_constants.PAK_MANIFEST_VERSION,
+            "resources": [
+                {"id": "note.txt", "sha256": compute_sha256(xor_bytes(raw))},
+                {"id": "note.txt", "sha256": compute_sha256(xor_bytes(raw))},
+            ],
+        }
+        _make_pak_with_manifest(project / "dupe.pak", manifest, {"note.txt": raw})
+        with pytest.raises(ResourceLoadError, match="duplicate ID"):
+            ResourceLoader().load(ResourcesConfig(location=[str(project / "dupe.pak")]))
+
+    def test_load_withZeroBytePakLocation_shouldRaiseResourceLoadError(
+        self, project: Path
+    ) -> None:
+        # Spec 03: "a zero-byte package file is always considered an error":
+        _write_png(project / "resources/graphics/base.png")
+        (project / "empty.pak").write_bytes(b"")
+        with pytest.raises(ResourceLoadError, match="empty"):
+            ResourceLoader().load(ResourcesConfig(location=[str(project / "empty.pak")]))
+
+    def test_load_withNotAZipPakLocation_shouldRaiseResourceLoadError(
+        self, project: Path
+    ) -> None:
+        _write_png(project / "resources/graphics/base.png")
+        (project / "bad.pak").write_bytes(b"this is not a zip file at all")
+        with pytest.raises(ResourceLoadError, match="valid pak"):
+            ResourceLoader().load(ResourcesConfig(location=[str(project / "bad.pak")]))
+
+    def test_load_withPakMissingManifest_shouldRaiseResourceLoadError(
+        self, project: Path
+    ) -> None:
+        # A pak with no manifest.json entry at all (spec 03: Manifest).
+        _write_png(project / "resources/graphics/base.png")
+        pak_path = project / "no_manifest.pak"
+        with zipfile.ZipFile(pak_path, "w") as zf:
+            zf.writestr("note.txt", xor_bytes(b"hello"))
+        with pytest.raises(ResourceLoadError, match="manifest"):
+            ResourceLoader().load(ResourcesConfig(location=[str(pak_path)]))
+
+    @pytest.mark.skipif(
+        _SKIP_PERMISSION_TESTS,
+        reason="file permission checks are bypassed (root) or N/A (no os.geteuid, e.g. Windows)",
+    )
+    def test_load_withUnreadablePakLocation_shouldRaiseResourceLoadError(
+        self, project: Path
+    ) -> None:
+        # Spec 03: an existing .pak that cannot be read is a
+        # ResourceLoadError (see the unreadable-directory note above).
+        _write_png(project / "resources/graphics/base.png")
+        tree = project / "tree"
+        _make_text_file(tree, "note.txt", "hello")
+        pak_path = project / "locked.pak"
+        _make_pak(tree, pak_path)
+        pak_path.chmod(0o000)
+        try:
+            with pytest.raises(ResourceLoadError, match="could not read package file"):
+                ResourceLoader().load(ResourcesConfig(location=[str(pak_path)]))
+        finally:
+            pak_path.chmod(0o644)
+
+
+class TestOverrides:
+    """Later resources override earlier ones by ID (spec 03: Resource
+    scanning - the intended override mechanism)."""
+
+    def test_load_withSameIdInLaterDirectoryLocation_shouldKeepLaterResourceAndWarn(
+        self, project: Path
+    ) -> None:
+        # GIVEN the spec's example: resources/graphics/test.png shipped in
+        # the game dir, and a location /some/path/ containing
+        # graphics/test.png (same computed ID, different pixels):
+        _write_png(project / "resources/graphics/test.png", color=(1, 2, 3))
+        override_dir = project / "some_path"
+        _write_png(override_dir / "graphics/test.png", color=(200, 201, 202))
+
+        # WHEN the location is listed (it is scanned after resources/),
+        # capturing WARNING logs:
+        records, sink_id = _log_records("WARNING")
+        try:
+            loader = ResourceLoader()
+            loader.load(ResourcesConfig(location=[str(override_dir)]))
+        finally:
+            logger.remove(sink_id)
+
+        # THEN the shipped resource was dropped in favor of the override...
+        surface = loader.get_image_resource("graphics/test.png")
+        assert _png_color(surface) == pygame.Color(200, 201, 202, 255)
+        # ...and the replacement was reported as a warning:
+        assert any("duplicate" in record.lower() for record in records)
+
+    def test_load_withSameIdInLaterPakLocation_shouldKeepPakResource(
+        self, project: Path
+    ) -> None:
+        # The override works across source types: a pak entry replaces a
+        # resource loaded from the implicit resources/ directory.
+        _write_png(project / "resources/graphics/test.png", color=(1, 2, 3))
+        tree = project / "pak_source"
+        _write_png(tree / "graphics/test.png", color=(200, 201, 202))
+        _make_pak(tree, project / "override.pak")
+
+        loader = ResourceLoader()
+        loader.load(ResourcesConfig(location=[str(project / "override.pak")]))
+
+        surface = loader.get_image_resource("graphics/test.png")
+        assert _png_color(surface) == pygame.Color(200, 201, 202, 255)
+
+    def test_load_withSameIdInTwoLocations_shouldFollowConfigOrderNotAlphabeticalOrder(
+        self, project: Path
+    ) -> None:
+        # GIVEN two location dirs holding the same ID, where config order
+        # and alphabetical order DISAGREE (the old stage-4 rule scanned
+        # paks alphabetically; the flat search path follows config order):
+        _write_png(project / "resources/graphics/test.png", color=(1, 2, 3))
+        z_dir = project / "z_first_in_config"
+        _write_png(z_dir / "graphics/test.png", color=(100, 0, 0))
+        a_dir = project / "a_second_in_config"
+        _write_png(a_dir / "graphics/test.png", color=(0, 0, 200))
+
+        # WHEN z_dir is listed FIRST and a_dir second:
+        loader = ResourceLoader()
+        loader.load(ResourcesConfig(location=[str(z_dir), str(a_dir)]))
+
+        # THEN the config-order-later entry (a_dir) wins, proving the scan
+        # order is the config array, not the alphabet:
+        surface = loader.get_image_resource("graphics/test.png")
+        assert _png_color(surface) == pygame.Color(0, 0, 200, 255)
+
+    def test_load_withExplicitResourcesDirLocation_shouldNotDoubleLoadOrWarn(
+        self, project: Path
+    ) -> None:
+        # Spec 03: location: ["resources/"] is equivalent to an empty list,
+        # so the implicit scan must not be repeated (a second scan would
+        # log a spurious override warning for every single resource).
         _write_png(project / "resources/graphics/base.png")
         loader = ResourceLoader()
-        loader.load(
-            ResourcesConfig(
-                mode="dev",
-                location=[str(project / "does_not_exist"), "also_missing/"],
-            )
-        )
+        records, sink_id = _log_records("WARNING")
+        try:
+            loader.load(ResourcesConfig(location=["resources/"]))
+        finally:
+            logger.remove(sink_id)
+
         assert loader.get_image_resource("graphics/base.png") is not None
+        assert records == []
+
+    def test_load_withFourLoadsAndOneOverride_shouldLogInfoSummaryWithNetTotalAndOverrideCounts(
+        self, project: Path
+    ) -> None:
+        # GIVEN a scan that loads 4 resources in total, exactly 1 of which
+        # replaces an earlier one (spec 03: startup summary log - the net
+        # count in memory is the headline, "Loaded 32 resources total
+        # (including 8 overrides)" style):
+        _write_png(project / "resources/graphics/test.png", color=(1, 2, 3))
+        _make_text_file(project / "resources", "notes/shipped.txt", "shipped")
+        override_dir = project / "some_path"
+        _write_png(override_dir / "graphics/test.png", color=(200, 201, 202))
+        _make_text_file(override_dir, "notes/new.txt", "brand new")
+
+        # WHEN the scan runs, capturing INFO logs:
+        records, sink_id = _log_records("INFO")
+        try:
+            loader = ResourceLoader()
+            loader.load(ResourcesConfig(location=[str(override_dir)]))
+        finally:
+            logger.remove(sink_id)
+
+        # THEN exactly one summary line reports the net distinct count (3,
+        # not the 4 raw loads) and the override count within it (1):
+        summaries = [record for record in records if "override" in record.lower()]
+        assert len(summaries) == 1
+        assert re.search(
+            r"loaded 3 resource\(s\) total \(including 1 override\(s\)\)",
+            summaries[0],
+        )
 
 
 class TestMusicVsSoundEffect:
-    def test_with_audio_under_audio_music_should_be_cached_as_raw_bytes(
+    def test_withAudioUnderAudioMusic_shouldBeCachedAsRawBytes(
         self, project: Path, mixer_ready: None
     ) -> None:
         # GIVEN a wav file whose ID starts with audio/music/:
         _write_wav(project / "resources/audio/music/theme.wav")
 
-        # WHEN loading in dev mode:
+        # WHEN the loader runs:
         loader = ResourceLoader()
         loader.load(None)
 
@@ -204,13 +637,13 @@ class TestMusicVsSoundEffect:
         assert isinstance(loader.get_music_resource("audio/music/theme.wav"), bytes)
         assert loader.get_sfx_resource("audio/music/theme.wav") is None
 
-    def test_with_audio_outside_audio_music_should_be_cached_as_sound(
+    def test_withAudioOutsideAudioMusic_shouldBeCachedAsSound(
         self, project: Path, mixer_ready: None
     ) -> None:
         # GIVEN a wav file outside audio/music/:
         _write_wav(project / "resources/audio/sfx/boom.wav")
 
-        # WHEN loading in dev mode:
+        # WHEN the loader runs:
         loader = ResourceLoader()
         loader.load(None)
 
@@ -218,7 +651,7 @@ class TestMusicVsSoundEffect:
         assert isinstance(loader.get_sfx_resource("audio/sfx/boom.wav"), pygame.mixer.Sound)
         assert loader.get_music_resource("audio/sfx/boom.wav") is None
 
-    def test_with_audio_under_similarly_named_dir_should_be_sound_effect(
+    def test_withAudioUnderSimilarlyNamedDir_shouldBeSoundEffect(
         self, project: Path, mixer_ready: None
     ) -> None:
         # The music prefix is exactly "audio/music/" - "audio/musicbox/"
@@ -233,13 +666,14 @@ class TestMusicVsSoundEffect:
 
 
 class TestFontResource:
-    """The font consumer API (spec 03: Consumer API, stage 5)."""
+    """The font consumer API (spec 03: Consumer API)."""
 
-    def test_with_valid_font_id_in_dev_mode_should_return_font_at_requested_size(
+    def test_getFontResource_withValidFontIdFromDirectory_shouldReturnFontAtRequestedSize(
         self, project: Path, font_ready: None
     ) -> None:
-        # Spec 03: "In both modes, a valid .ttf font file can be loaded as a
-        # resource" - dev mode leg:
+        # Spec 03: "A valid .ttf font file can be loaded as a resource,
+        # either from a resource directory or from a .pak file" - the
+        # directory leg:
         _write_ttf(project / "resources/fonts/ui.ttf")
 
         loader = ResourceLoader()
@@ -247,20 +681,20 @@ class TestFontResource:
 
         assert isinstance(loader.get_font_resource("fonts/ui.ttf", 24), pygame.font.Font)
 
-    def test_with_valid_font_id_in_distribution_mode_should_return_font_at_requested_size(
+    def test_getFontResource_withValidFontIdFromPak_shouldReturnFontAtRequestedSize(
         self, project: Path, font_ready: None
     ) -> None:
-        # The distribution-mode leg of the same spec sentence:
+        # The .pak leg of the same spec sentence:
         tree = project / "assets"
         _write_ttf(tree / "fonts/ui.ttf")
         _make_pak(tree, project / "game_assets.pak")
 
         loader = ResourceLoader()
-        loader.load(ResourcesConfig(mode="distribution"))
+        loader.load(ResourcesConfig(location=[str(project / "game_assets.pak")]))
 
         assert isinstance(loader.get_font_resource("fonts/ui.ttf", 24), pygame.font.Font)
 
-    def test_with_missing_id_should_return_none(
+    def test_getFontResource_withMissingId_shouldReturnNone(
         self, project: Path, font_ready: None
     ) -> None:
         # Spec 03: "Return None if the given ID is not present":
@@ -270,7 +704,7 @@ class TestFontResource:
 
         assert loader.get_font_resource("fonts/nope.ttf", 24) is None
 
-    def test_with_wrong_type_id_should_return_none(
+    def test_getFontResource_withWrongTypeId_shouldReturnNone(
         self, project: Path, font_ready: None
     ) -> None:
         # Spec 03: "Return None if the given ID identifies a resource of the
@@ -282,7 +716,7 @@ class TestFontResource:
 
         assert loader.get_font_resource("graphics/ship.png", 24) is None
 
-    def test_with_same_id_and_size_should_return_cached_font(
+    def test_getFontResource_withSameIdAndSize_shouldReturnCachedFont(
         self, project: Path, font_ready: None
     ) -> None:
         # Spec 03: repeated requests for the same font at the same size are
@@ -296,7 +730,7 @@ class TestFontResource:
 
         assert first is second
 
-    def test_with_different_sizes_should_return_distinct_fonts(
+    def test_getFontResource_withDifferentSizes_shouldReturnDistinctFonts(
         self, project: Path, font_ready: None
     ) -> None:
         # The cache is keyed by (id, size): different sizes are different
@@ -310,12 +744,41 @@ class TestFontResource:
 
         assert small is not large
 
+    def test_load_withZeroByteTtfInPak_shouldRaiseResourceLoadError(
+        self, project: Path
+    ) -> None:
+        # Spec 03: "A zero-byte .ttf font file is rejected as invalid,
+        # regardless of where it was loaded from" - the .pak leg (built by
+        # hand, since create_pak refuses to package invalid resources):
+        entries = {"fonts/empty.ttf": b""}
+        _make_pak_with_manifest(
+            project / "empty_font.pak", _manifest_for(entries), entries
+        )
+        with pytest.raises(ResourceLoadError, match="fonts/empty.ttf"):
+            ResourceLoader().load(
+                ResourcesConfig(location=[str(project / "empty_font.pak")])
+            )
+
+    def test_load_withBadHeaderTtfInPak_shouldRaiseResourceLoadError(
+        self, project: Path
+    ) -> None:
+        # The magic-number header check applies to pak entries too (spec 03:
+        # Notes for font validation):
+        entries = {"fonts/bad.ttf": b"this is not a ttf at all"}
+        _make_pak_with_manifest(
+            project / "bad_font.pak", _manifest_for(entries), entries
+        )
+        with pytest.raises(ResourceLoadError, match="fonts/bad.ttf"):
+            ResourceLoader().load(
+                ResourcesConfig(location=[str(project / "bad_font.pak")])
+            )
+
 
 class TestThemeAndFontIdListing:
     """The theme/font id accessors (spec 03: Consumer API, as amended by
     spec 08: Title Screen)."""
 
-    def test_get_theme_resource_ids_with_no_theme_resources_should_return_only_the_sentinel(
+    def test_getThemeResourceIds_withNoThemeResources_shouldReturnOnlyTheSentinel(
         self, project: Path
     ) -> None:
         # GIVEN a resource tree with no themes/ directory at all:
@@ -330,7 +793,7 @@ class TestThemeAndFontIdListing:
             game_constants.DEFAULT_THEME_DISPLAY_VALUE
         ]
 
-    def test_get_font_resource_ids_with_no_font_resources_should_return_only_the_sentinel(
+    def test_getFontResourceIds_withNoFontResources_shouldReturnOnlyTheSentinel(
         self, project: Path
     ) -> None:
         # GIVEN a resource tree with no fonts/ directory at all:
@@ -343,7 +806,7 @@ class TestThemeAndFontIdListing:
             game_constants.DEFAULT_FONT_DISPLAY_VALUE
         ]
 
-    def test_get_theme_resource_ids_with_nested_themes_should_return_all_sorted_sentinel_first(
+    def test_getThemeResourceIds_withNestedThemes_shouldReturnAllSortedSentinelFirst(
         self, project: Path
     ) -> None:
         # GIVEN theme jsons at the top of themes/ AND nested several
@@ -372,7 +835,7 @@ class TestThemeAndFontIdListing:
             "themes/Zulu.json",
         ]
 
-    def test_get_font_resource_ids_with_nested_fonts_should_return_all_sorted_sentinel_first(
+    def test_getFontResourceIds_withNestedFonts_shouldReturnAllSortedSentinelFirst(
         self, project: Path
     ) -> None:
         # GIVEN fonts at the top of fonts/ AND nested deep, out of order
@@ -397,7 +860,7 @@ class TestThemeAndFontIdListing:
 
 
 class TestExtensionFiltering:
-    def test_with_unsupported_extensions_should_skip_them_silently(
+    def test_withUnsupportedExtensions_shouldSkipThemSilently(
         self, project: Path
     ) -> None:
         # GIVEN one valid resource plus files with unsupported or
@@ -409,7 +872,7 @@ class TestExtensionFiltering:
         (resources / "no_extension").write_text("nothing", encoding="utf-8")
 
         # WHEN the loader runs, capturing WARNING logs:
-        records, sink_id = _warning_records()
+        records, sink_id = _log_records("WARNING")
         try:
             loader = ResourceLoader()
             loader.load(None)
@@ -423,36 +886,8 @@ class TestExtensionFiltering:
         assert not any("LetterToMyGrandma" in record for record in records)
 
 
-class TestNoResourcesFound:
-    def test_with_missing_resources_dir_should_raise_no_resources_found(
-        self, project: Path
-    ) -> None:
-        # Spec 03: nothing found anywhere is NoResourcesFoundError. The
-        # distribution-mode fallback runs here too and also finds no *.pak
-        # file.
-        with pytest.raises(NoResourcesFoundError):
-            ResourceLoader().load(None)
-
-    def test_with_empty_resources_dir_should_raise_no_resources_found(
-        self, project: Path
-    ) -> None:
-        (project / "resources").mkdir()
-        with pytest.raises(NoResourcesFoundError):
-            ResourceLoader().load(None)
-
-    def test_with_only_unsupported_extensions_should_raise_no_resources_found(
-        self, project: Path
-    ) -> None:
-        # A directory full of .doc files contains no VALID resources.
-        resources = project / "resources"
-        resources.mkdir()
-        (resources / "notes.doc").write_text("not a resource", encoding="utf-8")
-        with pytest.raises(NoResourcesFoundError):
-            ResourceLoader().load(None)
-
-
 class TestLoadFailures:
-    def test_with_zero_byte_wav_should_raise_resource_load_error(
+    def test_withZeroByteWav_shouldRaiseResourceLoadError(
         self, project: Path, mixer_ready: None
     ) -> None:
         # Spec 03 names a zero-byte wav as the canonical failure case.
@@ -463,7 +898,7 @@ class TestLoadFailures:
         with pytest.raises(ResourceLoadError, match="audio/sfx/empty.wav"):
             ResourceLoader().load(None)
 
-    def test_with_corrupt_png_should_raise_resource_load_error(self, project: Path) -> None:
+    def test_withCorruptPng_shouldRaiseResourceLoadError(self, project: Path) -> None:
         path = project / "resources/graphics/corrupt.png"
         path.parent.mkdir(parents=True)
         path.write_bytes(b"this is not a png at all")
@@ -471,7 +906,7 @@ class TestLoadFailures:
         with pytest.raises(ResourceLoadError, match="graphics/corrupt.png"):
             ResourceLoader().load(None)
 
-    def test_with_non_utf8_text_should_raise_resource_load_error(self, project: Path) -> None:
+    def test_withNonUtf8Text_shouldRaiseResourceLoadError(self, project: Path) -> None:
         path = project / "resources/data/bad_encoding.txt"
         path.parent.mkdir(parents=True)
         path.write_bytes(b"\xff\xfe\xfa broken")
@@ -479,7 +914,7 @@ class TestLoadFailures:
         with pytest.raises(ResourceLoadError, match="data/bad_encoding.txt"):
             ResourceLoader().load(None)
 
-    def test_with_invalid_json_should_raise_resource_load_error(self, project: Path) -> None:
+    def test_withInvalidJson_shouldRaiseResourceLoadError(self, project: Path) -> None:
         path = project / "resources/data/broken.json"
         path.parent.mkdir(parents=True)
         path.write_text("{not json", encoding="utf-8")
@@ -487,9 +922,7 @@ class TestLoadFailures:
         with pytest.raises(ResourceLoadError, match="data/broken.json"):
             ResourceLoader().load(None)
 
-    def test_with_zero_byte_ttf_should_raise_resource_load_error(
-        self, project: Path
-    ) -> None:
+    def test_withZeroByteTtf_shouldRaiseResourceLoadError(self, project: Path) -> None:
         # Spec 03: "A zero-byte .ttf file is automatically invalid":
         path = project / "resources/fonts/empty.ttf"
         path.parent.mkdir(parents=True)
@@ -498,9 +931,7 @@ class TestLoadFailures:
         with pytest.raises(ResourceLoadError, match="fonts/empty.ttf"):
             ResourceLoader().load(None)
 
-    def test_with_bad_header_ttf_should_raise_resource_load_error(
-        self, project: Path
-    ) -> None:
+    def test_withBadHeaderTtf_shouldRaiseResourceLoadError(self, project: Path) -> None:
         # Spec 03: Notes for font validation - the magic-number header check
         # rejects this payload even though pygame's Font constructor would
         # silently accept it via the default-font fallback:
@@ -511,12 +942,11 @@ class TestLoadFailures:
         with pytest.raises(ResourceLoadError, match="fonts/bad.ttf"):
             ResourceLoader().load(None)
 
-    def test_with_first_bad_resource_should_stop_before_later_ones(
+    def test_withFirstBadResource_shouldStopBeforeLaterOnes(
         self, project: Path, mixer_ready: None
     ) -> None:
-        # GIVEN files whose sorted IDs put the corrupt one first
-        # (spec 03: "the first unparseable resource that is found ends the
-        # process"):
+        # GIVEN files whose sorted IDs put the corrupt one first (spec 03:
+        # the first unparseable resource ends the process):
         data = project / "resources/data"
         data.mkdir(parents=True)
         (data / "01_corrupt.json").write_text("{broken", encoding="utf-8")
@@ -529,315 +959,3 @@ class TestLoadFailures:
 
         # THEN nothing after it was loaded:
         assert loader.get_json_resource("data/02_fine.json") is None
-
-
-class TestDuplicateIds:
-    def test_with_same_id_in_later_location_should_keep_later_resource_and_warn(
-        self, project: Path
-    ) -> None:
-        # GIVEN the default dir and a later-configured location both holding
-        # shared/thing.txt with different contents (spec 03: duplicate IDs
-        # are NOT an error; the most recently loaded wins, with a warning):
-        default_shared = project / "resources/shared"
-        default_shared.mkdir(parents=True)
-        (default_shared / "thing.txt").write_text("from default", encoding="utf-8")
-        extra_shared = project / "extra/shared"
-        extra_shared.mkdir(parents=True)
-        (extra_shared / "thing.txt").write_text("from extra", encoding="utf-8")
-
-        # WHEN the extra location is listed (it loads after the default):
-        records, sink_id = _warning_records()
-        try:
-            loader = ResourceLoader()
-            loader.load(ResourcesConfig(mode="dev", location=[str(extra_shared.parent)]))
-        finally:
-            logger.remove(sink_id)
-
-        # THEN the most recently loaded resource is retained...
-        assert loader.get_text_resource("shared/thing.txt") == "from extra"
-        # ...and the collision was reported as a warning:
-        assert any("duplicate" in record.lower() for record in records)
-
-    def test_with_same_id_in_later_default_and_later_listed_should_warn_once_per_collision(
-        self, project: Path
-    ) -> None:
-        # resources/ is ALWAYS scanned first, so an explicit "resources/"
-        # entry in location must not cause a spurious duplicate.
-        _write_png(project / "resources/graphics/base.png")
-        loader = ResourceLoader()
-        records, sink_id = _warning_records()
-        try:
-            loader.load(ResourcesConfig(mode="dev", location=["resources/"]))
-        finally:
-            logger.remove(sink_id)
-
-        assert loader.get_image_resource("graphics/base.png") is not None
-        assert records == []
-
-
-class TestDistributionMode:
-    def test_with_valid_pak_in_project_dir_should_load_every_resource_type(
-        self, project: Path, mixer_ready: None, font_ready: None
-    ) -> None:
-        # GIVEN a project holding one package with one of each resource type
-        # (and no dev-mode resources/ dir at all):
-        tree = project / "assets"
-        files = _standard_tree(tree)
-        _make_pak(tree, project / "game_assets.pak")
-
-        # WHEN distribution mode is requested explicitly:
-        loader = ResourceLoader()
-        loader.load(ResourcesConfig(mode="distribution"))
-
-        # THEN each getter returns the decoded object under its pak ID:
-        assert isinstance(
-            loader.get_image_resource("graphics/ships/viper.png"), pygame.Surface
-        )
-        assert isinstance(loader.get_sfx_resource("audio/sfx/boom.wav"), pygame.mixer.Sound)
-        assert loader.get_music_resource("audio/music/theme.wav") == files[
-            "audio/music/theme.wav"
-        ].read_bytes()
-        assert loader.get_text_resource("data/NPC_dialog/frank.txt") == "Hello, grandma."
-        assert loader.get_json_resource("data/ship_stats.json") == {"hull": 100}
-        assert isinstance(
-            loader.get_font_resource("fonts/ui_font.ttf", 24), pygame.font.Font
-        )
-
-    def test_with_multiple_paks_should_load_them_all(self, project: Path) -> None:
-        # GIVEN two packages, each with its own text resource:
-        tree_a = project / "tree_a"
-        _make_text_file(tree_a, "a.txt", "from a")
-        _make_pak(tree_a, project / "a.pak")
-        tree_b = project / "tree_b"
-        _make_text_file(tree_b, "b.txt", "from b")
-        _make_pak(tree_b, project / "b.pak")
-
-        # WHEN distribution mode runs:
-        loader = ResourceLoader()
-        loader.load(ResourcesConfig(mode="distribution"))
-
-        # THEN resources from BOTH packages are available:
-        assert loader.get_text_resource("a.txt") == "from a"
-        assert loader.get_text_resource("b.txt") == "from b"
-
-    def test_with_duplicate_id_across_paks_should_keep_later_alphabetical_and_warn(
-        self, project: Path
-    ) -> None:
-        # GIVEN two packages, both containing shared/thing.txt, where the
-        # alphabetically LATER package (b.pak) holds the desired copy
-        # (spec 03: packages scan alphabetically; most recently loaded wins):
-        tree_a = project / "tree_a"
-        _make_text_file(tree_a, "shared/thing.txt", "from a")
-        _make_pak(tree_a, project / "a.pak")
-        tree_b = project / "tree_b"
-        _make_text_file(tree_b, "shared/thing.txt", "from b")
-        _make_pak(tree_b, project / "b.pak")
-
-        # WHEN distribution mode runs, capturing WARNING logs:
-        records, sink_id = _warning_records()
-        try:
-            loader = ResourceLoader()
-            loader.load(ResourcesConfig(mode="distribution"))
-        finally:
-            logger.remove(sink_id)
-
-        # THEN the later (alphabetical) package wins... the earlier one is
-        # discarded, ...and the collision was reported as a warning:
-        assert loader.get_text_resource("shared/thing.txt") == "from b"
-        assert any("duplicate" in record.lower() for record in records)
-
-    def test_with_pak_in_configured_location_should_load_it(self, project: Path) -> None:
-        # GIVEN a package in an extra directory listed in location (the
-        # project dir itself holds no pak):
-        tree = project / "addon_assets"
-        _make_text_file(tree, "addon.txt", "addon data")
-        _make_pak(tree, project / "addon_paks/addon.pak")
-
-        # WHEN distribution mode lists the extra dir:
-        loader = ResourceLoader()
-        loader.load(
-            ResourcesConfig(mode="distribution", location=["addon_paks"])
-        )
-
-        # THEN the package's resource is loaded (relative location resolved
-        # against the project directory):
-        assert loader.get_text_resource("addon.txt") == "addon data"
-
-    def test_with_missing_location_dirs_should_be_ignored(self, project: Path) -> None:
-        # Spec 03: the scan tolerates directories that simply do not exist.
-        tree = project / "tree"
-        _make_text_file(tree, "note.txt", "hello")
-        _make_pak(tree, project / "note.pak")
-        loader = ResourceLoader()
-        loader.load(
-            ResourcesConfig(
-                mode="distribution",
-                location=[str(project / "does_not_exist"), "also_missing/"],
-            )
-        )
-        assert loader.get_text_resource("note.txt") == "hello"
-
-    def test_with_pak_in_subdirectory_should_not_be_scanned(self, project: Path) -> None:
-        # Spec 03 says "scan ... for *.pak files" for distribution mode, and
-        # only "recursive scan" for dev mode - so only the top level of each
-        # scanned directory is looked at:
-        tree = project / "tree"
-        _make_text_file(tree, "note.txt", "hello")
-        _make_pak(tree, project / "subdir/nested.pak")
-
-        with pytest.raises(NoResourcesFoundError):
-            ResourceLoader().load(ResourcesConfig(mode="distribution"))
-
-    def test_with_explicit_dot_location_should_not_scan_twice(
-        self, project: Path
-    ) -> None:
-        # "" is always scanned, so an explicit "." entry must not cause the
-        # same package to be loaded twice (which would log a spurious
-        # duplicate warning for every resource):
-        tree = project / "tree"
-        _make_text_file(tree, "note.txt", "hello")
-        _make_pak(tree, project / "note.pak")
-        loader = ResourceLoader()
-        records, sink_id = _warning_records()
-        try:
-            loader.load(ResourcesConfig(mode="distribution", location=["."]))
-        finally:
-            logger.remove(sink_id)
-        assert loader.get_text_resource("note.txt") == "hello"
-        assert records == []
-
-
-class TestDistributionModeFailures:
-    def test_with_no_pak_files_should_raise_no_resources_found(
-        self, project: Path
-    ) -> None:
-        # Spec 03: no *.pak anywhere -> NoResourcesFoundError:
-        with pytest.raises(NoResourcesFoundError):
-            ResourceLoader().load(ResourcesConfig(mode="distribution"))
-
-    def test_with_zero_byte_pak_should_raise_resource_load_error(
-        self, project: Path
-    ) -> None:
-        # Spec 03: "a zero-byte package file is always considered an error":
-        (project / "empty.pak").write_bytes(b"")
-        with pytest.raises(ResourceLoadError, match="empty"):
-            ResourceLoader().load(ResourcesConfig(mode="distribution"))
-
-    def test_with_not_a_zip_pak_should_raise_resource_load_error(
-        self, project: Path
-    ) -> None:
-        (project / "bad.pak").write_bytes(b"this is not a zip file at all")
-        with pytest.raises(ResourceLoadError, match="valid pak"):
-            ResourceLoader().load(ResourcesConfig(mode="distribution"))
-
-    def test_with_pak_missing_manifest_should_raise_resource_load_error(
-        self, project: Path, tmp_path: Path
-    ) -> None:
-        # Build a pak with no manifest.json (spec 03: fatal in distribution
-        # mode):
-        pak_path = project / "no_manifest.pak"
-        with zipfile.ZipFile(pak_path, "w") as zf:
-            zf.writestr("note.txt", xor_bytes(b"hello"))
-        with pytest.raises(ResourceLoadError, match="manifest"):
-            ResourceLoader().load(ResourcesConfig(mode="distribution"))
-
-
-class TestDevToFallbackDistribution:
-    def test_with_no_dev_resources_should_fall_back_to_distribution(
-        self, project: Path, mixer_ready: None
-    ) -> None:
-        # GIVEN an (assumed) dev-mode config with an empty resources/ dir and
-        # a valid package in the project dir (spec 03: Determining mode -
-        # empty dev scan falls back to distribution):
-        (project / "resources").mkdir()
-        tree = project / "assets"
-        _standard_tree(tree)
-        _make_pak(tree, project / "game_assets.pak")
-
-        # WHEN the loader runs with NO config (dev mode assumed):
-        loader = ResourceLoader()
-        loader.load(None)
-
-        # THEN the package's resources are loaded:
-        assert isinstance(
-            loader.get_image_resource("graphics/ships/viper.png"), pygame.Surface
-        )
-        assert loader.get_text_resource("data/NPC_dialog/frank.txt") == "Hello, grandma."
-
-    def test_with_dev_resources_present_should_ignore_paks(
-        self, project: Path
-    ) -> None:
-        # GIVEN dev-mode resources present AND a package in the project dir
-        # (spec 03: the loader scans for individual asset files OR *.pak
-        # files, never both):
-        _write_png(project / "resources/graphics/base.png")
-        tree = project / "tree"
-        _make_text_file(tree, "pak_only.txt", "should not load")
-        _make_pak(tree, project / "note.pak")
-
-        # WHEN dev mode (the default) runs:
-        loader = ResourceLoader()
-        loader.load(None)
-
-        # THEN only the dev-mode resource is loaded - the pak is ignored:
-        assert loader.get_image_resource("graphics/base.png") is not None
-        assert loader.get_text_resource("pak_only.txt") is None
-
-    def test_with_explicit_dev_mode_should_ignore_paks(self, project: Path) -> None:
-        # Same contract, with mode stated explicitly (spec 03: "Can the
-        # game be explicitly started in either mode, if both resources and
-        # *.pak files are present?"):
-        _write_png(project / "resources/graphics/base.png")
-        tree = project / "tree"
-        _make_text_file(tree, "pak_only.txt", "should not load")
-        _make_pak(tree, project / "note.pak")
-
-        loader = ResourceLoader()
-        loader.load(ResourcesConfig(mode="dev"))
-
-        assert loader.get_image_resource("graphics/base.png") is not None
-        assert loader.get_text_resource("pak_only.txt") is None
-
-    def test_with_explicit_distribution_should_ignore_dev_files(
-        self, project: Path
-    ) -> None:
-        # The mirror image of the above: explicit distribution never scans
-        # individual files:
-        _write_png(project / "resources/graphics/base.png")
-        tree = project / "tree"
-        _make_text_file(tree, "pak_only.txt", "from pak")
-        _make_pak(tree, project / "note.pak")
-
-        loader = ResourceLoader()
-        loader.load(ResourcesConfig(mode="distribution"))
-
-        assert loader.get_text_resource("pak_only.txt") == "from pak"
-        assert loader.get_image_resource("graphics/base.png") is None
-
-    def test_with_dev_load_failure_should_not_fall_back_to_distribution(
-        self, project: Path
-    ) -> None:
-        # Spec 03: "a single unloadable resource file or invalid *.pak file
-        # stops the process and prevents any fallback" - even though a valid
-        # package sits waiting in the project dir:
-        broken = project / "resources/data/broken.json"
-        broken.parent.mkdir(parents=True)
-        broken.write_text("{not json", encoding="utf-8")
-        tree = project / "tree"
-        _make_text_file(tree, "fine.txt", "never reached")
-        _make_pak(tree, project / "note.pak")
-
-        with pytest.raises(ResourceLoadError, match="broken.json"):
-            ResourceLoader().load(None)
-
-    def test_with_fallback_and_invalid_pak_should_raise_resource_load_error(
-        self, project: Path
-    ) -> None:
-        # The fallback itself must not paper over a bad package (spec 03:
-        # the first invalid package file stops the process, preventing any
-        # further fallback):
-        (project / "resources").mkdir()
-        (project / "bad.pak").write_bytes(b"this is not a zip file at all")
-
-        with pytest.raises(ResourceLoadError, match="valid pak"):
-            ResourceLoader().load(None)

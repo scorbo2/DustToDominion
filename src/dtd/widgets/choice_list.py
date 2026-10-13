@@ -39,7 +39,17 @@ Rendering contract (spec 07: Visual appearance):
   thicker than half the height) means no pagers and an inoperative -
   though not disabled - widget: a client geometry problem.
 - A click is a left-button press *and* release inside the same pager
-  square (the same rule as Button, spec 04).
+  square (the same rule as Button, spec 09: Button events).
+
+Audio contract (spec 07: ChoiceList audio):
+
+- A pager click that counts (enabled, more than one option) plays
+  ``UI_SFX_ACCEPT``; a one-item list pages nothing and sounds nothing.
+- ``on_hover_enter()`` (the spec 04 hook, as amended by spec 07) plays
+  ``UI_SFX_HOVER``; the UIManager already keeps disabled and selected
+  widgets from ever reaching the hook.
+- Resource ids are handed to the global AudioManager as-is; the widget
+  never resolves them or tracks whether audio actually plays (spec 05).
 """
 from __future__ import annotations
 
@@ -47,7 +57,10 @@ from collections.abc import Callable
 
 import pygame
 
+from dtd import game_constants
+from dtd.audio import get_audio_manager
 from dtd.ui import Scale, Theme, Widget, current_scale, state_colors
+from dtd.widgets.text_layout import ZERO_GLYPH_MARGIN_FITS, largest_fitting_size
 
 
 def sanitize_choices(raw: list) -> list[str]:
@@ -242,7 +255,7 @@ class ChoiceList(Widget):
         left, right = pagers
         return pygame.Rect(left.right, inner.y, right.left - left.right, inner.h)
 
-    # -- input (spec 07: click rules identical to Button, spec 04) ---------
+    # -- input (spec 07: click rules identical to Button, spec 09) ---------
     def update(self, events: list[pygame.event.Event]) -> None:
         """Track press-to-release on each pager control.
 
@@ -267,10 +280,37 @@ class ChoiceList(Widget):
                 clicked_left = self._left_pressed and pressing_left
                 clicked_right = self._right_pressed and pressing_right
                 self._left_pressed = self._right_pressed = False
-                if clicked_left:
-                    self._page(-1)
-                elif clicked_right:
-                    self._page(+1)
+                # A pager click only *counts* when paging is actually
+                # possible: with one item the selection cannot change,
+                # so the click neither pages nor plays the accept sound
+                # (spec 07: ChoiceList audio).
+                if clicked_left or clicked_right:
+                    if len(self._items) > 1:
+                        self._play_ui_sfx(game_constants.UI_SFX_ACCEPT)
+                        if clicked_left:
+                            self._page(-1)
+                        else:
+                            self._page(+1)
+
+    # -- audio (spec 07: ChoiceList audio) ----------------------------------
+    def on_hover_enter(self) -> None:
+        """Play the shared hover sound on a non-hovered -> hovered
+        transition (the spec 04 hook, as amended by spec 07).
+
+        The UIManager never invokes this on disabled or selected widgets,
+        so those spec rules come for free from the framework.
+        """
+        self._play_ui_sfx(game_constants.UI_SFX_HOVER)
+
+    def _play_ui_sfx(self, resource_id: str) -> None:
+        """Hand the id to the global AudioManager as-is (spec 07).
+
+        The widget never resolves resource ids and never checks whether
+        the sound actually plays: disabled UI sound effects, unresolvable
+        ids, and exhausted channels are all AudioManager's business
+        (spec 05).
+        """
+        get_audio_manager().play_ui_sfx(resource_id)
 
     @staticmethod
     def _pagers_hit(
@@ -338,9 +378,11 @@ class ChoiceList(Widget):
         item = self.get_current_item()
         if item is None or area.w <= 0 or area.h <= 0:
             return
-        font_size = self._largest_fitting_size(area, theme, item)
-        if font_size is None:
-            font_size = 1
+        # The shared margin-aware search; the default fallback of 1 matches
+        # the clip-at-size-1 rule above (spec 07, as amended by spec 10).
+        font_size = largest_fitting_size(
+            theme, item, area.w, area.h, fits=ZERO_GLYPH_MARGIN_FITS
+        )
         text_surface = theme.get_font(font_size).render(item, True, fg)
         dest = pygame.Rect(
             area.centerx - text_surface.get_width() // 2,
@@ -367,7 +409,13 @@ class ChoiceList(Widget):
         is simply not drawn - its square remains clickable regardless.
         """
         for glyph, square in zip(("<", ">"), squares):
-            font_size = self._largest_fitting_size(square, theme, glyph)
+            # fallback=None keeps the spec 07 rule: a glyph that cannot
+            # fit even at size 1 is not drawn at all (spec 07, as
+            # amended by spec 10).
+            font_size = largest_fitting_size(
+                theme, glyph, square.w, square.h,
+                fits=ZERO_GLYPH_MARGIN_FITS, fallback=None,
+            )
             if font_size is None:
                 continue
             glyph_surface = theme.get_font(font_size).render(glyph, True, fg)
@@ -378,42 +426,3 @@ class ChoiceList(Widget):
                     square.centery - glyph_surface.get_height() // 2,
                 ),
             )
-
-    def _largest_fitting_size(
-        self, area: pygame.Rect, theme: Theme, text: str
-    ) -> int | None:
-        """The largest point size whose text plus margins fits ``area``.
-
-        Margins are half the height of ``0`` at the candidate size
-        (spec 07), so they are re-derived at every step of the binary
-        search. Returns ``None`` when even size 1 does not fit; callers
-        decide between clipping at size 1 (item text) and drawing nothing
-        (pager glyphs).
-        """
-        low, high = 1, max(1, min(area.w, area.h))
-        best: int | None = None
-        while low <= high:
-            mid = (low + high) // 2
-            if self._fits_with_margins(area, theme, text, mid):
-                best = mid
-                low = mid + 1
-            else:
-                high = mid - 1
-        return best
-
-    @staticmethod
-    def _fits_with_margins(
-        area: pygame.Rect, theme: Theme, text: str, size: int
-    ) -> bool:
-        """Whether ``text`` plus its all-sides margins fit ``area``.
-
-        The spec names "top and bottom" margins for pager glyphs, but
-        the margins are defined on all four sides - so the fit check is
-        two-axis for both item text and glyphs. A glyph that passes
-        vertically but fails horizontally would otherwise sit with less
-        margin than the spec asks for.
-        """
-        font = theme.get_font(size)
-        margin = font.size("0")[1] // 2
-        width, height = font.size(text)
-        return width <= area.w - 2 * margin and height <= area.h - 2 * margin

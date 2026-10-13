@@ -9,7 +9,7 @@ warning, and the game proceeds with default values.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Literal, Mapping
+from typing import Any, Mapping
 
 from loguru import logger
 from pydantic import BaseModel, ConfigDict, Field
@@ -27,36 +27,56 @@ GAME_CONFIG_FILENAME = "game.json"
 class ResourcesConfig(BaseModel):
     """The ``resources`` section of game.json (spec 03: Configuration).
 
-    ``mode`` accepts only ``dev`` or ``distribution``. Any other value is a
-    validation error, which ``load_game_config`` turns into a warning plus
-    the default config - i.e. dev mode (spec 03). ``location`` entries may be
-    relative; they are resolved against the *project* directory (where the
-    game script resides), not the current working directory (spec 03: a note
-    about relative paths). Resolving them is the resource loader's job, not
-    this model's.
+    ``location`` is the ordered resource search path: each entry is a
+    resource directory or a ``.pak`` package file, scanned in the order
+    listed, with later entries overriding earlier ones by resource ID
+    (spec 03: Resource scanning). The game's ``resources/`` subdirectory
+    is always implied first, so an empty section (or no section at all)
+    is the default. Entries may be relative; they are resolved against
+    the *game* directory (where the game script resides), not the current
+    working directory (spec 03: a note about relative paths). Resolving
+    them is the resource loader's job, not this model's.
+
+    Only ``location`` is expected: any other key - including a legacy
+    ``mode`` key from before the flat search path - is rejected, which
+    ``load_game_config`` turns into a warning plus whole-config defaults
+    (spec 01; spec 03 dev plan stage 7: no migration path for existing
+    config files).
     """
 
     model_config = ConfigDict(extra="forbid")
 
-    mode: Literal["dev", "distribution"] = "dev"
-    location: list[str] | None = None
+    location: list[str] = Field(default_factory=list)
 
 
 class AudioConfig(BaseModel):
     """The ``audio`` section of game.json (spec 05: Configuration).
 
-    Volumes are integer percentages 0 (mute) - 100 (full), later applied as
-    ``set_volume(value / 100)`` (spec 05: Validation). Deliberately NOT
-    ``extra='forbid'``: per spec 05, unrecognized keys in the ``audio``
-    object are silently ignored (and dropped when the section is next
-    saved, per spec 01's section-rewrite semantics). A ``None`` section
-    means "use defaults" - dtd.audio normalizes it to a fresh
-    ``AudioConfig()`` (spec 05: a top-level ``audio`` of ``null`` is fine).
+    Audio is split into three sound-effect categories plus music, each with
+    its own enabled flag and volume (spec 05 amendment 2026-10-09): game
+    sfx, UI sfx, and speech. Volumes are integer percentages 0 (mute) -
+    100 (full), later applied as ``set_volume(value / 100)`` (spec 05:
+    Validation). Deliberately NOT ``extra='forbid'``: per spec 05,
+    unrecognized keys in the ``audio`` object are silently ignored (and
+    dropped when the section is next saved, per spec 01's section-rewrite
+    semantics) - which is also how the pre-amendment ``sfx_enabled`` /
+    ``sfx_volume`` keys are handled: silently dropped, defaults apply.
+    A ``None`` section means "use defaults" - dtd.audio normalizes it to a
+    fresh ``AudioConfig()`` (spec 05: a top-level ``audio`` of ``null`` is
+    fine).
     """
 
-    sfx_enabled: bool = True
-    sfx_volume: int = Field(
+    game_sfx_enabled: bool = True
+    game_sfx_volume: int = Field(
         default=100, ge=VOLUME_MIN_PERCENT, le=VOLUME_MAX_PERCENT
+    )
+    ui_sfx_enabled: bool = True
+    ui_sfx_volume: int = Field(
+        default=80, ge=VOLUME_MIN_PERCENT, le=VOLUME_MAX_PERCENT
+    )
+    speech_enabled: bool = True
+    speech_volume: int = Field(
+        default=90, ge=VOLUME_MIN_PERCENT, le=VOLUME_MAX_PERCENT
     )
     music_enabled: bool = True
     music_volume: int = Field(
@@ -77,7 +97,7 @@ class GameConfig(BaseModel):
 
     mainWindow: MainWindowConfig | None = None
     resources: ResourcesConfig | None = None
-    # Spec 05: audio sfx/music settings. A missing key (or an explicit
+    # Spec 05: audio sfx/speech/music settings. A missing key (or an explicit
     # null) means "defaults"; dtd.audio resolves None -> AudioConfig().
     audio: AudioConfig | None = None
     # Spec 04: UI theme and font. Both are optional resource identifiers or

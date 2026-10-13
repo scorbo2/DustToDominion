@@ -67,42 +67,48 @@ class TestResourcesConfig:
     """The ``resources`` section of game.json (spec 03: Configuration)."""
 
     def test_with_missing_resources_key_should_default_to_none(self) -> None:
-        # Spec 03: absent key -> the loader assumes dev mode defaults.
+        # Spec 03: the ``resources`` key itself is optional; a None section
+        # means the default search path (the implicit resources/ dir only).
         assert GameConfig().resources is None
 
-    def test_with_empty_resources_section_should_default_to_dev_mode(
+    def test_with_empty_resources_section_should_default_to_empty_location(
         self, hermetic_persistence: Path
     ) -> None:
-        # Spec 03: a missing ``mode`` key assumes "dev" with no log warning.
+        # Spec 03: {} is equivalent to {"location": []} - the implicit
+        # resources/ directory is always implied.
         _write_game_json(hermetic_persistence, {"resources": {}})
-        assert game_config.load_game_config().resources == ResourcesConfig()
+        assert game_config.load_game_config().resources == ResourcesConfig(
+            location=[]
+        )
 
-    def test_with_dev_mode_and_locations_should_parse_section(
+    def test_with_location_list_should_parse_section(
         self, hermetic_persistence: Path
     ) -> None:
         _write_game_json(
             hermetic_persistence,
-            {"resources": {"mode": "dev", "location": ["resources/", "/home/user/custom_assets/"]}},
+            {"resources": {"location": ["resources/", "/home/user/custom_assets/"]}},
         )
         assert game_config.load_game_config().resources == ResourcesConfig(
-            mode="dev", location=["resources/", "/home/user/custom_assets/"]
+            location=["resources/", "/home/user/custom_assets/"]
         )
 
-    def test_with_distribution_mode_and_location_should_parse_section(
+    def test_with_mixed_directory_and_pak_locations_should_parse_section(
         self, hermetic_persistence: Path
     ) -> None:
+        # Spec 03: location entries may be directories, .pak files, or both.
         _write_game_json(
             hermetic_persistence,
             {
                 "resources": {
-                    "mode": "distribution",
-                    "location": ["."],
+                    "location": [
+                        "/home/user/custom_assets/",
+                        "/home/user/ExtraShips.pak",
+                    ]
                 }
             },
         )
         assert game_config.load_game_config().resources == ResourcesConfig(
-            mode="distribution",
-            location=["."],
+            location=["/home/user/custom_assets/", "/home/user/ExtraShips.pak"]
         )
 
     def test_with_auto_download_key_should_return_defaults(
@@ -115,20 +121,21 @@ class TestResourcesConfig:
             hermetic_persistence,
             {
                 "resources": {
-                    "mode": "distribution",
+                    "location": [],
                     "autoDownload": ["http://example.com/game_assets/package1.pak"],
                 }
             },
         )
         assert game_config.load_game_config().resources is None
 
-    def test_with_unexpected_mode_value_should_return_defaults(
+    def test_with_legacy_mode_key_should_return_defaults(
         self, hermetic_persistence: Path
     ) -> None:
-        # Spec 03: an invalid mode is an InvalidConfigError with a warning log
-        # message, and the game assumes dev mode (here: whole-config default,
-        # per spec 01's atomic fallback).
-        _write_game_json(hermetic_persistence, {"resources": {"mode": "retro"}})
+        # Spec 03 stage 7: only ``location`` is expected under ``resources``.
+        # A legacy "mode" key from the old dev/distribution design is an
+        # unexpected nested key -> InvalidConfigError -> whole-config
+        # defaults (spec 01). There is deliberately no migration path.
+        _write_game_json(hermetic_persistence, {"resources": {"mode": "dev"}})
         assert game_config.load_game_config().resources is None
 
     def test_with_unexpected_nested_key_should_return_defaults(
@@ -143,6 +150,14 @@ class TestResourcesConfig:
         self, hermetic_persistence: Path
     ) -> None:
         _write_game_json(hermetic_persistence, {"resources": {"location": [42]}})
+        assert game_config.load_game_config().resources is None
+
+    def test_with_location_not_a_list_should_return_defaults(
+        self, hermetic_persistence: Path
+    ) -> None:
+        # The model shape is location: list[str] - a bare string is a
+        # validation error -> whole-config defaults (spec 01).
+        _write_game_json(hermetic_persistence, {"resources": {"location": "assets"}})
         assert game_config.load_game_config().resources is None
 
 
@@ -218,9 +233,66 @@ class TestAudioConfig:
         self, hermetic_persistence: Path
     ) -> None:
         # Spec 05: missing keys silently revert to defaults.
-        _write_game_json(hermetic_persistence, {"audio": {"sfx_volume": 30}})
+        _write_game_json(hermetic_persistence, {"audio": {"game_sfx_volume": 30}})
         result = game_config.load_game_config()
-        assert result.audio == AudioConfig(sfx_volume=30)
+        assert result.audio == AudioConfig(game_sfx_volume=30)
+
+    def test_with_full_audio_section_should_parse_every_category(
+        self, hermetic_persistence: Path
+    ) -> None:
+        # Spec 05 (amendment 2026-10-09): game sfx, UI sfx, speech, and
+        # music each carry their own enabled flag and volume.
+        _write_game_json(
+            hermetic_persistence,
+            {
+                "audio": {
+                    "game_sfx_enabled": False,
+                    "game_sfx_volume": 10,
+                    "ui_sfx_enabled": False,
+                    "ui_sfx_volume": 20,
+                    "speech_enabled": False,
+                    "speech_volume": 30,
+                    "music_enabled": False,
+                    "music_volume": 40,
+                }
+            },
+        )
+        result = game_config.load_game_config()
+        assert result.audio == AudioConfig(
+            game_sfx_enabled=False,
+            game_sfx_volume=10,
+            ui_sfx_enabled=False,
+            ui_sfx_volume=20,
+            speech_enabled=False,
+            speech_volume=30,
+            music_enabled=False,
+            music_volume=40,
+        )
+
+    def test_audio_config_defaults_should_match_the_spec_document_values(self) -> None:
+        # Spec 05: Configuration - the documented defaults are 100/80/90/80
+        # with every category enabled.
+        defaults = AudioConfig()
+        assert defaults.game_sfx_enabled is True
+        assert defaults.game_sfx_volume == 100
+        assert defaults.ui_sfx_enabled is True
+        assert defaults.ui_sfx_volume == 80
+        assert defaults.speech_enabled is True
+        assert defaults.speech_volume == 90
+        assert defaults.music_enabled is True
+        assert defaults.music_volume == 80
+
+    def test_with_legacy_sfx_keys_should_ignore_them(
+        self, hermetic_persistence: Path
+    ) -> None:
+        # Spec 05 (amendment 2026-10-09): the pre-amendment sfx_enabled /
+        # sfx_volume keys are now unrecognized nested keys - silently
+        # ignored, with defaults applying (the documented migration path).
+        _write_game_json(
+            hermetic_persistence,
+            {"audio": {"sfx_enabled": False, "sfx_volume": 0}},
+        )
+        assert game_config.load_game_config().audio == AudioConfig()
 
     def test_with_unexpected_nested_key_should_ignore_it(
         self, hermetic_persistence: Path
@@ -228,10 +300,10 @@ class TestAudioConfig:
         # Spec 05: unrecognized keys in the audio object are silently ignored
         # (unlike resources, whose model forbids extras).
         _write_game_json(
-            hermetic_persistence, {"audio": {"sfx_volume": 30, "bogusKey": 1}}
+            hermetic_persistence, {"audio": {"game_sfx_volume": 30, "bogusKey": 1}}
         )
         result = game_config.load_game_config()
-        assert result.audio == AudioConfig(sfx_volume=30)
+        assert result.audio == AudioConfig(game_sfx_volume=30)
 
     def test_with_wrong_type_for_audio_key_should_return_defaults(
         self, hermetic_persistence: Path
@@ -252,28 +324,38 @@ class TestAudioConfig:
         with pytest.raises(InvalidConfigError):
             config.load_config(path, game_config.GAME_CONFIG_ENV_VAR, GameConfig)
 
+    @pytest.mark.parametrize(
+        "volume_key",
+        ["game_sfx_volume", "ui_sfx_volume", "speech_volume", "music_volume"],
+    )
     def test_with_out_of_range_volume_should_return_defaults(
-        self, hermetic_persistence: Path
+        self, hermetic_persistence: Path, volume_key: str
     ) -> None:
-        # Spec 05: volumes outside 0-100 are rejected -> defaults.
-        _write_game_json(hermetic_persistence, {"audio": {"sfx_volume": 101}})
+        # Spec 05: volumes outside 0-100 are rejected -> defaults, for
+        # every category's volume field alike.
+        _write_game_json(hermetic_persistence, {"audio": {volume_key: 101}})
         assert game_config.load_game_config() == GameConfig()
 
+    @pytest.mark.parametrize(
+        "enabled_key",
+        ["game_sfx_enabled", "ui_sfx_enabled", "speech_enabled", "music_enabled"],
+    )
     def test_with_invalid_enabled_value_should_return_defaults(
-        self, hermetic_persistence: Path
+        self, hermetic_persistence: Path, enabled_key: str
     ) -> None:
-        # Spec 05: an obviously non-boolean enabled value is rejected -> defaults.
-        _write_game_json(hermetic_persistence, {"audio": {"sfx_enabled": "banana"}})
+        # Spec 05: an obviously non-boolean enabled value is rejected ->
+        # defaults, for every category's enabled flag alike.
+        _write_game_json(hermetic_persistence, {"audio": {enabled_key: "banana"}})
         assert game_config.load_game_config() == GameConfig()
 
     def test_with_coerced_values_should_parse(self, hermetic_persistence: Path) -> None:
         # Spec 05: pydantic coercion is acceptable (1 -> True, "50" -> 50).
         _write_game_json(
             hermetic_persistence,
-            {"audio": {"sfx_enabled": 1, "music_volume": "50"}},
+            {"audio": {"game_sfx_enabled": 1, "music_volume": "50"}},
         )
         result = game_config.load_game_config()
-        assert result.audio == AudioConfig(sfx_enabled=True, music_volume=50)
+        assert result.audio == AudioConfig(game_sfx_enabled=True, music_volume=50)
 
 
 class TestSaveGameConfigSection:

@@ -233,13 +233,17 @@ the given icon, if an icon was given. This margin is not directly configurable.
 
 ## Audio
 
+*Amended 2026-10-09 per spec 05 (Audio Manager): `play_sfx()` was split into
+category-specific methods. Panel appearance/disappearance audio is UI sound,
+so it now uses `play_ui_sfx()`.*
+
 Client code can optionally specify `audio_on_appear` and `audio_on_disappear`. These
 are sound effect resource ids as specified by `03-resource-packaging.md`. The panel
 makes no attempt to validate these IDs or confirm that the audio actually plays.
-On first `update()`, the `audio_on_appear` id is given to AudioManager's `play_sfx` function
+On first `update()`, the `audio_on_appear` id is given to AudioManager's `play_ui_sfx` function
 as-is (see `05-audio-manager.md`). On `disappear()`, the `audio_on_disappear` id is
-given to `play_sfx` as-is. AudioManager will handle resolving and playing the audio resource.
-If no audio id is given, the call to `play_sfx` is skipped. If `update()` or `disappear()`
+given to `play_ui_sfx` as-is. AudioManager will handle resolving and playing the audio resource.
+If no audio id is given, the call to `play_ui_sfx` is skipped. If `update()` or `disappear()`
 are never invoked, the audio ids are ignored.
 
 Audio is independent of animation - `update()` with no animation options still triggers

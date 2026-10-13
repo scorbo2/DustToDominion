@@ -6,11 +6,11 @@ XOR-encrypted with ``game_constants.PAK_ENCRYPTION_KEY``.
 computed on the *encrypted* bytes (before zip compression), so the hash can
 be checked immediately after reading, before decryption.
 
-This module is shared by the game (dev-mode and distribution-mode loading,
-stages 2 and 4) and the packager tool (``tools/packager``, stage 3).
-``load_resource_from_bytes`` is the single place where raw resource bytes
-are decoded into typed values, so dev mode, distribution mode, and the
-packager can never interpret a format differently.
+This module is shared by the game (the resource loader's package-file
+loading, spec 03: Resource scanning) and the packager tool
+(``tools/packager``). ``load_resource_from_bytes`` is the single place
+where raw resource bytes are decoded into typed values, so the loader
+and the packager can never interpret a format differently.
 
 pygame must be initialized by the caller before any function that loads
 resources (``create_pak`` validates each resource; ``load_pak`` decodes all).
@@ -127,7 +127,7 @@ class ResourceStore:
     def resource_count(self) -> int:
         return sum(len(getattr(self, attribute)) for _, attribute in self.CACHE_FIELDS)
 
-    def store(self, type_name: str, resource_id: str, value: Any) -> None:
+    def store(self, type_name: str, resource_id: str, value: Any) -> bool:
         """Cache one decoded resource under its ID.
 
         ``type_name`` must be one of the type names in ``CACHE_FIELDS``
@@ -138,9 +138,14 @@ class ResourceStore:
         be far worse than a programming error surfacing immediately.
 
         Duplicate IDs are NOT an error: the most recently stored resource
-        wins, with a log warning (spec 03: Resolving duplicate resource
-        IDs). Within a single pak this cannot happen, because the manifest
-        forbids duplicate IDs.
+        wins, with a log warning (spec 03: Resource scanning - the
+        intended override mechanism). Within a single pak this cannot
+        happen, because the manifest forbids duplicate IDs.
+
+        Returns ``True`` if this resource replaced an earlier one with the
+        same ID (an override), ``False`` otherwise - the resource loader
+        tallies overrides for its startup summary log (spec 03: Resource
+        scanning).
         """
         attribute = self._CACHE_BY_TYPE.get(type_name)
         if attribute is None:
@@ -149,8 +154,9 @@ class ResourceStore:
                 f"{sorted(self._CACHE_BY_TYPE)}"
             )
         cache = getattr(self, attribute)
-        kind = "sound effect" if type_name == "sfx" else type_name
-        if resource_id in cache:
+        overridden = resource_id in cache
+        if overridden:
+            kind = "sound effect" if type_name == "sfx" else type_name
             logger.warning(
                 "duplicate {} resource ID {} - the most recently loaded "
                 "resource wins",
@@ -158,6 +164,7 @@ class ResourceStore:
                 resource_id,
             )
         cache[resource_id] = value
+        return overridden
 
     def items(self) -> Iterator[tuple[str, str, Any]]:
         """All stored resources as ``(type_name, resource_id, value)``
@@ -174,7 +181,7 @@ class ResourceStore:
 
 # ------------------------------------------------------------------ #
 # Per-resource loading from bytes (shared between create, load, and the
-# game's dev mode)
+# game's resource loader)
 # ------------------------------------------------------------------ #
 
 def load_resource_from_bytes(resource_id: str, data: bytes) -> tuple[str, Any]:
@@ -188,8 +195,8 @@ def load_resource_from_bytes(resource_id: str, data: bytes) -> tuple[str, Any]:
     music/sfx split; it is also used as the ``namehint`` for
     ``pygame.image.load`` so that the image decoder gets the format hint
     even without a filesystem path. The data is assumed to be already
-    decrypted when coming from a pak; dev mode passes raw disk bytes,
-    which need no decryption.
+    decrypted when coming from a pak; the loader's directory scan passes
+    raw disk bytes, which need no decryption.
 
     Raises ``ResourceLoadError`` if the data cannot be decoded.
     """

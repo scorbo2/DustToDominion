@@ -27,10 +27,9 @@ This document does not introduce any new top-level game configuration keys.
 
 ### Background
 
-If an image resource with an id of `graphics/screens/title_screen.png`,
-`graphics/screens/title_screen.jpg`, or `graphics/screens/title_screen.jpeg`
+If an image resource with an id matching any of `TITLE_SCREEN_BACKGROUND_IMAGE_IDS` values
 exists, it is drawn (scaled and stretched as needed) to fill the background
-of the Title Screen. These resource ids should live in `game_constants.py`.
+of the Title Screen. The first resource found using the list of candidate IDs is used.
 
 *Implementation note (2026-10-07, performance follow-up from the merge review): the scaled
 background is cached per surface size and re-scaled only when the target size changes.
@@ -51,13 +50,24 @@ a lower resolution.
 
 ### Title
 
-The game title "Dust to Dominion" should be displayed in 80pt font (in design space - this
-point value scales by the window scale factor), centered both horizontally and vertically
-in the upper half of the screen. Use the Title Screen's currently-configured font.
-Use the `foregroundSelected` color from the current theme.
+The game title "Dust to Dominion" should be displayed using a `Label` widget
+(spec 10) placed in the upper half of the screen, with the following
+characteristics (amended 2026-10-11 per spec 10):
 
-*Implementation note (2026-10-07): the rendered title text is cached per font size and
-invalidated whenever the screen-local Theme is rebuilt. Not observable behavior.*
+- centered text
+- selected (the selected state causes the `foregroundSelected` color from the
+  current theme to be used for the title text)
+- fixed font point size of 80 (in design space - this point value scales by
+  the window scale factor)
+- non-opaque
+- border width of 0
+
+Use the Title Screen's currently-configured font.
+
+*Note (2026-10-11, spec 10): the previous title-text caching implementation
+note (2026-10-07) has been removed. The initial Label widget does not cache
+rendered text; per-frame rendering of a fixed-size title is acceptable. A
+future amendment may add caching.*
 
 ### Buttons and options
 
@@ -71,16 +81,16 @@ both horizontally and vertically centered in the lower half of the screen:
 Each widget should be 400px wide by 45px tall with a 4-pixel border (all units in design space).
 There should be 35px of empty space between each option.
 
-The font selector should default to the currently configured font, or the sentinel display
-value "(System default)" if no font is explicitly configured, or if the configured font is not
-present in the return of `get_font_resource_ids()`, or if a font is configured but is invalid.
+The font selector should default to the resource id returned from `get_font_resource_id()`,
+with a fallback to the sentinel display value "(Default font)" if `get_font_resource_id()`
+returns "default". (Constants for sentinel values are in `game_constants.py` - don't hard-code them).
 
 The theme selector should default to the name of the currently configured theme, or the sentinel
 display value "(Default theme)" if no theme is explicitly configured, or if the configured theme
 is not present in the return of `get_theme_resource_ids()`, or if a theme is configured but invalid.
 
 For both font and theme, the display name should be the full resource id, such as `fonts/Iceland-Regular.ttf`
-or `themes/blue.json`.
+or `themes/blue.json` (or the sentinel display value, as described above).
 
 Note: ChoiceList offers an `initial_index` option which can be used to easily set the initially-selected item.
 
@@ -101,11 +111,10 @@ All widgets should use the Title Screen's currently-configured font.
 
 ## Title Screen audio
 
-If a music track with an id of `audio/music/game_title.mp3`, `audio/music/game_title.wav`, or
-`audio/music/game_title.ogg` exists, it is played on loop while the title screen is visible.
-Leaving the title screen by any means (currently Exit Game is the only means) stops the track.
-The first resource found is used (search order: mp3, wav, then ogg). These resource ids should
-live in `game_constants.py`.
+If a music track with an id matching any of `TITLE_SCREEN_MUSIC_IDS` exists, it is played
+on loop while the title screen is visible. Leaving the title screen by any means (currently
+Exit Game is the only means) stops the track. The first resource found using the list of
+candidate IDs is used.
 
 Note: the Title Screen does not probe for these resource ids directly. Instead, use the
 helper function `play_music_first_match` in the AudioManager class.
@@ -169,9 +178,9 @@ screens that stopping screen music is the main loop's responsibility.
 
 New tests specifically for Title Screen behavior (these stay in this doc):
 
-- If a resource with id `graphics/screens/title_screen.png` (or jpg or jpeg) exists:
+- If a resource with id matching any of `TITLE_SCREEN_BACKGROUND_IMAGE_IDS` exists:
   - it is displayed in the background of the Title Screen.
-  - the search order is respected: png, then jpg, then jpeg.
+  - the search order is respected based on the constant's list order.
   - if the given image doesn't have a 16:9 aspect ratio, it is stretched to fit the entire title screen.
   - if the given image is larger or smaller than our display, it is scaled as needed to fit the entire title screen.
 - If there is no background image resource, a random starfield is generated.
@@ -179,21 +188,22 @@ New tests specifically for Title Screen behavior (these stay in this doc):
   - all generated stars are grayscale with values ranging from (0,0,0) to (192,192,192).
   - stars change their brightness by (1,1,1) per frame, oscillating between the two limits.
   - if the resolution is changed (we support 3), star positions do not change.
-- If a music track `audio/music/game_title.*` exists, it is loaded and played.
-  - the search order is respected: mp3, then wav, then ogg.
+- If a music track with an id matching any of `TITLE_SCREEN_MUSIC_IDS` exists, it is loaded and played.
+  - the search order is respected based on the constant's list order.
   - if none resolve, no music plays.
 - The game title is centered in the upper half of the screen.
-- Draw caching (added 2026-10-07, performance follow-up):
+- Draw caching (added 2026-10-07, performance follow-up; title-text caching
+  removed 2026-10-11 per spec 10 - the Label-based title renders per frame):
   - a background image is scaled exactly once per surface size, and re-scaled when the size changes.
-  - the title text is rendered exactly once per font size, and re-rendered when the screen-local
-    Theme is rebuilt (the new colors appear on the next frame).
 - ChoiceLists for font and theme appear horizontally and vertically centered in the lower half of the screen.
 - Selecting "(Default theme)" should map to "default" for theme.
-- Selecting "(System default)" should map to "default" for font.
-- The font and theme ChoiceLists are initialized based on the configured font and theme
-  as reported by `get_theme_resource_id()` and `get_font_resource_id()`. If an item
-  is configured, it is preselected. Otherwise, the sentinel is preselected. If an item
+- Selecting "(Default font)" should map to "default" for font.
+- The theme ChoiceList is initialized based on the configured theme as reported by `get_theme_resource_id()`.
+  If an item is configured, it is preselected. Otherwise, the sentinel is preselected. If an item
   is configured but is not valid (or is not present in the list), the sentinel is preselected.
+- The font ChoiceList is initialized based on the return value of `get_font_resource_id()`.
+  If "default" is returned, use the sentinel display value.
+  Otherwise, display the returned resource id as-is.
 - Changing the current font takes effect on next frame; no persistence to game config file.
 - Changing the current theme takes effect on next frame; no persistence to game config file.
 - An "Exit Game" button is centered in the lower half of the screen.
@@ -248,4 +258,20 @@ staged implementation plan is suggested (each stage should include tests):
 7. Performance follow-up from the merge review: cache the scaled background per surface size
    and the rendered title per font size (invalidated on Theme rebuild), with tests pinning
    "exactly once per unchanged input". **Completed 2026-10-07**
+8. Amendment 2026-10-10: Implement the Amendments to spec 04 - add new constants to the 04 spec.
+   **Completed 2026-10-10**
+9. Amendment 2026-10-10: Modify font handling as needed based on the 04 spec's Font determination rules.
+   Specifically, the sentinel display value should only be initially selected when
+   `get_font_resource_id()` returns "default". If all tests pass, flip this doc back to `active` status.
+   **Completed 2026-10-10**
+ 10. Amendment 2026-10-11 per spec 10 (Label): display the game title via a Label widget
+     (centered, selected, fixed 80pt, non-opaque, border width 0) instead of direct rendering.
+     Remove the title-text caching implementation and its associated tests; the Label-based
+     title renders per frame. This doc was flipped to `proposed` while the amendment is
+     carried out (spec 10 dev plan stage 8); flip it back to `active` on completion.
+     **Completed 2026-10-11**: the title is now a `Label` drawn as screen chrome between
+     the background and the menu (the spec's paint order), not registered in the menu's
+     widget list; `_draw_title`/`_rendered_title` and the title-text caching tests are
+     gone, replaced by structural + pixel pins in `TestTitleScreenTitle` at the design
+     resolution. Full suite: 753 passed.
 

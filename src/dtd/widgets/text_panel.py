@@ -273,7 +273,7 @@ class TextPanel(Widget):
             # documented "stays visible" corner for slide-out-only panels.
             self._alpha = 0
         self._stop_sfx_if_set(self._audio_on_appear)
-        self._play_sfx_if_set(self._audio_on_disappear)
+        self._play_ui_sfx_if_set(self._audio_on_disappear)
 
     def is_visible(self) -> bool:
         """Whether the panel is on screen with an alpha above zero.
@@ -360,7 +360,7 @@ class TextPanel(Widget):
         else:
             self._alpha = _FULLY_OPAQUE
         self._begin_typing()
-        self._play_sfx_if_set(self._audio_on_appear)
+        self._play_ui_sfx_if_set(self._audio_on_appear)
 
     def _advance_appearance(self) -> None:
         if self._appearance_slide is not None:
@@ -432,11 +432,13 @@ class TextPanel(Widget):
         )
 
     # -- audio helpers (spec 06: Audio) --------------------------------------
-    def _play_sfx_if_set(self, resource_id: str | None) -> None:
+    def _play_ui_sfx_if_set(self, resource_id: str | None) -> None:
         if resource_id is not None:
             # The id goes to AudioManager as-is; the panel never
             # validates it, and audio does not wait for any animation.
-            get_audio_manager().play_sfx(resource_id)
+            # Panel appearance/disappearance audio is UI sound
+            # (spec 06, as amended by spec 05).
+            get_audio_manager().play_ui_sfx(resource_id)
 
     def _stop_sfx_if_set(self, resource_id: str | None) -> None:
         if resource_id is not None:

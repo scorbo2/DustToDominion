@@ -129,7 +129,7 @@ must respect the current theme's corner radius when drawing borders and
 filling the rect!
 
 Text for the selected item is scaled to fit on a best-effort basis, very
-similar to the existing Button widget (see the 04 spec doc). Text that
+similar to the existing Button widget (see the 09 spec doc). Text that
 cannot fit is clipped. Item text never wraps. The control is single-line only.
 The item text has a margin on all sides equal to half the
 height of the `0` character in the widget's font at the text's effective
@@ -158,7 +158,8 @@ clickable even when its glyph is too small to draw.
 Each pager glyph has a margin equal to half the height of the `0` character in the pager control's
 effective font size. This margin is applied on all four sides of the glyph.
 The hit area for mouse clicks is the region of the pager control inclusive of its margin.
-Rules for determining a mouse click are the same as for the Button widget - if both
+Rules for determining a mouse click are the same as for the Button widget
+(spec 09: Button events) - if both
 the mouse press event AND the mouse up event occur inside the hit area
 for the pager control, it counts as a mouse click on that control.
 
@@ -167,6 +168,16 @@ the ChoiceList (can happen for tall ChoiceLists), the pager controls should be
 centered vertically within the ChoiceList.
 
 The pager control's text labels are the literal characters `<` and `>`.
+
+*Amended 2026-10-11 per spec 10 (Label): the margin-aware auto-scale searches described
+above (for both item text and pager glyphs) no longer live as private methods on the
+ChoiceList class. They share the binary search in `dtd/widgets/text_layout.py`, which
+takes an optional fit-predicate and an optional fallback value; the "half the height
+of the `0` character" margin rule is implemented once, as the module's
+`zero_glyph_margin` helper, with a ready-made margin-aware predicate built on it.
+ChoiceList's behavior is unchanged - its existing pixel-level tests remain the
+integration pin, while the search semantics are pinned directly against the shared
+module. Pure refactor, no functional change.*
 
 ## Determining currently-selected item
 
@@ -186,6 +197,20 @@ use this to discover if their input lists are being stripped for any reason.
 
 Callers can select any item with `set_current_item()`, but they must specify
 an EXACT match. This is a client responsibility.
+
+## ChoiceList audio
+
+The ChoiceList class should play UI sound effects for some events (constants defined in spec 04):
+
+- Clicking either pager control should play `UI_SFX_ACCEPT`. Pager control clicks only count when the
+  ChoiceList is not disabled and there is more than one option present.
+- Override the `on_hover_enter()` hook from the parent Widget class:
+  `get_audio_manager().play_ui_sfx(UI_SFX_HOVER)`
+
+ChoiceList makes no attempt to resolve the resource ids from these constants (located in `game_constants.py`).
+ChoiceList should make use of AudioManager's `play_ui_sfx()` method via the global singleton AudioManager instance.
+This method handles all edge cases related to audio playing (UI sound effects are disabled, the resource IDs
+don't resolve to valid audio resources, etc.)
 
 ## Additional dependencies
 
@@ -244,6 +269,13 @@ This document introduces no new configuration keys.
 - ChoiceList can be disabled programmatically. Mouse events (including hover) are ignored.
 - Tall ChoiceLists render their pager controls vertically centered within the widget.
 - Narrow ChoiceLists don't allow more than 33% of their horizontal space to be used by the pager controls.
+- Audio events:
+  - when a pager control is clicked and more than one option is present, `UI_SFX_ACCEPT` is played.
+  - a disabled ChoiceList does not play any audio when a pager control is clicked.
+  - a ChoiceList with only one item in the list does not attempt to play audio when a pager control is clicked.
+  - `UI_SFX_HOVER` is played when the ChoiceList's `on_hover_enter()` is invoked. Tests can just invoke this hook directly, rather than synthesize MOUSEMOTION.
+  - note that the tests need to use the `mixer_ready` + `init_audio_manager` pattern to process audio events.
+  - if `UI_SFX_HOVER` or `UI_SFX_ACCEPT` do not resolve to valid audio resources, no error is raised.
 
 ## Acceptance criteria
 
@@ -284,8 +316,33 @@ implementation plan is suggested (each stage after 1 should include tests):
    Clean up any stale code comments or docstrings added by previous stages such as
    "will be done in stage N". Upon completion, flip the status of this document from "proposed" to "active".
    **Completed 2026-10-05**
-
-Upon completion, if all tests pass, mark this document as "active". (Done 2026-10-05;
-full suite green at 495 tests. The two implementation judgment calls - two-axis glyph
-fitting and the floored 33% pager-width cap - were reviewed and accepted.)
+5. Amendment 2026-10-10: Amend spec 04 to add a `Widget.on_hover_enter()` no-op hook,
+   and have `UIManager` invoke it on non-hovered -> hovered transitions.
+   Flip spec 04 from `active` to `proposed`.
+   Append a new stage to the Dev plan in spec 04 to track this work, and reference this 07
+   doc as the source of that amendment (with today's date). If all tests pass upon completion
+   of this work, flip the 04 spec back to `active`.
+   **Completed 2026-10-10** (full suite green at 678 tests; the 04 Testing section also
+   gained an explicit "only once per transition" case and a leave-and-re-enter case,
+   strengthening the amendment's test list)
+6. Amendment 2026-10-10: implement the ChoiceList audio section and related tests.
+   If all tests pass, flip this document back to `active` status.
+   **Completed 2026-10-10** (full suite green at 683 tests. Implementation note: the
+   test module carries an autouse fixture that initializes the AudioManager singleton
+   with a bare, nothing-resolves loader - required because pager clicks and UIManager
+   hover now reach the singleton even in non-audio tests.)
+7. Amendment 2026-10-11 per spec 10 (Label): move the margin-aware text auto-scale
+   searches (item text and pager glyphs) out of the ChoiceList class and into the
+   shared `dtd/widgets/text_layout.py` module, delegating via its optional
+   fit-predicate and fallback value, and its `zero_glyph_margin` helper. No functional
+   change - existing pixel-level tests stay as integration pins; the search semantics
+   are pinned directly in tests/test_text_layout.py. This doc was flipped to
+   `proposed` while the amendment is carried out (spec 10 dev plan stage 3); flip it
+   back to `active` on completion.
+   **Completed 2026-10-11** (full suite green at 698 tests. All ChoiceList pixel and
+   geometry tests passed unchanged, confirming the refactor. Implementation note: the
+   shared search takes a fit-predicate rather than a plain margin parameter, because
+   Button measures line height while ChoiceList/Label measure rendered glyph extent
+   plus margin - for text with descenders those differ, and a single margin knob would
+   have silently changed Button's behavior.)
 
