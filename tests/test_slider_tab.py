@@ -334,6 +334,69 @@ class TestSliderDrag:
         assert slider.get_value() == expected
         assert seen == [(expected, expected, True)]
 
+    def test_press_on_the_tab_of_an_offset_slider_should_snap_the_preview_to_the_pointer(
+        self, font_ready: None
+    ) -> None:
+        # GIVEN a drawn label-less Slider at value 50 whose rect is
+        # OFFSET from the display origin (the title-screen menu column
+        # parks widgets at design x 760; the rect stays 300x100 so the
+        # label-less geometry pins still apply):
+        theme = make_theme(TEST_THEME_JSON)
+        offset_rect = pygame.Rect(760, 628, 300, 100)
+        slider, ui = slider_ui(offset_rect, theme, initial_value=50)
+        track_x0, track_x1 = labelless_geometry(theme, ui, "50")
+        tab_center_x = offset_rect.x + tab_center_for_value(track_x0, track_x1, 50)
+
+        # WHEN the left button presses 10px right of the tab center,
+        ui.update([press((tab_center_x + 10, offset_rect.y + CENTER_Y))])
+
+        # THEN the drawn tab snaps to the value interpolated at the
+        # pressed column - NOT to max_value, which is what the bug
+        # produced when it interpolated the ABSOLUTE press x against
+        # the INNER-RELATIVE track extents and clamped to the range
+        # extent:
+        preview = value_at(track_x0, track_x1, tab_center_x + 10 - offset_rect.x)
+        assert preview != 100  # the test premise: correct != bug's answer
+        assert slider.get_value() == 50  # the drag owns the real value
+        snapped = offset_rect.x + tab_center_for_value(track_x0, track_x1, preview)
+        screen = draw_ui(ui)
+        assert tab_ink_at(screen, snapped, offset_rect.y + CENTER_Y - 20)
+
+    def test_drag_on_an_offset_slider_should_commit_the_interpolated_value_not_the_max(
+        self,
+        font_ready: None,
+        silent_audio_manager: audio.AudioManager,
+    ) -> None:
+        # GIVEN a drawn label-less Slider at value 50, offset from the
+        # display origin, with a callback:
+        theme = make_theme(TEST_THEME_JSON)
+        offset_rect = pygame.Rect(760, 628, 300, 100)
+        changes: list[int] = []
+        slider, ui = slider_ui(offset_rect, theme, initial_value=50)
+        slider.on_change = changes.append
+        track_x0, track_x1 = labelless_geometry(theme, ui, "50")
+        tab_center_x = offset_rect.x + tab_center_for_value(track_x0, track_x1, 50)
+
+        # WHEN the user presses the tab, drags LEFT to mid-track, and
+        # releases (left on purpose: dragging right could let the
+        # bug's max-clamped result coincidentally match the correct
+        # value, exactly how the original suite missed it),
+        target_x = offset_rect.x + track_x0 + 20
+        ui.update(
+            [
+                press((tab_center_x, offset_rect.y + CENTER_Y)),
+                motion((target_x, offset_rect.y + CENTER_Y)),
+                release((target_x, offset_rect.y + CENTER_Y)),
+            ]
+        )
+
+        # THEN the committed value is the one interpolated at the
+        # release column, not the max the bug clamped to:
+        expected = value_at(track_x0, track_x1, target_x - offset_rect.x)
+        assert expected != 100  # the test premise: correct != bug's answer
+        assert slider.get_value() == expected
+        assert changes == [expected]
+
     def test_release_without_a_value_change_should_not_fire_on_change(
         self, font_ready: None
     ) -> None:

@@ -415,6 +415,9 @@ The tests need to use the `mixer_ready` + `init_audio_manager` pattern to proces
 - A left mouse press inside the tab control's rect but not on the horizontal center of the tab control
   causes the tab control to snap to the pointer location - the center of the tab control should match
   the pointer location, as long as the pointer remains within the horizontal track limits.
+- Press/drag interpolation is performed in display-pixel space: a Slider positioned away from the
+  display origin behaves identically to one at the origin (regression: interpolating absolute event x
+  against inner-relative track extents clamped every drag to `max_value`).
 - During a drag operation, moving the mouse past the track extent in either direction clamps the
   tab control to the endpoint of the track without ending the drag operation.
 - A non-disabled Slider plays the `UI_SFX_HOVER` sound on mouse hover.
@@ -451,5 +454,12 @@ The tests need to use the `mixer_ready` + `init_audio_manager` pattern to proces
 5. Final verification pass. Do the tests all pass? Are acceptance criteria all met?
    Edit this document to change all "proposes" prose to "describes" as needed.
    If all is well, flip this document to `active` status.
+   **Completed 2026-10-13**
+6. Bug fix (manual-testing regression): drag press/motion interpolation mixed absolute
+   display-pixel event positions with inner-rect-relative track extents, so any Slider not
+   parked at the display origin clamped every press and motion to `max_value` - click+drag
+   was unusable. Convert the event x to inner-relative space (subtract the layout's
+   ``origin``) at the single place that knows both spaces, and add regression tests for
+   press-snap and full drag on a Slider offset from the display origin.
    **Completed 2026-10-13**
 

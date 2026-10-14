@@ -194,9 +194,14 @@ def value_at(
     min_value: int = 0,
     max_value: int = 100,
 ) -> int:
-    """Mirror of ``Slider._value_at_x`` as a test premise: the value
-    interpolated at pixel column ``x`` between the first and last
-    drawn track pixels, clamped to the range."""
+    """Mirror of the interpolation inside ``Slider._value_at_display_x``
+    as a test premise: the value at pixel column ``x`` between the
+    first and last drawn track pixels, clamped to the range. NOTE:
+    ``x`` here is INNER-RECT RELATIVE, while the widget's argument is
+    an absolute display-pixel column from which it first removes the
+    layout's ``origin`` offset - callers testing offset rects must
+    subtract the rect position themselves.
+    """
     span = track_x1 - track_x0
     raw = min_value + (x - track_x0) * (max_value - min_value) / span
     return min(max(round_half_up(raw), min_value), max_value)
