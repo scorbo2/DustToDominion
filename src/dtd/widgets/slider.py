@@ -450,7 +450,7 @@ class Slider(Widget):
                 self._try_begin_drag(layout, event.pos)
             elif event.type == pygame.MOUSEMOTION and self._drag is not None:
                 self._drag = self._drag._replace(
-                    preview_value=self._value_at_x(layout, event.pos[0])
+                    preview_value=self._value_at_display_x(layout, event.pos[0])
                 )
             elif (
                 event.type == pygame.MOUSEBUTTONUP
@@ -486,7 +486,7 @@ class Slider(Widget):
         self._drag = _Drag(
             snapshot_rect=self.rect.copy(),
             start_value=self._value,
-            preview_value=self._value_at_x(layout, pos[0]),
+            preview_value=self._value_at_display_x(layout, pos[0]),
         )
 
     def _finalize_drag(self) -> None:
@@ -536,11 +536,23 @@ class Slider(Widget):
         """
         return self._drag.preview_value if self._drag is not None else self._value
 
-    def _value_at_x(self, layout: _Layout, x: int) -> int:
-        """Interpolate the value for a pixel column (spec 12: the
-        leftmost track pixel is ``min_value``, the rightmost is
-        ``max_value``, everything between is round-half-up).
+    def _value_at_display_x(self, layout: _Layout, display_x: int) -> int:
+        """Interpolate the value for an absolute display-pixel column
+        (spec 12: the leftmost track pixel is ``min_value``, the
+        rightmost is ``max_value``, everything between is
+        round-half-up).
+
+        Both callers pass raw event positions, which are absolute
+        display pixels, while the layout's track extents are
+        inner-rect relative - so the ``origin`` offset comes off here,
+        once, at the single place that knows both spaces. (Regression:
+        the press hit test moved the tab rect by ``origin`` but this
+        interpolation forgot to, so any Slider not parked at the
+        display origin read every press and motion as a column far
+        right of the track end and clamped the preview to
+        ``max_value``.)
         """
+        x = display_x - layout.origin[0]
         span = layout.track_x1 - layout.track_x0
         if span <= 0 or self._min_value == self._max_value:
             return self._min_value
