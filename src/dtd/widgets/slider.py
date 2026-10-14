@@ -1,14 +1,15 @@
 """The ``Slider`` widget (spec 12: Slider structure / layout).
 
-Stage 2 of the spec 12 Dev plan: layout plus the tab control and
-click+drag interaction. The optional display label occupies the left
-third of the inner rect, the always-visible value label the right
-tenth, and the horizontal track the remaining space. A fixed-size tab
-control rides the track at the interpolated position of the current
-value; a left-press inside the tab's rect begins a drag (the tab
-center snaps to the pointer - no grab offset), motion previews the new
-value, and release finalizes it and fires ``on_change`` if the value
-actually changed. Mouse wheel support arrives in stage 3.
+Stage 3 of the spec 12 Dev plan: the complete widget. The optional
+display label occupies the left third of the inner rect, the
+always-visible value label the right tenth, and the horizontal track
+the remaining space. A fixed-size tab control rides the track at the
+interpolated position of the current value; a left-press inside the
+tab's rect begins a drag (the tab center snaps to the pointer - no
+grab offset), motion previews the new value, and release finalizes it
+and fires ``on_change`` if the value actually changed. Mouse wheel
+events over a hovered, enabled Slider step the value by 10% of the
+range per event.
 
 Rendering contract (spec 12: Slider layout):
 
@@ -56,6 +57,12 @@ Rendering contract (spec 12: Slider layout):
 - Layout is computed exactly once per draw in ``_layout()`` and cached
   for input handling, so the fraction/margin math can never drift
   between rendering and hit-testing.
+- Mouse wheel (spec 12: Mouse wheel): each ``MOUSEWHEEL`` event over a
+  hovered, enabled, not-dragging Slider steps the value by 10% of the
+  range (round-half-up), clamped, firing ``on_change`` only when the
+  value actually changed. Any ``y`` magnitude above 1 counts as 1
+  (direction preserved); a rounded step of 0 on tiny ranges jumps to
+  the relevant range extent so the wheel never becomes useless.
 """
 from __future__ import annotations
 
@@ -90,6 +97,33 @@ def _round_half_up(x: float) -> int:
     misplace every half-step on even values).
     """
     return math.floor(x + 0.5)
+
+
+def _clamp_to_range(value: int, min_value: int, max_value: int) -> int:
+    """Clamp ``value`` into ``[min_value, max_value]`` (inclusive).
+
+    The one clamp idiom for the whole widget - value setters, drag
+    interpolation, and wheel steps all share it so they cannot drift.
+    """
+    return min(max(value, min_value), max_value)
+
+
+def _wheel_target(
+    current: int, min_value: int, max_value: int, direction: int
+) -> int:
+    """The value after one mouse wheel step (spec 12: Mouse wheel).
+
+    10% of the range per event, round-half-up. When the rounded step
+    collapses to 0 on tiny ranges (example: range 0,4 -> 0.4 -> 0),
+    jump to the relevant range extent instead of standing still -
+    otherwise the wheel would be useless there, which the spec calls
+    out explicitly. A min==max range has no step and no extent to
+    jump to, so the value never moves.
+    """
+    step = _round_half_up((max_value - min_value) * 0.1)
+    if step == 0:
+        return max_value if direction > 0 else min_value
+    return _clamp_to_range(current + direction * step, min_value, max_value)
 
 
 class _Layout(NamedTuple):
@@ -179,8 +213,8 @@ class Slider(Widget):
     silently when inverted; ``initial_value`` clamps silently to the
     range. Invalid range/value arguments fall back to their defaults
     with a log warning (spec 12: Slider structure). ``on_change``
-    fires when a drag finalizes with a changed value (stage 2); the
-    mouse wheel paths arrive in stage 3.
+    fires when a drag finalizes with a changed value or when a mouse
+    wheel step changes the value.
     """
 
     def __init__(
@@ -210,7 +244,7 @@ class Slider(Widget):
             # range is a caller mistake, not a reason to misrender.
             self._min_value, self._max_value = self._max_value, self._min_value
         initial = _validated_int(initial_value, "__init__", "initial_value", 0)
-        self._value = min(max(initial, self._min_value), self._max_value)
+        self._value = _clamp_to_range(initial, self._min_value, self._max_value)
         self.on_change = on_change
         # Design-space point size for the display label, or None for
         # auto-scale (spec 12: set_font_point_size). The value label
@@ -277,7 +311,7 @@ class Slider(Widget):
                 "slider.set_value: invalid value {!r}; ignoring", value
             )
             return
-        self._value = min(max(value, self._min_value), self._max_value)
+        self._value = _clamp_to_range(value, self._min_value, self._max_value)
 
     def set_range(self, min_value: int, max_value: int) -> None:
         """Replace the range; the current value clamps silently to it.
@@ -310,7 +344,7 @@ class Slider(Widget):
         if min_value > max_value:
             min_value, max_value = max_value, min_value
         self._min_value, self._max_value = min_value, max_value
-        self._value = min(max(self._value, self._min_value), self._max_value)
+        self._value = _clamp_to_range(self._value, self._min_value, self._max_value)
 
     # -- cosmetics (spec 12: Slider structure) -------------------------------
 
@@ -386,13 +420,14 @@ class Slider(Widget):
     # -- input: tab control drag (spec 12: Manipulating the tab control) ------
 
     def update(self, events: list[pygame.event.Event]) -> None:
-        """Drive the tab-control drag state machine (spec 12).
+        """Drive the drag state machine and the mouse wheel (spec 12).
 
         Event positions are raw display pixels; the cached draw-time
         layout is also pixel-space, so hit-testing needs no conversion
-        (and none of the lossy design-space round-trips). The UIManager
-        only broadcasts to enabled widgets; the guard here keeps the
-        contract safe for direct calls.
+        (and none of the lossy design-space round-trips). The wheel
+        path needs no layout at all - hovering uses the rect. The
+        UIManager only broadcasts to enabled widgets; the guard here
+        keeps the contract safe for direct calls.
         """
         if not self.enabled:
             return
@@ -402,11 +437,16 @@ class Slider(Widget):
         if self._drag is not None and self.rect != self._drag.snapshot_rect:
             self._finalize_drag()
         layout = self._layout_cache
-        if layout is None:
-            # Never drawn, so no tab exists on screen to grab.
-            return
         for event in events:
-            if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+            if event.type == pygame.MOUSEWHEEL:
+                # The wheel needs no layout: hovering uses the rect
+                # and the step is pure arithmetic, so it works even
+                # before the first draw.
+                self._apply_wheel(event.y)
+            elif layout is None:
+                # Never drawn, so no tab exists on screen to grab.
+                continue
+            elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
                 self._try_begin_drag(layout, event.pos)
             elif event.type == pygame.MOUSEMOTION and self._drag is not None:
                 self._drag = self._drag._replace(
@@ -458,6 +498,31 @@ class Slider(Widget):
         if drag.preview_value != drag.start_value and self.on_change is not None:
             self.on_change(drag.preview_value)
 
+    def _apply_wheel(self, wheel_y: int) -> None:
+        """One mouse wheel step (spec 12: Mouse wheel).
+
+        Only a hovered, enabled Slider responds - hovering uses the
+        whole rect on purpose, so the pointer need not be over the
+        track or tab. Wheel events during an active drag are ignored
+        (the drag owns the value). pygame-ce reports ``y`` magnitudes
+        above 1 on fast scroll; every event counts as exactly one
+        step with the direction preserved. The value is applied
+        before ``on_change`` fires, so the callback - and
+        ``get_value()`` - see the new value.
+        """
+        if self._drag is not None or not self.hovered or wheel_y == 0:
+            return
+        new_value = _wheel_target(
+            self._value, self._min_value, self._max_value, 1 if wheel_y > 0 else -1
+        )
+        if new_value == self._value:
+            # No-op wheel events (already at the relevant extent) do
+            # not fire the callback.
+            return
+        self._value = new_value
+        if self.on_change is not None:
+            self.on_change(new_value)
+
     def _display_value(self) -> int:
         """What the screen shows: the preview mid-drag, else the real
         value (spec 12: the value label updates during a drag while
@@ -476,7 +541,9 @@ class Slider(Widget):
         raw = self._min_value + (x - layout.track_x0) * (
             self._max_value - self._min_value
         ) / span
-        return min(max(_round_half_up(raw), self._min_value), self._max_value)
+        return _clamp_to_range(
+            _round_half_up(raw), self._min_value, self._max_value
+        )
 
     def _tab_center_x(self, layout: _Layout, value: int) -> int:
         """Pixel column of the tab's horizontal center for ``value``

@@ -441,6 +441,7 @@ The tests need to use the `mixer_ready` + `init_audio_manager` pattern to proces
    to be changed. The `on_change` callback is wired up at this stage.
    **Completed 2026-10-13**
 3. Implement mouse wheel support.
+   **Completed 2026-10-13**
 4. Final verification pass. Do the tests all pass? Are acceptance criteria all met?
    Edit this document to change all "proposes" prose to "describes" as needed.
    If all is well, flip this document to `active` status.
