@@ -432,6 +432,7 @@ The tests need to use the `mixer_ready` + `init_audio_manager` pattern to proces
    of the inner rect, the value label in the right tenth of the inner rect, and the horizontal
    track in the remaining space. Do not draw the tab control. The widget does not respond
    to click or drag events at this stage. Just focus on the layout. Play audio on hover.
+   **Completed 2026-10-13**
 2. Implement the tab control positioning, and wire up mouse click+drag to allow the value
    to be changed. The `on_change` callback is wired up at this stage.
 3. Implement mouse wheel support.
