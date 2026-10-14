@@ -442,7 +442,13 @@ The tests need to use the `mixer_ready` + `init_audio_manager` pattern to proces
    **Completed 2026-10-13**
 3. Implement mouse wheel support.
    **Completed 2026-10-13**
-4. Final verification pass. Do the tests all pass? Are acceptance criteria all met?
+4. Refactor the Slider test suite: split `tests/test_slider.py` by concern (value model,
+   layout, appearance, tab control + drag, mouse wheel) into separate test modules, and
+   extract the shared theme/geometry/font-spy helpers into `tests/helpers_slider.py`
+   alongside `helpers_pixels`. Mirror the tab-position and drag-interpolation math once
+   in that helper module instead of re-deriving it in every test.
+   **Completed 2026-10-13**
+5. Final verification pass. Do the tests all pass? Are acceptance criteria all met?
    Edit this document to change all "proposes" prose to "describes" as needed.
    If all is well, flip this document to `active` status.
 
