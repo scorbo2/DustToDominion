@@ -1,11 +1,11 @@
 ---
 description: Describes a new UI widget for the game: Slider
-status: proposed
+status: active
 ---
 
 # Slider
 
-This document proposes a new `dtd/widgets/slider.py` module containing a
+This document describes a new `dtd/widgets/slider.py` module containing a
 UI widget for the game: `Slider`. This is a UI component that allows clicking
 and dragging a rectangular tab control along a horizontal track to select
 a numeric value within a bounded range. Vertically-oriented sliders are not supported.
@@ -451,4 +451,5 @@ The tests need to use the `mixer_ready` + `init_audio_manager` pattern to proces
 5. Final verification pass. Do the tests all pass? Are acceptance criteria all met?
    Edit this document to change all "proposes" prose to "describes" as needed.
    If all is well, flip this document to `active` status.
+   **Completed 2026-10-13**
 

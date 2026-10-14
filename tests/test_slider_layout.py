@@ -195,6 +195,32 @@ class TestSliderLayout:
             screen, pygame.Rect(VALUE_AREA_LEFT, 0, 300 - VALUE_AREA_LEFT, 100), NORMAL_BG
         )
 
+    def test_value_label_should_update_after_set_range_clamps_the_value(
+        self, font_ready: None
+    ) -> None:
+        # GIVEN a Slider at value 42, with its value area captured:
+        slider, ui = slider_ui(
+            RECT, make_theme(TEST_THEME_JSON), text="Vol", initial_value=42
+        )
+        before = draw_ui(ui).subsurface(
+            (VALUE_AREA_LEFT, 0, 300 - VALUE_AREA_LEFT, 100)
+        ).copy()
+
+        # WHEN set_range replaces the range with (100,200) - clamping
+        # the value to 100 - and the UI redraws,
+        slider.set_range(100, 200)
+        after = draw_ui(ui).subsurface(
+            (VALUE_AREA_LEFT, 0, 300 - VALUE_AREA_LEFT, 100)
+        )
+
+        # THEN the value area shows different ink - the label now
+        # reads the clamped value, not the old one (spec 12: set_range
+        # - "the value label also updates to show the new value in
+        # that case"):
+        assert pygame.image.tobytes(before, "RGBA") != pygame.image.tobytes(
+            after, "RGBA"
+        )
+
     def test_unreasonably_thick_border_should_draw_no_contents(
         self, font_ready: None
     ) -> None:

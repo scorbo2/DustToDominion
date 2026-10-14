@@ -87,6 +87,27 @@ class TestSliderTabControl:
         assert tab_ink_at(screen, center, CENTER_Y - 20)
         assert not tab_ink_at(screen, center + 16, CENTER_Y - 20)
 
+    def test_set_value_should_move_the_tab_to_the_interpolated_position(
+        self, font_ready: None
+    ) -> None:
+        # GIVEN a label-less Slider built at 0 and then moved to 80
+        # programmatically (spec 12: set_value - "updates the position
+        # of the tab control accordingly"):
+        theme = make_theme(TEST_THEME_JSON)
+        slider, ui = slider_ui(RECT, theme, initial_value=0)
+        slider.set_value(80)
+
+        # WHEN the UI draws,
+        track_x0, track_x1 = labelless_geometry(theme, ui, "80")
+        screen = draw_ui(ui)
+
+        # THEN the tab center sits at the 80% interpolated column and
+        # has vacated the leftmost pixel it occupied at value 0:
+        center = tab_center_for_value(track_x0, track_x1, 80)
+        assert tab_ink_at(screen, center, CENTER_Y - 20)
+        assert not tab_ink_at(screen, center + 16, CENTER_Y - 20)
+        assert not tab_ink_at(screen, track_x0, CENTER_Y - 20)
+
     @pytest.mark.parametrize(
         "state", ["normal", "selected", "hovered", "disabled"]
     )
@@ -169,6 +190,48 @@ class TestSliderTabControl:
         # (spec 12: Special case - min and max are equal):
         center = (track_x0 + track_x1) // 2
         assert tab_ink_at(screen, center, CENTER_Y - 20)
+
+    def test_set_range_to_min_equal_to_max_should_center_the_tab_on_the_track(
+        self, font_ready: None
+    ) -> None:
+        # GIVEN a label-less Slider at value 42 whose range is then
+        # collapsed to the degenerate (5,5) - the value clamps to 5:
+        theme = make_theme(TEST_THEME_JSON)
+        slider, ui = slider_ui(RECT, theme, initial_value=42)
+        slider.set_range(5, 5)
+
+        # WHEN the UI draws,
+        track_x0, track_x1 = labelless_geometry(theme, ui, "5")
+        screen = draw_ui(ui)
+
+        # THEN the tab is horizontally centered on the track, exactly
+        # as for a constructor-built degenerate range (spec 12:
+        # set_range - "the same rules apply here": min==max centers
+        # the tab):
+        center = (track_x0 + track_x1) // 2
+        assert tab_ink_at(screen, center, CENTER_Y - 20)
+
+    def test_set_range_excluding_the_value_should_move_the_tab_to_the_clamped_position(
+        self, font_ready: None
+    ) -> None:
+        # GIVEN a label-less Slider at value 42 whose range is then
+        # replaced with (100,200) - the value clamps up to 100, the
+        # new min_value (spec 12: set_range - "updates the tab
+        # control's position if the current value must change"):
+        theme = make_theme(TEST_THEME_JSON)
+        slider, ui = slider_ui(RECT, theme, initial_value=42)
+        slider.set_range(100, 200)
+
+        # WHEN the UI draws,
+        track_x0, track_x1 = labelless_geometry(theme, ui, "100")
+        screen = draw_ui(ui)
+
+        # THEN the tab is centered on the leftmost track pixel (the
+        # clamped value equals the new min) and has vacated the 42%-
+        # of-span column it held before the range change:
+        assert tab_ink_at(screen, track_x0, CENTER_Y - 20)
+        stale = tab_center_for_value(track_x0, track_x1, 142, 100, 200)
+        assert not tab_ink_at(screen, stale, CENTER_Y - 20)
 
 
 class TestSliderDrag:
@@ -384,6 +447,35 @@ class TestSliderDrag:
 
         # THEN no value change event is possible (spec 12: Special
         # case - min and max are equal):
+        assert slider.get_value() == 5
+        assert changes == []
+
+    def test_set_range_to_min_equal_to_max_should_leave_the_tab_undraggable(
+        self, font_ready: None, silent_audio_manager: audio.AudioManager
+    ) -> None:
+        # GIVEN a Slider whose range is collapsed to (5,5) after
+        # construction - value clamps to 5, tab centered (the
+        # set_range path of the min==max rule, spec 12: "the same
+        # rules apply here"):
+        theme = make_theme(TEST_THEME_JSON)
+        changes: list[int] = []
+        slider, ui = slider_ui(RECT, theme, initial_value=42)
+        slider.on_change = changes.append
+        slider.set_range(5, 5)
+        track_x0, track_x1 = labelless_geometry(theme, ui, "5")
+        center = (track_x0 + track_x1) // 2
+
+        # WHEN a full press/motion/release lands on the centered tab,
+        ui.update(
+            [
+                press((center, CENTER_Y)),
+                motion((track_x1 - 10, CENTER_Y)),
+                release((track_x1 - 10, CENTER_Y)),
+            ]
+        )
+
+        # THEN the tab cannot be dragged and no value change event is
+        # possible:
         assert slider.get_value() == 5
         assert changes == []
 
