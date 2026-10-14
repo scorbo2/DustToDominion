@@ -474,6 +474,12 @@ class Slider(Widget):
             return
         if layout.track_x1 - layout.track_x0 < 1:
             return
+        # The hit rect is the tab's FULL rect, not its clipped pixels:
+        # at the track extremes the tab overhangs the inner rect and is
+        # invisible out there, but spec 12 defines the press test as
+        # "mouse pressed occurs within the tab control's rect", so the
+        # overhang - visible or not - stays clickable. Deliberate; do
+        # not "fix" this to the clipped drawing.
         tab = self._tab_rect(layout, self._display_value())
         if not tab.move(layout.origin).collidepoint(pos):
             return
@@ -730,8 +736,13 @@ class Slider(Widget):
         value label's own candidate sizes (the shared
         ``ZERO_GLYPH_MARGIN_FITS`` predicate re-derives it per size,
         which resolves the size/margin circularity).
+
+        Sized for the *displayed* text - the drag preview mid-drag -
+        so a preview with more digits than the committed value (9 ->
+        100) still fits instead of clipping (spec 12: the value label
+        updates during click+drag).
         """
-        value_text = str(self._value)
+        value_text = str(self._display_value())
         if value_area.w <= 0:
             return None
         if label_size is not None:
@@ -769,14 +780,16 @@ class Slider(Widget):
         fg: pygame.Color,
         size: int,
     ) -> None:
-        """Center the current value within the value area (spec 12).
+        """Center the displayed value within the value area (spec 12).
 
-        Decimal places never appear (the value is an int by contract);
-        negatives carry their "-" naturally. Text too large clips at
-        the value area's bounds.
+        Shows the drag preview mid-drag while ``get_value()`` keeps
+        reporting the pre-drag value (spec 12: the value label updates
+        during click+drag operations). Decimal places never appear
+        (the value is an int by contract); negatives carry their "-"
+        naturally. Text too large clips at the value area's bounds.
         """
         font = theme.get_font(size)
-        surface = font.render(str(self._value), True, fg)
+        surface = font.render(str(self._display_value()), True, fg)
         x = (area.get_width() - surface.get_width()) // 2
         y = (area.get_height() - surface.get_height()) // 2
         area.blit(surface, (x, y))

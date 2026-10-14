@@ -257,35 +257,48 @@ class TestSliderDrag:
         screen = draw_ui(ui)
         assert tab_ink_at(screen, snapped, CENTER_Y - 20)
 
-    def test_drag_motion_should_update_the_preview_without_changing_get_value(
+    def test_drag_motion_should_update_the_value_label_preview_without_changing_get_value(
         self, font_ready: None, silent_audio_manager: audio.AudioManager
     ) -> None:
         # GIVEN a drawn label-less Slider at value 50:
         theme = make_theme(TEST_THEME_JSON)
         slider, ui = slider_ui(RECT, theme, initial_value=50)
         track_x0, track_x1 = labelless_geometry(theme, ui, "50")
-        before = draw_ui(ui).subsurface(
-            (VALUE_AREA_LEFT, 0, 300 - VALUE_AREA_LEFT, 100)
-        ).copy()
 
         # WHEN a drag begins on the tab and the mouse moves left,
         center = tab_center_for_value(track_x0, track_x1, 50)
+        target = track_x0 + 95
         ui.update(
             [
                 press((center, CENTER_Y)),
-                motion((track_x0 + 95, CENTER_Y)),
+                motion((target, CENTER_Y)),
             ]
         )
 
-        # THEN get_value() still reports the pre-drag value, while the
-        # value label area now renders different ink - the "54"-style
-        # preview (spec 12: the value label updates during drag):
+        # THEN get_value() still reports the pre-drag value (spec 12:
+        # "get_value() invoked mid-drag returns the value as it was
+        # when the drag was initiated"), while the value label area
+        # shows the preview - proven byte-for-byte against a reference
+        # Slider parked at the preview value with the same hover
+        # state. Comparing against a reference is deliberate: the old
+        # before/after byte diff passed on the hover recolor alone and
+        # proved nothing about the number on screen (spec 12: "the
+        # value label updates during click+drag operations"):
         assert slider.get_value() == 50
-        after = draw_ui(ui).subsurface(
+        preview = value_at(track_x0, track_x1, target)
+        assert preview != 50  # the drag actually moved the preview
+        subject = draw_ui(ui).subsurface(
+            (VALUE_AREA_LEFT, 0, 300 - VALUE_AREA_LEFT, 100)
+        ).copy()
+        reference, reference_ui = slider_ui(
+            RECT.copy(), theme, initial_value=preview
+        )
+        reference_ui.update([motion((150, CENTER_Y))])
+        reference_ink = draw_ui(reference_ui).subsurface(
             (VALUE_AREA_LEFT, 0, 300 - VALUE_AREA_LEFT, 100)
         )
-        assert pygame.image.tostring(before, "RGBA") != pygame.image.tostring(
-            after, "RGBA"
+        assert pygame.image.tobytes(subject, "RGBA") == pygame.image.tobytes(
+            reference_ink, "RGBA"
         )
 
     def test_release_after_a_drag_should_apply_the_value_and_fire_on_change_once(
@@ -705,6 +718,41 @@ class TestSliderDrag:
         # endpoint of the track"):
         assert slider.get_value() == 100
         assert changes == [100]
+
+    def test_dragging_past_the_track_end_and_back_should_keep_the_drag_active(
+        self, font_ready: None, silent_audio_manager: audio.AudioManager
+    ) -> None:
+        # GIVEN a drag in progress on a label-less Slider at value 50:
+        theme = make_theme(TEST_THEME_JSON)
+        changes: list[int] = []
+        slider, ui = slider_ui(RECT, theme, initial_value=50)
+        slider.on_change = changes.append
+        track_x0, track_x1 = labelless_geometry(theme, ui, "50")
+        center = tab_center_for_value(track_x0, track_x1, 50)
+        ui.update([press((center, CENTER_Y))])
+
+        # WHEN the mouse travels far past the right track end, then
+        # back to a mid-track column, and only then releases (spec 12:
+        # moving past the extent clamps the tab "without ending the
+        # drag operation"),
+        target = track_x0 + 30
+        ui.update(
+            [
+                motion((1500, 500)),
+                motion((target, CENTER_Y)),
+                release((target, CENTER_Y)),
+            ]
+        )
+
+        # THEN the drag survived the excursion: the value follows the
+        # pointer back to the mid-track value instead of sticking at
+        # the clamped 100 the tab showed at the excursion's peak (had
+        # the excursion ended the drag, the release would be a no-op
+        # and the value would have finalized at 100):
+        expected = value_at(track_x0, track_x1, target)
+        assert expected < 100
+        assert slider.get_value() == expected
+        assert changes == [expected]
 
     def test_tab_overhang_into_the_label_area_should_still_be_clickable(
         self, font_ready: None, silent_audio_manager: audio.AudioManager
