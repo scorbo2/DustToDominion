@@ -134,6 +134,10 @@ The display label never wraps text - single-line only. The text for the label au
 display area, unless a specific font point size was given. In either case, text too large to fit its
 area should clip at the extent of the label display area.
 
+Note: at very large pinned point sizes, the margin (half the `0` glyph height) can exceed the width
+of the label's display area. The label is then blitted entirely outside its area and is effectively
+invisible. This is an accepted consequence of the margin rule, not a rendering bug.
+
 ### The slider track
 
 A horizontal line of 2px width (in design space, with a floor of 2px in screen space - it may be thicker
@@ -435,6 +439,7 @@ The tests need to use the `mixer_ready` + `init_audio_manager` pattern to proces
    **Completed 2026-10-13**
 2. Implement the tab control positioning, and wire up mouse click+drag to allow the value
    to be changed. The `on_change` callback is wired up at this stage.
+   **Completed 2026-10-13**
 3. Implement mouse wheel support.
 4. Final verification pass. Do the tests all pass? Are acceptance criteria all met?
    Edit this document to change all "proposes" prose to "describes" as needed.

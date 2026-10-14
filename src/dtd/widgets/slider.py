@@ -1,11 +1,14 @@
 """The ``Slider`` widget (spec 12: Slider structure / layout).
 
-Stage 1 of the spec 12 Dev plan: layout only. The optional display
-label occupies the left third of the inner rect, the always-visible
-value label the right tenth, and the horizontal track the remaining
-space. The tab control, click+drag interaction, and mouse wheel arrive
-in stages 2-3 - this module deliberately does not override ``update()``
-yet, and ``on_change`` is stored but never invoked.
+Stage 2 of the spec 12 Dev plan: layout plus the tab control and
+click+drag interaction. The optional display label occupies the left
+third of the inner rect, the always-visible value label the right
+tenth, and the horizontal track the remaining space. A fixed-size tab
+control rides the track at the interpolated position of the current
+value; a left-press inside the tab's rect begins a drag (the tab
+center snaps to the pointer - no grab offset), motion previews the new
+value, and release finalizes it and fires ``on_change`` if the value
+actually changed. Mouse wheel support arrives in stage 3.
 
 Rendering contract (spec 12: Slider layout):
 
@@ -37,10 +40,28 @@ Rendering contract (spec 12: Slider layout):
 - Hover is honored through the shared disabled > selected > hover
   precedence (spec 04), and ``on_hover_enter()`` plays
   ``UI_SFX_HOVER`` (spec 12: Audio events).
+- The tab control is a fixed-size (``SLIDER_TAB_WIDTH``/
+  ``SLIDER_TAB_HEIGHT`` design px) borderless rect, always filled with
+  ``foregroundSelected`` regardless of state, always square-cornered,
+  and clipped at the inner rect boundary - never the track area
+  (spec 12: The tab control). Its overhang into a label's display area
+  is still clickable.
+- Drag semantics (spec 12: Manipulating the tab control): the drag
+  keeps the pre-drag value in ``get_value()`` and shows a preview on
+  screen; ``set_value``/``set_range`` are ignored with a warning
+  mid-drag; disabling the Slider or changing font size, border width,
+  or the widget rect mid-drag finalizes the drag first (the rect
+  change is detected by comparing against the snapshot taken when the
+  drag began, since callers mutate ``rect`` in place).
+- Layout is computed exactly once per draw in ``_layout()`` and cached
+  for input handling, so the fraction/margin math can never drift
+  between rendering and hit-testing.
 """
 from __future__ import annotations
 
+import math
 from collections.abc import Callable
+from typing import NamedTuple
 
 import pygame
 from loguru import logger
@@ -60,6 +81,55 @@ from dtd.widgets.text_layout import (
 #: track would read as a smudge at small scales (same reasoning as the
 #: Checkbox strokes, spec 11).
 _TRACK_DESIGN_PX = 2
+
+
+def _round_half_up(x: float) -> int:
+    """Round to the nearest int, halves away from zero's ugly cousin
+    (spec 12: "implementers must use ``floor(x + 0.5)``" - Python's
+    built-in ``round()`` is banker's rounding and would silently
+    misplace every half-step on even values).
+    """
+    return math.floor(x + 0.5)
+
+
+class _Layout(NamedTuple):
+    """One complete pass of the Slider layout, shared by rendering and
+    input handling so the fraction/margin math cannot drift between
+    the two (spec 12: Slider layout).
+
+    All rects and sizes are screen pixels; the areas are inner-rect
+    relative, while ``origin`` locates the inner rect on the actual
+    display surface for hit-testing against raw event positions.
+    """
+
+    inner: pygame.Rect
+    label_area: pygame.Rect | None
+    value_area: pygame.Rect
+    track_area: pygame.Rect
+    margin: int
+    label_size: int | None
+    value_size: int | None
+    #: First and last drawn track pixel (inner-relative); an ``x1``
+    #: below ``x0`` means the track area could not hold a line.
+    track_x0: int
+    track_x1: int
+    track_thickness: int
+    center_y: int
+    tab_w: int
+    tab_h: int
+    origin: tuple[int, int]
+
+
+class _Drag(NamedTuple):
+    """In-progress tab drag state (spec 12: Manipulating the tab
+    control). ``snapshot_rect`` detects caller-side rect mutations;
+    ``start_value`` is what ``get_value()`` keeps reporting mid-drag;
+    ``preview_value`` is what the screen shows until release.
+    """
+
+    snapshot_rect: pygame.Rect
+    start_value: int
+    preview_value: int
 
 
 def _validated_int(value: object, source: str, name: str, default: int) -> int:
@@ -108,8 +178,9 @@ class Slider(Widget):
     hands its space to the track. ``min_value``/``max_value`` swap
     silently when inverted; ``initial_value`` clamps silently to the
     range. Invalid range/value arguments fall back to their defaults
-    with a log warning (spec 12: Slider structure). ``on_change`` is
-    stored now and wired up in stage 2 - nothing invokes it yet.
+    with a log warning (spec 12: Slider structure). ``on_change``
+    fires when a drag finalizes with a changed value (stage 2); the
+    mouse wheel paths arrive in stage 3.
     """
 
     def __init__(
@@ -122,6 +193,13 @@ class Slider(Widget):
         border_width: int = 0,
         on_change: Callable[[int], None] | None = None,
     ) -> None:
+        # Drag state and the layout cache must exist before
+        # ``super().__init__`` assigns ``self.enabled = True``, which
+        # lands in the ``enabled`` property override below (spec 12:
+        # implementation note - "Slider must tolerate this being
+        # invoked before any drag state exists").
+        self._drag: _Drag | None = None
+        self._layout_cache: _Layout | None = None
         super().__init__(rect)
         self.text = text
         self.border_width = _validated_border_width(border_width, "__init__")
@@ -141,6 +219,28 @@ class Slider(Widget):
         # Fill the rect with the state's background color (True, the
         # default) or stay transparent (spec 12: set_opaque).
         self._opaque = True
+
+    # -- enabled override: finalize interrupted drags (spec 12) ---------------
+
+    @property
+    def enabled(self) -> bool:
+        """Whether the Slider responds to input (spec 04: Disabling)."""
+        return self._enabled
+
+    @enabled.setter
+    def enabled(self, value: bool) -> None:
+        """Disable the Slider, finalizing any in-progress drag first.
+
+        Spec 12's implementation note (following spec 07's precedent):
+        an in-progress drag is finalized - value applied, ``on_change``
+        fired - *before* the disable takes effect, so the callback
+        observes an enabled Slider. The synchronous ``on_change``
+        during a client's ``slider.enabled = False`` assignment is an
+        accepted side-effect.
+        """
+        if not value:
+            self._finalize_drag()
+        self._enabled = value
 
     # -- value model (spec 12: Slider value model) --------------------------
 
@@ -162,9 +262,15 @@ class Slider(Widget):
         Non-int arguments (bool included) are rejected with a log
         warning and change nothing (spec 12: set_value). Never fires
         ``on_change`` - programmatic changes are the caller's own
-        doing - and works even while disabled. Layout happens at draw
-        time, so same-value calls are no-ops by construction.
+        doing - and works even while disabled. Invoked mid-drag it is
+        ignored with a log warning (the drag owns the value until it
+        finalizes). Layout happens at draw time, so same-value calls
+        are no-ops by construction.
         """
+        if self._drag is not None:
+            # Brace formatting required; loguru's %-style args are silently dropped
+            logger.warning("slider.set_value: invoked mid-drag; ignoring")
+            return
         if isinstance(value, bool) or not isinstance(value, int):
             # Brace formatting required; loguru's %-style args are silently dropped
             logger.warning(
@@ -180,8 +286,14 @@ class Slider(Widget):
         non-int (bool included) the old range survives with a log
         warning; an inverted pair swaps silently (spec 12: set_range).
         Never fires ``on_change``, even when clamping changed the
-        value, and works while disabled.
+        value, and works while disabled. Invoked mid-drag it is
+        ignored with a log warning (spec 12: "calls to set_range() and
+        set_value() during a drag are ignored with a log warning").
         """
+        if self._drag is not None:
+            # Brace formatting required; loguru's %-style args are silently dropped
+            logger.warning("slider.set_range: invoked mid-drag; ignoring")
+            return
         if (
             isinstance(min_value, bool)
             or not isinstance(min_value, int)
@@ -208,8 +320,12 @@ class Slider(Widget):
         A positive int pins; ``None`` auto-scales silently; non-ints
         and non-positive ints auto-scale with a log warning (spec 12:
         set_font_point_size). The value label ignores this entirely -
-        it always auto-scales.
+        it always auto-scales. An in-progress drag is finalized first:
+        this setter changes the track geometry (spec 12: "any setter
+        that affects the dimensions of the slider track must have the
+        same 'finalize if interrupted' handling").
         """
+        self._finalize_drag()
         if size is None:
             self._font_point_size = None
             return
@@ -240,8 +356,11 @@ class Slider(Widget):
         silently; negatives and non-ints (bool included) disable it
         with a log warning (spec 12: set_border_width). The contents
         re-layout to the new inner rect on the next draw - layout
-        happens at draw time, so no extra invalidation is needed.
+        happens at draw time, so no extra invalidation is needed. An
+        in-progress drag is finalized first: the border changes the
+        inner rect and therefore the track geometry.
         """
+        self._finalize_drag()
         self.border_width = _validated_border_width(width, "set_border_width")
 
     # -- hover (spec 12: Slider events / Audio events) ------------------------
@@ -264,13 +383,133 @@ class Slider(Widget):
         """
         get_audio_manager().play_ui_sfx(game_constants.UI_SFX_HOVER)
 
+    # -- input: tab control drag (spec 12: Manipulating the tab control) ------
+
+    def update(self, events: list[pygame.event.Event]) -> None:
+        """Drive the tab-control drag state machine (spec 12).
+
+        Event positions are raw display pixels; the cached draw-time
+        layout is also pixel-space, so hit-testing needs no conversion
+        (and none of the lossy design-space round-trips). The UIManager
+        only broadcasts to enabled widgets; the guard here keeps the
+        contract safe for direct calls.
+        """
+        if not self.enabled:
+            return
+        # Callers can mutate ``rect`` in place with no hook available
+        # (spec 12 implementation note): compare against the snapshot
+        # taken when the drag began, once per update() call.
+        if self._drag is not None and self.rect != self._drag.snapshot_rect:
+            self._finalize_drag()
+        layout = self._layout_cache
+        if layout is None:
+            # Never drawn, so no tab exists on screen to grab.
+            return
+        for event in events:
+            if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                self._try_begin_drag(layout, event.pos)
+            elif event.type == pygame.MOUSEMOTION and self._drag is not None:
+                self._drag = self._drag._replace(
+                    preview_value=self._value_at_x(layout, event.pos[0])
+                )
+            elif (
+                event.type == pygame.MOUSEBUTTONUP
+                and event.button == 1
+                and self._drag is not None
+            ):
+                # The release may happen anywhere - a drag is not a
+                # click (spec 12: deviation from Button semantics).
+                self._finalize_drag()
+
+    def _try_begin_drag(self, layout: _Layout, pos: tuple[int, int]) -> None:
+        """Begin a drag if the press lands on the tab (spec 12).
+
+        Only the tab is clickable; the track and labels do nothing.
+        A min==max range or a track of 1px or less cannot move. The
+        tab center snaps to the cursor - no grab offset is kept.
+        """
+        if self._drag is not None:
+            return
+        if self._min_value == self._max_value:
+            return
+        if layout.track_x1 - layout.track_x0 < 1:
+            return
+        tab = self._tab_rect(layout, self._display_value())
+        if not tab.move(layout.origin).collidepoint(pos):
+            return
+        self._drag = _Drag(
+            snapshot_rect=self.rect.copy(),
+            start_value=self._value,
+            preview_value=self._value_at_x(layout, pos[0]),
+        )
+
+    def _finalize_drag(self) -> None:
+        """Apply the preview value and fire ``on_change`` if it changed.
+
+        Used for mouse release and for every interruption path
+        (disable, font size, border width, rect change) - the drag is
+        finalized "as though the mouse had been released" (spec 12).
+        The snapshot is discarded regardless of how the drag ends.
+        """
+        if self._drag is None:
+            return
+        drag, self._drag = self._drag, None
+        self._value = drag.preview_value
+        if drag.preview_value != drag.start_value and self.on_change is not None:
+            self.on_change(drag.preview_value)
+
+    def _display_value(self) -> int:
+        """What the screen shows: the preview mid-drag, else the real
+        value (spec 12: the value label updates during a drag while
+        ``get_value()`` keeps reporting the pre-drag value).
+        """
+        return self._drag.preview_value if self._drag is not None else self._value
+
+    def _value_at_x(self, layout: _Layout, x: int) -> int:
+        """Interpolate the value for a pixel column (spec 12: the
+        leftmost track pixel is ``min_value``, the rightmost is
+        ``max_value``, everything between is round-half-up).
+        """
+        span = layout.track_x1 - layout.track_x0
+        if span <= 0 or self._min_value == self._max_value:
+            return self._min_value
+        raw = self._min_value + (x - layout.track_x0) * (
+            self._max_value - self._min_value
+        ) / span
+        return min(max(_round_half_up(raw), self._min_value), self._max_value)
+
+    def _tab_center_x(self, layout: _Layout, value: int) -> int:
+        """Pixel column of the tab's horizontal center for ``value``
+        (spec 12: The tab control). A min==max range centers the tab
+        on the track.
+        """
+        if self._min_value == self._max_value:
+            return (layout.track_x0 + layout.track_x1) // 2
+        span = layout.track_x1 - layout.track_x0
+        if span <= 0:
+            return layout.track_x0
+        fraction = (value - self._min_value) / (self._max_value - self._min_value)
+        return layout.track_x0 + _round_half_up(fraction * span)
+
+    def _tab_rect(self, layout: _Layout, value: int) -> pygame.Rect:
+        """The tab rect, inner-relative (spec 12: fixed design-space
+        dimensions scaled to screen pixels)."""
+        center_x = self._tab_center_x(layout, value)
+        return pygame.Rect(
+            center_x - layout.tab_w // 2,
+            layout.center_y - layout.tab_h // 2,
+            layout.tab_w,
+            layout.tab_h,
+        )
+
     # -- rendering (spec 12: Slider layout) ------------------------------------
 
     def draw(self, surf: pygame.Surface, theme: Theme) -> None:
-        """Fill, border, then the three content areas (spec 12)."""
+        """Fill, border, then the contents: labels, track, tab (spec 12)."""
         scale = current_scale()
         rect = scale.rect(self.rect.x, self.rect.y, self.rect.w, self.rect.h)
         if rect.w <= 0 or rect.h <= 0:
+            self._layout_cache = None
             return
         fg, bg = self._state_colors(theme)
         overlay = pygame.Surface(rect.size, pygame.SRCALPHA)
@@ -286,46 +525,54 @@ class Slider(Widget):
             pygame.draw.rect(
                 overlay, fg, (0, 0, rect.w, rect.h), width=border_px, border_radius=corner
             )
-        inner = pygame.Rect(
-            border_px, border_px, rect.w - 2 * border_px, rect.h - 2 * border_px
-        )
-        if inner.w > 0 and inner.h > 0:
+        layout = self._layout(theme, scale, rect, border_px)
+        # Cached for input handling: hit-testing reuses the exact same
+        # geometry that was just rendered (spec 12: the tab is the only
+        # clickable part, and its rect is font-layout dependent).
+        self._layout_cache = layout
+        if layout is not None:
             # A sub-surface shares the overlay's pixels, so blits onto it
             # clip exactly at the inner rect boundary (the Label/Checkbox
             # trick); each component's own area sub-surface then clips
             # at that component's display area (spec 12: clipping rules).
-            self._draw_contents(overlay.subsurface(inner), theme, fg, scale)
+            self._draw_contents(
+                overlay.subsurface(
+                    border_px, border_px, layout.inner.w, layout.inner.h
+                ),
+                theme,
+                fg,
+                layout,
+            )
         surf.blit(overlay, rect.topleft)
 
-    def _draw_contents(
+    def _layout(
         self,
-        inner: pygame.Surface,
         theme: Theme,
-        fg: pygame.Color,
         scale: Scale,
-    ) -> None:
-        """Lay out and draw label, value label, and track (spec 12).
+        rect: pygame.Rect,
+        border_px: int,
+    ) -> _Layout | None:
+        """Compute the complete layout in one pass (spec 12: Slider layout).
 
         The track is sized last on purpose: its area is whatever the
         label and value areas leave, and the margin that insets it
         comes from the effective font sizes those searches pick
         (spec 12: "the track should therefore be the last internal
-        component to be sized").
+        component to be sized"). Returns ``None`` when the inner rect
+        is zero or negative - no contents are drawn then.
         """
-        inner_w = inner.get_width()
-        inner_h = inner.get_height()
-
+        inner_w = rect.w - 2 * border_px
+        inner_h = rect.h - 2 * border_px
+        if inner_w <= 0 or inner_h <= 0:
+            return None
         text = self._text_to_draw()
-        label_area = pygame.Rect(0, 0, inner_w // 3, inner_h) if text is not None else None
+        label_area = (
+            pygame.Rect(0, 0, inner_w // 3, inner_h) if text is not None else None
+        )
         value_w = inner_w // 10
         value_area = pygame.Rect(inner_w - value_w, 0, value_w, inner_h)
-        track_area = pygame.Rect(
-            label_area.right if label_area is not None else 0,
-            0,
-            value_area.left - (label_area.right if label_area is not None else 0),
-            inner_h,
-        )
-
+        track_left = label_area.right if label_area is not None else 0
+        track_area = pygame.Rect(track_left, 0, value_area.left - track_left, inner_h)
         label_size = self._effective_label_size(theme, text, label_area, scale)
         value_size = self._effective_value_size(theme, label_size, value_area)
         # The margin comes from the display label's effective size, or
@@ -333,12 +580,46 @@ class Slider(Widget):
         # (spec 12: Margin).
         margin_source = label_size if label_size is not None else value_size
         margin = zero_glyph_margin(theme.get_font(margin_source)) if margin_source else 0
+        return _Layout(
+            inner=pygame.Rect(0, 0, inner_w, inner_h),
+            label_area=label_area,
+            value_area=value_area,
+            track_area=track_area,
+            margin=margin,
+            label_size=label_size,
+            value_size=value_size,
+            track_x0=track_area.x + margin,
+            track_x1=track_area.right - 1 - margin,
+            track_thickness=max(2, int(_TRACK_DESIGN_PX * scale.scale)),
+            center_y=inner_h // 2,
+            tab_w=max(1, int(game_constants.SLIDER_TAB_WIDTH * scale.scale)),
+            tab_h=max(1, int(game_constants.SLIDER_TAB_HEIGHT * scale.scale)),
+            origin=(rect.x + border_px, rect.y + border_px),
+        )
 
-        if label_area is not None and label_size is not None:
-            self._draw_label(inner.subsurface(label_area), theme, fg, text, label_size)
-        if value_area.w > 0 and value_size is not None:
-            self._draw_value(inner.subsurface(value_area), theme, fg, value_size)
-        self._draw_track(inner, fg, track_area, margin, scale)
+    def _draw_contents(
+        self,
+        inner: pygame.Surface,
+        theme: Theme,
+        fg: pygame.Color,
+        layout: _Layout,
+    ) -> None:
+        """Draw label, value label, track, then tab (spec 12).
+
+        The tab draws last so it overdraws the labels it overhangs -
+        explicitly acceptable per spec 12: The tab control.
+        """
+        text = self._text_to_draw()
+        if layout.label_area is not None and layout.label_size is not None and text:
+            self._draw_label(
+                inner.subsurface(layout.label_area), theme, fg, text, layout.label_size
+            )
+        if layout.value_area.w > 0 and layout.value_size is not None:
+            self._draw_value(
+                inner.subsurface(layout.value_area), theme, fg, layout.value_size
+            )
+        self._draw_track(inner, fg, layout)
+        self._draw_tab(inner, theme, layout)
 
     def _text_to_draw(self) -> str | None:
         text = (self.text or "").strip()
@@ -437,9 +718,7 @@ class Slider(Widget):
         self,
         inner: pygame.Surface,
         fg: pygame.Color,
-        track_area: pygame.Rect,
-        margin: int,
-        scale: Scale,
+        layout: _Layout,
     ) -> None:
         """The horizontal track line, inset by the margin (spec 12).
 
@@ -449,10 +728,32 @@ class Slider(Widget):
         ChoiceList accounting, spec 07). A track area too narrow to
         hold anything after the inset draws nothing.
         """
-        x0 = track_area.x + margin
-        x1 = track_area.right - 1 - margin
-        if x1 < x0:
+        if layout.track_x1 < layout.track_x0:
             return
-        thickness = max(2, int(_TRACK_DESIGN_PX * scale.scale))
-        y = inner.get_height() // 2
-        pygame.draw.line(inner, fg, (x0, y), (x1, y), width=thickness)
+        pygame.draw.line(
+            inner,
+            fg,
+            (layout.track_x0, layout.center_y),
+            (layout.track_x1, layout.center_y),
+            width=layout.track_thickness,
+        )
+
+    def _draw_tab(
+        self,
+        inner: pygame.Surface,
+        theme: Theme,
+        layout: _Layout,
+    ) -> None:
+        """The tab control at the current display value (spec 12).
+
+        Always ``foregroundSelected`` regardless of widget state, and
+        always square-cornered - the theme's corner radius applies to
+        the widget rect only. Drawing onto the inner sub-surface clips
+        the tab at the inner rect boundary, NOT the track area, so it
+        may overhang the track ends and overdraw the labels.
+        """
+        pygame.draw.rect(
+            inner,
+            theme.foregroundSelected,
+            self._tab_rect(layout, self._display_value()),
+        )

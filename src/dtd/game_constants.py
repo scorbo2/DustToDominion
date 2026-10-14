@@ -79,6 +79,11 @@ UI_SFX_ACCEPT = "audio/ui/accept.ogg"
 #: icon - top and bottom always, plus the left edge when a label is
 #: present (spec 09: Icon scaling).
 BUTTON_ICON_MARGIN_FRACTION = 0.05
+#: Fixed tab-control dimensions in design pixels for the Slider widget
+#: (spec 12: The tab control). The tab is borderless, always square-
+#: cornered, and always filled with the theme's foregroundSelected.
+SLIDER_TAB_WIDTH = 32
+SLIDER_TAB_HEIGHT = 48
 
 # --- Title screen (spec 08) -----------------------------------------------
 #: Background image resource ids probed in order (spec 08: Background).

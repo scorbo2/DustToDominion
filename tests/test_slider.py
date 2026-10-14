@@ -15,8 +15,15 @@ corner radius on fill and border; ``set_opaque``; the
 ``set_font_point_size`` matrix with the value label unaffected; and
 hover audio through the ``on_hover_enter`` hook.
 
-Deliberately NOT here yet (stages 2-3): the tab control, click+drag,
-``on_change`` firing, and mouse wheel handling.
+Stage 2 coverage (spec 12 Dev plan): everything above, plus the tab
+control (positioning at the interpolated value, always-``selected``
+color, square corners, inner-rect clipping, min==max centering) and
+the click+drag state machine (snap-to-center, preview vs ``get_value``,
+``on_change`` firing rules, mid-drag setter warnings, and every
+"finalize if interrupted" path: disable, font size, border width, and
+the rect snapshot check).
+
+Deliberately NOT here yet (stage 3): mouse wheel handling.
 
 The track line is solid ``pygame.draw`` output (not anti-aliased), so
 track pixels are matched exactly; only text ink uses the
@@ -26,6 +33,8 @@ test_text_layout.py; here the margin rule is mirrored as a test
 premise, exactly as test_checkbox.py does.
 """
 from __future__ import annotations
+
+import math
 
 import pygame
 import pytest
@@ -100,6 +109,14 @@ def _draw(ui: UIManager) -> pygame.Surface:
 
 def _motion(pos: tuple[int, int]) -> pygame.event.Event:
     return pygame.event.Event(pygame.MOUSEMOTION, pos=pos, rel=(0, 0))
+
+
+def _press(pos: tuple[int, int], button: int = 1) -> pygame.event.Event:
+    return pygame.event.Event(pygame.MOUSEBUTTONDOWN, pos=pos, button=button)
+
+
+def _release(pos: tuple[int, int], button: int = 1) -> pygame.event.Event:
+    return pygame.event.Event(pygame.MOUSEBUTTONUP, pos=pos, button=button)
 
 
 def _warning_records() -> tuple[list[str], int]:
@@ -973,3 +990,661 @@ class TestSliderHoverAudio:
         # WHEN the hover sound is played, it must not raise (spec 05:
         # unresolved UI sfx ids are a silent no-op):
         slider.on_hover_enter()
+
+
+def _labelless_geometry(
+    theme: Theme, ui: UIManager, value_text: str
+) -> tuple[int, int]:
+    """Draw once with a font spy and return ``(track_x0, track_x1)`` -
+    the first/last drawn track pixels - for a label-less 300x100
+    Slider. The margin comes from the value label's own effective size
+    (spec 12: Margin), mirrored as a test premise."""
+    requested = _font_size_spy(theme)
+    _draw(ui)
+    value_size = _chosen_size(theme, requested, _margin_rule, value_text, 30, 100)
+    margin = _zero_margin(theme, value_size)
+    return margin, VALUE_AREA_LEFT - 1 - margin
+
+
+def _tab_ink_at(screen: pygame.Surface, x: int, y: int) -> bool:
+    """Whether the solid tab fill has ink at exactly ``(x, y)``."""
+    return screen.get_at((x, y)) == SELECTED_FG
+
+
+class TestSliderTabControl:
+    def test_tab_at_min_value_should_be_centered_on_the_leftmost_track_pixel(
+        self, font_ready: None
+    ) -> None:
+        # GIVEN a label-less Slider at its minimum (value 0):
+        theme = _theme(TEST_THEME_JSON)
+        slider, ui = _slider_ui(RECT, theme, initial_value=0)
+
+        # WHEN the UI draws,
+        track_x0, _ = _labelless_geometry(theme, ui, "0")
+        screen = _draw(ui)
+
+        # THEN the tab (32x48 at scale 1.0) is centered on the
+        # leftmost track pixel - and overhangs the inner rect's left
+        # edge, clipped there (ink still reaches x=0), while the
+        # column just right of the tab shows the red track line
+        # instead (spec 12: The tab control):
+        assert _tab_ink_at(screen, track_x0, CENTER_Y - 20)
+        assert _tab_ink_at(screen, 0, CENTER_Y - 20)
+        assert not _tab_ink_at(screen, track_x0 + 16, CENTER_Y - 20)
+
+    def test_tab_at_max_value_should_be_centered_on_the_rightmost_track_pixel(
+        self, font_ready: None
+    ) -> None:
+        # GIVEN a label-less Slider at its maximum (value 100):
+        theme = _theme(TEST_THEME_JSON)
+        slider, ui = _slider_ui(RECT, theme, initial_value=100)
+
+        # WHEN the UI draws,
+        _, track_x1 = _labelless_geometry(theme, ui, "100")
+        screen = _draw(ui)
+
+        # THEN the tab is centered on the rightmost track pixel,
+        # overhanging into the value label's area - acceptable
+        # overdraw per spec 12 (spec 12: The tab control):
+        assert _tab_ink_at(screen, track_x1, CENTER_Y - 20)
+        assert _tab_ink_at(screen, track_x1 + 15, CENTER_Y - 20)
+        assert not _tab_ink_at(screen, track_x1 + 16, CENTER_Y - 20)
+
+    def test_tab_at_eighty_percent_should_be_centered_at_the_interpolated_position(
+        self, font_ready: None
+    ) -> None:
+        # GIVEN a label-less Slider at 80% of a 0..100 range:
+        theme = _theme(TEST_THEME_JSON)
+        slider, ui = _slider_ui(RECT, theme, initial_value=80)
+
+        # WHEN the UI draws,
+        track_x0, track_x1 = _labelless_geometry(theme, ui, "80")
+        screen = _draw(ui)
+
+        # THEN the tab center sits at 80% of the track span, rounded
+        # half-up (spec 12: rounding note - floor(x + 0.5), never
+        # Python's banker's round()):
+        span = track_x1 - track_x0
+        center = track_x0 + math.floor(0.8 * span + 0.5)
+        assert _tab_ink_at(screen, center, CENTER_Y - 20)
+        assert not _tab_ink_at(screen, center + 16, CENTER_Y - 20)
+
+    @pytest.mark.parametrize(
+        "state", ["normal", "selected", "hovered", "disabled"]
+    )
+    def test_tab_should_render_in_foreground_selected_regardless_of_state(
+        self,
+        font_ready: None,
+        silent_audio_manager: audio.AudioManager,
+        state: str,
+    ) -> None:
+        # GIVEN a label-less Slider at value 50 in each visual state:
+        theme = _theme(TEST_THEME_JSON)
+        slider, ui = _slider_ui(RECT, theme, initial_value=50)
+        track_x0, track_x1 = _labelless_geometry(theme, ui, "50")
+        center = track_x0 + math.floor(0.5 * (track_x1 - track_x0) + 0.5)
+        if state == "selected":
+            slider.selected = True
+        elif state == "hovered":
+            ui.update([_motion((150, CENTER_Y))])
+        elif state == "disabled":
+            slider.enabled = False
+
+        # WHEN the UI draws,
+        screen = _draw(ui)
+
+        # THEN the tab is foregroundSelected (blue) in every state,
+        # even though the rest of the widget changes (spec 12: The tab
+        # control - "always filled using foregroundSelected... this is
+        # an exception to usual widget rendering rules"):
+        assert _tab_ink_at(screen, center, CENTER_Y - 20)
+
+    def test_tab_should_have_square_corners_even_with_a_theme_corner_radius(
+        self, font_ready: None
+    ) -> None:
+        # GIVEN a theme with a 12px corner radius and a Slider at 50:
+        themed = dict(TEST_THEME_JSON, cornerRadius=12)
+        theme = _theme(themed)
+        slider, ui = _slider_ui(RECT, theme, initial_value=50)
+        track_x0, track_x1 = _labelless_geometry(theme, ui, "50")
+        center = track_x0 + math.floor(0.5 * (track_x1 - track_x0) + 0.5)
+
+        # WHEN the UI draws,
+        screen = _draw(ui)
+
+        # THEN the tab's top-left corner pixel is filled (square
+        # corners; the radius applies only to the widget rect, whose
+        # own rounded corner leaves the surface corner black):
+        assert _tab_ink_at(screen, center - 16, CENTER_Y - 24)
+        assert screen.get_at((0, 0)) == BLACK
+
+    def test_tab_should_clip_at_the_inner_rect_not_the_track_area(
+        self, font_ready: None
+    ) -> None:
+        # GIVEN a 25px-wide Slider: the tab (32px) cannot fit inside
+        # the track area at all, but the inner rect is 25px wide:
+        theme = _theme(TEST_THEME_JSON)
+        slider, ui = _slider_ui(pygame.Rect(0, 0, 25, 100), theme, initial_value=100)
+
+        # WHEN the UI draws,
+        screen = _draw(ui)
+
+        # THEN tab ink reaches the inner rect's right edge (x=24) and
+        # stops dead there - the next column is outside the widget
+        # rect and stays black (spec 12: "clip at the inner rect
+        # boundary (NOT the track's display area!)"):
+        assert _tab_ink_at(screen, 24, CENTER_Y - 20)
+        assert screen.get_at((25, CENTER_Y - 20)) == BLACK
+
+    def test_min_equal_to_max_should_center_the_tab_on_the_track(
+        self, font_ready: None
+    ) -> None:
+        # GIVEN a degenerate range (5,5):
+        theme = _theme(TEST_THEME_JSON)
+        slider, ui = _slider_ui(RECT, theme, min_value=5, max_value=5, initial_value=5)
+
+        # WHEN the UI draws,
+        track_x0, track_x1 = _labelless_geometry(theme, ui, "5")
+        screen = _draw(ui)
+
+        # THEN the tab is horizontally centered on the track
+        # (spec 12: Special case - min and max are equal):
+        center = (track_x0 + track_x1) // 2
+        assert _tab_ink_at(screen, center, CENTER_Y - 20)
+
+
+class TestSliderDrag:
+    def test_left_press_on_tab_should_snap_the_center_to_the_pointer(
+        self, font_ready: None
+    ) -> None:
+        # GIVEN a drawn label-less Slider at value 50:
+        theme = _theme(TEST_THEME_JSON)
+        slider, ui = _slider_ui(RECT, theme, initial_value=50)
+        track_x0, track_x1 = _labelless_geometry(theme, ui, "50")
+        span = track_x1 - track_x0
+        center = track_x0 + math.floor(0.5 * span + 0.5)
+
+        # WHEN the left button presses 10px right of the tab center
+        # (no drag offset is kept - the center snaps to the pointer),
+        ui.update([_press((center + 10, CENTER_Y))])
+
+        # THEN get_value() still reports 50 (the drag owns the real
+        # value only at finalize), but the screen already shows the
+        # snapped preview (spec 12: Manipulating the tab control):
+        preview = min(
+            max(math.floor((center + 10 - track_x0) * 100 / span + 0.5), 0), 100
+        )
+        assert slider.get_value() == 50
+        snapped = track_x0 + math.floor(preview * span / 100 + 0.5)
+        screen = _draw(ui)
+        assert _tab_ink_at(screen, snapped, CENTER_Y - 20)
+
+    def test_drag_motion_should_update_the_preview_without_changing_get_value(
+        self, font_ready: None, silent_audio_manager: audio.AudioManager
+    ) -> None:
+        # GIVEN a drawn label-less Slider at value 50:
+        theme = _theme(TEST_THEME_JSON)
+        slider, ui = _slider_ui(RECT, theme, initial_value=50)
+        track_x0, track_x1 = _labelless_geometry(theme, ui, "50")
+        before = _draw(ui).subsurface(
+            (VALUE_AREA_LEFT, 0, 300 - VALUE_AREA_LEFT, 100)
+        ).copy()
+
+        # WHEN a drag begins on the tab and the mouse moves left,
+        center = track_x0 + math.floor(0.5 * (track_x1 - track_x0) + 0.5)
+        ui.update(
+            [
+                _press((center, CENTER_Y)),
+                _motion((track_x0 + 95, CENTER_Y)),
+            ]
+        )
+
+        # THEN get_value() still reports the pre-drag value, while the
+        # value label area now renders different ink - the "54"-style
+        # preview (spec 12: the value label updates during drag):
+        assert slider.get_value() == 50
+        after = _draw(ui).subsurface(
+            (VALUE_AREA_LEFT, 0, 300 - VALUE_AREA_LEFT, 100)
+        )
+        assert pygame.image.tostring(before, "RGBA") != pygame.image.tostring(
+            after, "RGBA"
+        )
+
+    def test_release_after_a_drag_should_apply_the_value_and_fire_on_change_once(
+        self,
+        font_ready: None,
+        silent_audio_manager: audio.AudioManager,
+    ) -> None:
+        # GIVEN a drawn label-less Slider at value 50 with a callback:
+        theme = _theme(TEST_THEME_JSON)
+        seen: list[tuple[int, int, bool]] = []
+        slider, ui = _slider_ui(RECT, theme, initial_value=50)
+        slider.on_change = lambda new_value: seen.append(
+            (new_value, slider.get_value(), slider.enabled)
+        )
+        track_x0, track_x1 = _labelless_geometry(theme, ui, "50")
+        span = track_x1 - track_x0
+        center = track_x0 + math.floor(0.5 * span + 0.5)
+
+        # WHEN the user presses the tab, drags right, and releases
+        # far outside the Slider's rect (a drag is not a click - the
+        # release may happen anywhere, spec 12),
+        target = center + 10
+        ui.update(
+            [
+                _press((center, CENTER_Y)),
+                _motion((target, CENTER_Y)),
+                _release((1400, 900)),
+            ]
+        )
+
+        # THEN the value is applied, and on_change fires exactly once
+        # with the new value, seeing the new value via get_value():
+        expected = min(
+            max(math.floor((target - track_x0) * 100 / span + 0.5), 0), 100
+        )
+        assert slider.get_value() == expected
+        assert seen == [(expected, expected, True)]
+
+    def test_release_without_a_value_change_should_not_fire_on_change(
+        self, font_ready: None
+    ) -> None:
+        # GIVEN a drawn label-less Slider at value 50 with a callback:
+        theme = _theme(TEST_THEME_JSON)
+        changes: list[int] = []
+        slider, ui = _slider_ui(RECT, theme, initial_value=50)
+        slider.on_change = changes.append
+        track_x0, track_x1 = _labelless_geometry(theme, ui, "50")
+
+        # WHEN the user presses exactly on the tab center (the snap
+        # keeps value 50) and releases,
+        center = track_x0 + math.floor(0.5 * (track_x1 - track_x0) + 0.5)
+        ui.update(
+            [_press((center, CENTER_Y)), _release((center, CENTER_Y))]
+        )
+
+        # THEN nothing changed and no callback fired (spec 12: "only
+        # if the new value is different from the old value"):
+        assert slider.get_value() == 50
+        assert changes == []
+
+    def test_press_on_the_track_outside_the_tab_should_do_nothing(
+        self, font_ready: None, silent_audio_manager: audio.AudioManager
+    ) -> None:
+        # GIVEN a drawn label-less Slider at value 50:
+        theme = _theme(TEST_THEME_JSON)
+        changes: list[int] = []
+        slider, ui = _slider_ui(RECT, theme, initial_value=50)
+        slider.on_change = changes.append
+        track_x0, track_x1 = _labelless_geometry(theme, ui, "50")
+
+        # WHEN the left button presses on the track far from the tab,
+        # followed by motion and release,
+        ui.update(
+            [
+                _press((track_x0 + 10, CENTER_Y)),
+                _motion((track_x1 - 10, CENTER_Y)),
+                _release((track_x1 - 10, CENTER_Y)),
+            ]
+        )
+
+        # THEN the value is untouched - the track is not clickable
+        # (spec 12: "The track itself is not clickable!"):
+        assert slider.get_value() == 50
+        assert changes == []
+
+    @pytest.mark.parametrize("button", [2, 3])
+    def test_right_or_middle_press_on_the_tab_should_not_begin_a_drag(
+        self,
+        font_ready: None,
+        silent_audio_manager: audio.AudioManager,
+        button: int,
+    ) -> None:
+        # GIVEN a drawn label-less Slider at value 50:
+        theme = _theme(TEST_THEME_JSON)
+        changes: list[int] = []
+        slider, ui = _slider_ui(RECT, theme, initial_value=50)
+        slider.on_change = changes.append
+        track_x0, track_x1 = _labelless_geometry(theme, ui, "50")
+        center = track_x0 + math.floor(0.5 * (track_x1 - track_x0) + 0.5)
+
+        # WHEN a right- or middle-button press lands on the tab,
+        # followed by motion and a left release,
+        ui.update(
+            [
+                _press((center, CENTER_Y), button=button),
+                _motion((track_x1 - 10, CENTER_Y)),
+                _release((track_x1 - 10, CENTER_Y)),
+            ]
+        )
+
+        # THEN no drag happened (spec 12: only left-click drags):
+        assert slider.get_value() == 50
+        assert changes == []
+
+    def test_a_disabled_slider_should_ignore_tab_presses(
+        self, font_ready: None
+    ) -> None:
+        # GIVEN a drawn label-less Slider at value 50, then disabled:
+        theme = _theme(TEST_THEME_JSON)
+        changes: list[int] = []
+        slider, ui = _slider_ui(RECT, theme, initial_value=50)
+        slider.on_change = changes.append
+        track_x0, track_x1 = _labelless_geometry(theme, ui, "50")
+        center = track_x0 + math.floor(0.5 * (track_x1 - track_x0) + 0.5)
+        slider.enabled = False
+
+        # WHEN a full press/motion/release lands on the tab,
+        ui.update(
+            [
+                _press((center, CENTER_Y)),
+                _motion((track_x1 - 10, CENTER_Y)),
+                _release((track_x1 - 10, CENTER_Y)),
+            ]
+        )
+
+        # THEN nothing moved (spec 12: "If the Slider is disabled, the
+        # tab control does not respond to click/drag events"):
+        assert slider.get_value() == 50
+        assert changes == []
+
+    def test_a_min_equal_to_max_slider_should_not_allow_dragging(
+        self, font_ready: None, silent_audio_manager: audio.AudioManager
+    ) -> None:
+        # GIVEN a drawn degenerate-range Slider (5,5):
+        theme = _theme(TEST_THEME_JSON)
+        changes: list[int] = []
+        slider, ui = _slider_ui(
+            RECT, theme, min_value=5, max_value=5, initial_value=5
+        )
+        slider.on_change = changes.append
+        track_x0, track_x1 = _labelless_geometry(theme, ui, "5")
+        center = (track_x0 + track_x1) // 2
+
+        # WHEN a full press/motion/release lands on the centered tab,
+        ui.update(
+            [
+                _press((center, CENTER_Y)),
+                _motion((track_x1 - 10, CENTER_Y)),
+                _release((track_x1 - 10, CENTER_Y)),
+            ]
+        )
+
+        # THEN no value change event is possible (spec 12: Special
+        # case - min and max are equal):
+        assert slider.get_value() == 5
+        assert changes == []
+
+    def test_a_track_of_one_pixel_or_less_should_not_allow_dragging(
+        self, font_ready: None, silent_audio_manager: audio.AudioManager
+    ) -> None:
+        # GIVEN a display label pinned to 200pt: its 116px margin eats
+        # the entire track area (track_x1 < track_x0),
+        theme = _theme(TEST_THEME_JSON)
+        changes: list[int] = []
+        slider, ui = _slider_ui(RECT, theme, text="Vol", initial_value=0)
+        slider.on_change = changes.append
+        slider.set_font_point_size(200)
+        _draw(ui)
+        margin = _zero_margin(theme, 200)
+        tab_center = 100 + margin  # span<=0 fallback: track_x0
+
+        # WHEN a full press/motion/release lands on the stranded tab,
+        ui.update(
+            [
+                _press((tab_center, CENTER_Y)),
+                _motion((tab_center + 50, CENTER_Y)),
+                _release((tab_center + 50, CENTER_Y)),
+            ]
+        )
+
+        # THEN the tab cannot move and no value change is possible
+        # (spec 12: "If the track width is 1px or less, the tab cannot
+        # move"):
+        assert slider.get_value() == 0
+        assert changes == []
+
+    def test_set_value_mid_drag_should_warn_and_be_ignored(
+        self, font_ready: None, silent_audio_manager: audio.AudioManager
+    ) -> None:
+        # GIVEN a drag in progress on a label-less Slider at value 50:
+        theme = _theme(TEST_THEME_JSON)
+        slider, ui = _slider_ui(RECT, theme, initial_value=50)
+        track_x0, track_x1 = _labelless_geometry(theme, ui, "50")
+        span = track_x1 - track_x0
+        center = track_x0 + math.floor(0.5 * span + 0.5)
+        target = center + 10
+        ui.update([_press((center, CENTER_Y)), _motion((target, CENTER_Y))])
+
+        # WHEN set_value is invoked mid-drag,
+        records, sink_id = _warning_records()
+        try:
+            slider.set_value(75)
+        finally:
+            logger.remove(sink_id)
+
+        # THEN it is ignored with a warning, and the eventual release
+        # still applies the drag preview, not 75 (spec 12: "calls to
+        # set_range() and set_value() during a drag are ignored with a
+        # log warning"):
+        assert any("mid-drag" in message for message in records)
+        assert slider.get_value() == 50
+        ui.update([_release((target, CENTER_Y))])
+        expected = min(
+            max(math.floor((target - track_x0) * 100 / span + 0.5), 0), 100
+        )
+        assert slider.get_value() == expected
+
+    def test_set_range_mid_drag_should_warn_and_be_ignored(
+        self, font_ready: None, silent_audio_manager: audio.AudioManager
+    ) -> None:
+        # GIVEN a drag in progress on a label-less Slider at value 50:
+        theme = _theme(TEST_THEME_JSON)
+        slider, ui = _slider_ui(RECT, theme, initial_value=50)
+        track_x0, track_x1 = _labelless_geometry(theme, ui, "50")
+        center = track_x0 + math.floor(0.5 * (track_x1 - track_x0) + 0.5)
+        ui.update([_press((center, CENTER_Y)), _motion((center + 10, CENTER_Y))])
+
+        # WHEN set_range is invoked mid-drag,
+        records, sink_id = _warning_records()
+        try:
+            slider.set_range(0, 1000)
+        finally:
+            logger.remove(sink_id)
+
+        # THEN the range is unchanged and a warning was logged:
+        assert any("mid-drag" in message for message in records)
+        assert slider.get_min_value() == 0
+        assert slider.get_max_value() == 100
+
+    def test_disabling_mid_drag_should_finalize_then_disable(
+        self, font_ready: None, silent_audio_manager: audio.AudioManager
+    ) -> None:
+        # GIVEN a drag in progress on a label-less Slider at value 50:
+        theme = _theme(TEST_THEME_JSON)
+        seen: list[tuple[int, bool]] = []
+        slider, ui = _slider_ui(RECT, theme, initial_value=50)
+        slider.on_change = lambda new_value: seen.append(
+            (new_value, slider.enabled)
+        )
+        track_x0, track_x1 = _labelless_geometry(theme, ui, "50")
+        span = track_x1 - track_x0
+        center = track_x0 + math.floor(0.5 * span + 0.5)
+        target = center + 10
+        ui.update([_press((center, CENTER_Y)), _motion((target, CENTER_Y))])
+
+        # WHEN the Slider is disabled mid-drag,
+        slider.enabled = False
+
+        # THEN the drag finalized as though released: the value is
+        # applied, on_change fired while the Slider was still enabled,
+        # and only then did the disable take effect (spec 12: "If the
+        # Slider is disabled mid-drag, finalize the drag operation...
+        # Fire the on_change callback if needed, and then disable"):
+        expected = min(
+            max(math.floor((target - track_x0) * 100 / span + 0.5), 0), 100
+        )
+        assert slider.get_value() == expected
+        assert seen == [(expected, True)]
+        assert slider.enabled is False
+
+    def test_font_size_change_mid_drag_should_finalize_the_drag(
+        self, font_ready: None, silent_audio_manager: audio.AudioManager
+    ) -> None:
+        # GIVEN a drag in progress on a label-less Slider at value 50:
+        theme = _theme(TEST_THEME_JSON)
+        changes: list[int] = []
+        slider, ui = _slider_ui(RECT, theme, initial_value=50)
+        slider.on_change = changes.append
+        track_x0, track_x1 = _labelless_geometry(theme, ui, "50")
+        span = track_x1 - track_x0
+        center = track_x0 + math.floor(0.5 * span + 0.5)
+        target = center + 10
+        ui.update([_press((center, CENTER_Y)), _motion((target, CENTER_Y))])
+
+        # WHEN set_font_point_size changes the track geometry,
+        slider.set_font_point_size(20)
+
+        # THEN the drag finalized with the preview value (spec 12:
+        # "any setter that affects the dimensions of the slider track
+        # must have the same 'finalize if interrupted' handling"):
+        expected = min(
+            max(math.floor((target - track_x0) * 100 / span + 0.5), 0), 100
+        )
+        assert slider.get_value() == expected
+        assert changes == [expected]
+
+    def test_border_width_change_mid_drag_should_finalize_the_drag(
+        self, font_ready: None, silent_audio_manager: audio.AudioManager
+    ) -> None:
+        # GIVEN a drag in progress on a label-less Slider at value 50:
+        theme = _theme(TEST_THEME_JSON)
+        changes: list[int] = []
+        slider, ui = _slider_ui(RECT, theme, initial_value=50)
+        slider.on_change = changes.append
+        track_x0, track_x1 = _labelless_geometry(theme, ui, "50")
+        span = track_x1 - track_x0
+        center = track_x0 + math.floor(0.5 * span + 0.5)
+        target = center + 10
+        ui.update([_press((center, CENTER_Y)), _motion((target, CENTER_Y))])
+
+        # WHEN set_border_width changes the inner rect,
+        slider.set_border_width(5)
+
+        # THEN the drag finalized with the preview value:
+        expected = min(
+            max(math.floor((target - track_x0) * 100 / span + 0.5), 0), 100
+        )
+        assert slider.get_value() == expected
+        assert changes == [expected]
+
+    def test_rect_change_mid_drag_should_finalize_on_the_next_update_using_the_snapshot(
+        self, font_ready: None, silent_audio_manager: audio.AudioManager
+    ) -> None:
+        # GIVEN a drag in progress on a label-less Slider at value 50,
+        # on a private rect - the mutation below must not touch the
+        # shared RECT constant, which every other Slider here shares
+        # by reference (pygame.Rect is mutable!),
+        theme = _theme(TEST_THEME_JSON)
+        changes: list[int] = []
+        slider, ui = _slider_ui(
+            pygame.Rect(0, 0, 300, 100), theme, initial_value=50
+        )
+        slider.on_change = changes.append
+        track_x0, track_x1 = _labelless_geometry(theme, ui, "50")
+        span = track_x1 - track_x0
+        center = track_x0 + math.floor(0.5 * span + 0.5)
+        target = center + 10
+        ui.update([_press((center, CENTER_Y)), _motion((target, CENTER_Y))])
+
+        # WHEN a caller mutates the rect in place (no hook can catch
+        # this) and update() runs again,
+        slider.rect.width = 500
+        ui.update([])
+
+        # THEN the drag finalized using the snapshot layout - the
+        # preview value computed against the OLD geometry (spec 12:
+        # implementation note - rect snapshot):
+        expected = min(
+            max(math.floor((target - track_x0) * 100 / span + 0.5), 0), 100
+        )
+        assert slider.get_value() == expected
+        assert changes == [expected]
+
+    def test_on_change_may_invoke_set_value_after_finalizing(
+        self, font_ready: None, silent_audio_manager: audio.AudioManager
+    ) -> None:
+        # GIVEN a drag in progress whose callback resets the value:
+        theme = _theme(TEST_THEME_JSON)
+        slider, ui = _slider_ui(RECT, theme, initial_value=50)
+        slider.on_change = lambda new_value: slider.set_value(0)
+        track_x0, track_x1 = _labelless_geometry(theme, ui, "50")
+        center = track_x0 + math.floor(0.5 * (track_x1 - track_x0) + 0.5)
+        ui.update([_press((center, CENTER_Y)), _motion((center + 10, CENTER_Y))])
+
+        # WHEN the drag releases (the callback runs, then calls
+        # set_value - legal because the drag is already finalized),
+        records, sink_id = _warning_records()
+        try:
+            ui.update([_release((center + 10, CENTER_Y))])
+        finally:
+            logger.remove(sink_id)
+
+        # THEN the callback's set_value worked with no mid-drag
+        # warning (spec 12: "the drag operation is finalized before
+        # on_change is invoked"):
+        assert records == []
+        assert slider.get_value() == 0
+
+    def test_dragging_past_the_track_end_should_clamp_to_the_range_extent(
+        self, font_ready: None
+    ) -> None:
+        # GIVEN a drag in progress on a label-less Slider at value 50:
+        theme = _theme(TEST_THEME_JSON)
+        changes: list[int] = []
+        slider, ui = _slider_ui(RECT, theme, initial_value=50)
+        slider.on_change = changes.append
+        track_x0, track_x1 = _labelless_geometry(theme, ui, "50")
+        center = track_x0 + math.floor(0.5 * (track_x1 - track_x0) + 0.5)
+        ui.update([_press((center, CENTER_Y))])
+
+        # WHEN the mouse is dragged far past the right track end,
+        ui.update([_motion((1500, 500)), _release((1500, 500))])
+
+        # THEN the value clamps to max_value (spec 12: "moving the
+        # mouse past the track extent... clamps the tab control to the
+        # endpoint of the track"):
+        assert slider.get_value() == 100
+        assert changes == [100]
+
+    def test_tab_overhang_into_the_label_area_should_still_be_clickable(
+        self, font_ready: None, silent_audio_manager: audio.AudioManager
+    ) -> None:
+        # GIVEN a Slider whose tab overhangs into the label area at
+        # value 0 (tiny pinned font -> small margin -> tab left edge
+        # left of the label area boundary at x=100),
+        theme = _theme(TEST_THEME_JSON)
+        changes: list[int] = []
+        slider, ui = _slider_ui(RECT, theme, text="Vol", initial_value=0)
+        slider.on_change = changes.append
+        slider.set_font_point_size(8)
+        _draw(ui)
+        margin = _zero_margin(theme, 8)
+        track_x0 = 100 + margin
+
+        # WHEN the press lands 10px left of the track start - inside
+        # the label's display area but on the overhanging tab,
+        ui.update(
+            [
+                _press((track_x0 - 10, CENTER_Y)),
+                _motion((track_x0 + 50, CENTER_Y)),
+                _release((track_x0 + 50, CENTER_Y)),
+            ]
+        )
+
+        # THEN the drag began and completed - the overhang region is
+        # clickable (spec 12: "The region of the tab control that
+        # overhangs into the label's display area is still
+        # clickable"):
+        assert slider.get_value() > 0
+        assert len(changes) == 1
