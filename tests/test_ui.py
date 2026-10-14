@@ -82,7 +82,7 @@ def _loader_resolving_fonts(
 def _render_signature(font: pygame.font.Font) -> bytes:
     """Pixel output of a fixed probe string - a font fingerprint."""
     surface = font.render("Dust to Dominion 0123456789", True, (255, 255, 255))
-    return pygame.image.tostring(surface, "RGBA")
+    return pygame.image.tobytes(surface, "RGBA")
 
 
 class TestScale:
