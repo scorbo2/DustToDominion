@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 
 import pytest
+from loguru import logger
 
 from dtd import config, game_config
 from dtd.errors import ConfigError, InvalidConfigError
@@ -388,3 +389,111 @@ class TestSaveGameConfigSection:
         _write_game_json(hermetic_persistence, "{broken")
         with pytest.raises(ConfigError):
             game_config.save_game_config_section("mainWindow", MainWindowConfig(mode="windowed"))
+
+
+class TestSetThemeSetFont:
+    """The module-level theme/font setters (spec 04: Programmatic
+    theme/font setters, added by spec 13)."""
+
+    def _read_game_json(self, persistence_dir: Path) -> dict[str, object]:
+        return json.loads((persistence_dir / "game.json").read_text(encoding="utf-8"))
+
+    @pytest.mark.parametrize("value", ["default", None, "", "   "])
+    def test_setTheme_withDefaultNoneOrBlank_shouldStoreDefaultSentinel(
+        self, bootstrapped_persistence: Path, value: str | None
+    ) -> None:
+        # Spec 04: None, a blank/empty string, or the literal "default"
+        # all store the "default" sentinel.
+        game_config.set_theme(value)
+        assert self._read_game_json(bootstrapped_persistence)["theme"] == "default"
+
+    def test_setTheme_withResourceId_shouldStoreValueVerbatim(
+        self, bootstrapped_persistence: Path
+    ) -> None:
+        # Spec 04: any other value is stored verbatim.
+        game_config.set_theme("themes/blue.json")
+        assert self._read_game_json(bootstrapped_persistence)["theme"] == "themes/blue.json"
+
+    @pytest.mark.parametrize("value", ["default", None, "", "   "])
+    def test_setFont_withDefaultNoneOrBlank_shouldStoreDefaultSentinel(
+        self, bootstrapped_persistence: Path, value: str | None
+    ) -> None:
+        game_config.set_font(value)
+        assert self._read_game_json(bootstrapped_persistence)["font"] == "default"
+
+    def test_setFont_withResourceId_shouldStoreValueVerbatim(
+        self, bootstrapped_persistence: Path
+    ) -> None:
+        game_config.set_font("fonts/Iceland-Regular.ttf")
+        assert self._read_game_json(bootstrapped_persistence)[
+            "font"
+        ] == "fonts/Iceland-Regular.ttf"
+
+    def test_setTheme_shouldMergeIntoExistingFileWithoutDisturbingOtherKeys(
+        self, bootstrapped_persistence: Path
+    ) -> None:
+        # Spec 04: the setters patch one top-level key via the spec 01
+        # shallow merge - everything else in game.json survives.
+        _write_game_json(
+            bootstrapped_persistence,
+            {"mainWindow": {"mode": "windowed"}, "font": "fonts/Iceland-Regular.ttf"},
+        )
+        game_config.set_theme("themes/blue.json")
+        assert self._read_game_json(bootstrapped_persistence) == {
+            "mainWindow": {"mode": "windowed"},
+            "font": "fonts/Iceland-Regular.ttf",
+            "theme": "themes/blue.json",
+        }
+
+    def test_setTheme_withOSError_shouldLogWarningAndReturn(
+        self, hermetic_persistence: Path
+    ) -> None:
+        # GIVEN a persistence dir that was never bootstrapped: the config
+        # module never creates parent directories (spec 01), so the save
+        # fails with an OSError:
+        warning_records: list[str] = []
+        sink_id = logger.add(
+            lambda message: warning_records.append(str(message)), level="WARNING"
+        )
+        try:
+            # WHEN set_theme runs, THEN no exception escapes (spec 04:
+            # log a warning and continue)...
+            game_config.set_theme("themes/blue.json")
+        finally:
+            logger.remove(sink_id)
+        # ...the failure was logged, and nothing was written:
+        assert any("theme" in record.lower() for record in warning_records)
+        assert not (hermetic_persistence / "game.json").exists()
+
+    def test_setTheme_withConfigError_shouldLogWarningAndReturn(
+        self, hermetic_persistence: Path
+    ) -> None:
+        # GIVEN an existing game.json that cannot be merged (malformed
+        # JSON -> InvalidConfigError, a ConfigError subclass, spec 01):
+        _write_game_json(hermetic_persistence, "{broken")
+        warning_records: list[str] = []
+        sink_id = logger.add(
+            lambda message: warning_records.append(str(message)), level="WARNING"
+        )
+        try:
+            # WHEN set_theme runs, THEN no exception escapes (spec 04)...
+            game_config.set_theme("themes/blue.json")
+        finally:
+            logger.remove(sink_id)
+        # ...the failure was logged, and the broken file is untouched:
+        assert any("theme" in record.lower() for record in warning_records)
+        assert (hermetic_persistence / "game.json").read_text(encoding="utf-8") == "{broken"
+
+    def test_setFont_withOSError_shouldLogWarningAndReturn(
+        self, hermetic_persistence: Path
+    ) -> None:
+        warning_records: list[str] = []
+        sink_id = logger.add(
+            lambda message: warning_records.append(str(message)), level="WARNING"
+        )
+        try:
+            game_config.set_font("fonts/Iceland-Regular.ttf")
+        finally:
+            logger.remove(sink_id)
+        assert any("font" in record.lower() for record in warning_records)
+        assert not (hermetic_persistence / "game.json").exists()

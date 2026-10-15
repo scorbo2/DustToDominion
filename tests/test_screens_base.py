@@ -8,12 +8,19 @@ from dtd.screens.base import Screen, ScreenAction
 
 
 class TestScreenAction:
-    def test_screenAction_with_no_future_members_should_only_define_quit(self) -> None:
-        # GIVEN the enum as specified (spec 08: QUIT is the only action
-        # at the time of writing),
-        # THEN no other transition actions exist yet - new members only
-        # arrive when a spec asks for them:
-        assert list(ScreenAction) == [ScreenAction.QUIT]
+    def test_screenAction_should_define_quit_plus_the_spec13_transition_members(self) -> None:
+        # GIVEN the enum as specified (spec 08: Code layout, as amended
+        # by spec 13),
+        # THEN exactly QUIT plus the two SHOW_* transition members exist,
+        # with the literal values the spec pins:
+        assert list(ScreenAction) == [
+            ScreenAction.QUIT,
+            ScreenAction.SHOW_TITLE_SCREEN,
+            ScreenAction.SHOW_OPTIONS_SCREEN,
+        ]
+        assert ScreenAction.QUIT.value == 1
+        assert ScreenAction.SHOW_TITLE_SCREEN.value == 2
+        assert ScreenAction.SHOW_OPTIONS_SCREEN.value == 3
 
 
 class TestScreenBase:

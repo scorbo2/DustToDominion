@@ -8,7 +8,7 @@ status: active
 The Title Screen is shown when the game first starts up (assuming successful startup),
 and provides the user with a list of menu options.
 
-This spec currently only defines a single menu option: Exit Game. The intention is for
+This spec currently defines two menu options: Options and Exit Game. The intention is for
 this spec to be amended as future screens and game modes are introduced.
 
 The Title Screen lives in the `dtd/screens/title.py` module. The `screens/` subdirectory was introduced
@@ -71,53 +71,45 @@ future amendment may add caching.*
 
 ### Buttons and options
 
-The following Title Screen menu options should be displayed in a single vertical column,
+The following Title Screen menu options are displayed in a single vertical column,
 both horizontally and vertically centered in the lower half of the screen:
 
-- Font selector (ChoiceList widget)
-- Theme selector (ChoiceList widget)
+- Options (Button widget)
 - Exit Game (Button widget)
 
-Each widget should be 400px wide by 45px tall with a 4-pixel border (all units in design space).
-There should be 35px of empty space between each option.
+Each widget is 400px wide by 45px tall with a border width of `MENU_OPTION_BORDER_WIDTH`
+(all units in design space). There is 24px of empty space between each option
+(`MENU_OPTION_SPACING`).
 
-The font selector should default to the resource id returned from `get_font_resource_id()`,
-with a fallback to the sentinel display value "(Default font)" if `get_font_resource_id()`
-returns "default". (Constants for sentinel values are in `game_constants.py` - don't hard-code them).
+*Amended 2026-10-14 per spec 13 (Options Screen): the font and theme ChoiceLists that
+were temporarily placed on the Title Screen for manual testing have been removed - they
+now live on the Options screen (spec 13), where their changes are persisted. The spacing
+between options was reduced from 35px to 24px and the button border width from 4 to 2
+(both via the `game_constants.py` constants).*
 
-The theme selector should default to the name of the currently configured theme, or the sentinel
-display value "(Default theme)" if no theme is explicitly configured, or if the configured theme
-is not present in the return of `get_theme_resource_ids()`, or if a theme is configured but invalid.
+The Options button is labeled `OPTIONS_LABEL` and appears above the Exit Game button.
+When clicked, it triggers a screen transition to the Options screen (spec 13). Any
+playing music is stopped as part of that transition (see Integration with the main
+game loop).
 
-For both font and theme, the display name should be the full resource id, such as `fonts/Iceland-Regular.ttf`
-or `themes/blue.json` (or the sentinel display value, as described above).
+The Exit Game button has a callback that triggers a screen transition to exit the game.
 
-Note: ChoiceList offers an `initial_index` option which can be used to easily set the initially-selected item.
-
-Selection callbacks should be provided to each of the font and theme selectors to respond to
-changes. The title screen should adopt changes immediately WITHOUT persisting them.
-This is done by tracking the current theme and font **at the TitleScreen** level. A new Theme
-instance can be created on each change, and handed to UIManager, which in turn hands it to
-each widget on every call to `draw()`. Widgets do not store themes, so the change takes effect
-on the next frame. This also means that changing these values ONLY affects the TitleScreen.
-A future OptionsScreen will wire up a propagation mechanism to publish changes to other screens.
-These ChoiceLists are here only temporarily for testing purposes, and will be removed from
-the TitleScreen when the OptionsScreen spec doc is implemented. Note that the sentinel display
-values should be mapped to "default".
-
-The Exit Game button should have a callback that triggers a screen transition to exit the game.
-
-All widgets should use the Title Screen's currently-configured font.
+All widgets use the Title Screen's currently-configured font.
 
 ## Title Screen audio
 
 If a music track with an id matching any of `TITLE_SCREEN_MUSIC_IDS` exists, it is played
-on loop while the title screen is visible. Leaving the title screen by any means (currently
-Exit Game is the only means) stops the track. The first resource found using the list of
-candidate IDs is used.
+on loop while the title screen is visible. Leaving the title screen by any means (Exit Game,
+its ESC shortcut, the Options transition, or the window close) stops the track. The first
+resource found using the list of candidate IDs is used.
 
 Note: the Title Screen does not probe for these resource ids directly. Instead, use the
 helper function `play_music_first_match` in the AudioManager class.
+
+*Amended 2026-10-14 per spec 13 (Options Screen): the `TitleScreen` class itself requests
+this playback in its constructor - previously `main.run()` did it. Each screen class is
+responsible for starting its own music; the main loop is responsible for stopping music
+on any transition between screens.*
 
 ## Code layout
 
@@ -130,12 +122,20 @@ class Screen:
     def draw(self, surface) -> None: ...                  # background, title, then self._ui.draw
 
 class ScreenAction(Enum):
-    QUIT = 1  # Only ScreenAction for now
+    QUIT = 1
+    SHOW_TITLE_SCREEN = 2
+    SHOW_OPTIONS_SCREEN = 3
 ```
 
+*Amended 2026-10-14 per spec 13 (Options Screen): `SHOW_TITLE_SCREEN` and
+`SHOW_OPTIONS_SCREEN` were added to the enum for screen-to-screen transitions.*
+
 Each Screen implementation should accept a `Theme` instance for its constructor, and create
-its own UIManager. `Theme` is application state, resolved from config at startup (spec 04).
-One instance, same rationale as the `AudioManager` singleton. But `UIManager`'s only real
+its own UIManager. `Theme` is application state, resolved from config (spec 04).
+*Amended 2026-10-14 per spec 13 (Options Screen): the previous "one instance, built at
+startup" wording is outdated - main builds a new `Theme` from the latest config before
+each Screen is instantiated, so every screen starts with the latest theme and font.*
+`UIManager`'s only real
 state is the widget list, which is inherently screen-scoped. Per-screen UIManagers therefore
 can be used to manage the list of widgets for each Screen implementation. Future screens
 can follow the pattern that we create here with TitleScreen.
@@ -145,9 +145,6 @@ The `TitleScreen` class, roughly sketched:
 ```python
 class TitleScreen:
     def __init__(self, theme, resource_loader, rng: random.Random | None = None):
-      # accept the supplied theme as a default, but we will
-      # create and use our own local instance using the given
-      # resource_loader whenever font or theme are changed.
       # if the given rng is not null, use it for random starfield generation (unit testing)
 ```
 
@@ -166,13 +163,22 @@ of ESC currently being done in the main loop can move to TitleScreen during impl
 Screens that require animation (like TitleScreen's starfield) or widget handling can be fed
 via `current_screen.update()` and `current_screen.draw()`.
 
-Main's `run()` should build a `Theme` once from config, and pass it into each screen's constructor.
-TitleScreen will use this initially, but create and use a new instance if font or theme is
-changed in our ChoiceLists.
+Main builds a new `Theme` from the latest game config before each Screen is instantiated -
+including the initial Title screen at startup - and supplies it to the screen's constructor,
+so that each screen transition automatically gets the latest configuration.
+(Amended 2026-10-14 per spec 13: the previous "build a Theme once in run()" wording is
+outdated, as is the note about TitleScreen rebuilding its Theme when the ChoiceLists
+change - those ChoiceLists now live on the Options screen.)
 
-The main loop should invoke `stop_music()` on any screen transition. At the time of writing,
-the only transition possible is Exit Game, but a precedent should be established for future
-screens that stopping screen music is the main loop's responsibility.
+The main game loop creates a new instance of a screen on any transition to that screen,
+including the initial display of the Title screen on startup. A dispatch table in
+`main.py` maps each transition `ScreenAction` to a factory that constructs the
+corresponding Screen instance. (Added 2026-10-14 per spec 13.)
+
+The main loop invokes `stop_music()` on any screen transition. Each screen class is
+responsible for starting its own music (amended 2026-10-14 per spec 13); stopping it on
+transition remains the main loop's responsibility - a precedent established when the only
+transition possible was Exit Game, and honored by every transition since.
 
 ## Testing
 
@@ -191,21 +197,15 @@ New tests specifically for Title Screen behavior (these stay in this doc):
 - If a music track with an id matching any of `TITLE_SCREEN_MUSIC_IDS` exists, it is loaded and played.
   - the search order is respected based on the constant's list order.
   - if none resolve, no music plays.
+  - the playback is requested by the TitleScreen constructor (amended 2026-10-14 per spec 13).
 - The game title is centered in the upper half of the screen.
 - Draw caching (added 2026-10-07, performance follow-up; title-text caching
   removed 2026-10-11 per spec 10 - the Label-based title renders per frame):
   - a background image is scaled exactly once per surface size, and re-scaled when the size changes.
-- ChoiceLists for font and theme appear horizontally and vertically centered in the lower half of the screen.
-- Selecting "(Default theme)" should map to "default" for theme.
-- Selecting "(Default font)" should map to "default" for font.
-- The theme ChoiceList is initialized based on the configured theme as reported by `get_theme_resource_id()`.
-  If an item is configured, it is preselected. Otherwise, the sentinel is preselected. If an item
-  is configured but is not valid (or is not present in the list), the sentinel is preselected.
-- The font ChoiceList is initialized based on the return value of `get_font_resource_id()`.
-  If "default" is returned, use the sentinel display value.
-  Otherwise, display the returned resource id as-is.
-- Changing the current font takes effect on next frame; no persistence to game config file.
-- Changing the current theme takes effect on next frame; no persistence to game config file.
+- An Options button appears above the Exit Game button. (Added 2026-10-14 per spec 13.)
+- Only two Buttons are created and displayed. (Added 2026-10-14 per spec 13.)
+- Clicking the Options button triggers a transition to the Options screen. (Added 2026-10-14 per spec 13.)
+- A new Theme object is created from config before each screen transition. (Added 2026-10-14 per spec 13.)
 - An "Exit Game" button is centered in the lower half of the screen.
 - Clicking the "Exit Game" button triggers a screen transition to exit the game.
 - Hitting ESC on the title screen is equivalent to clicking the Exit Game button.
@@ -216,8 +216,6 @@ New tests specifically for Title Screen behavior (these stay in this doc):
 - If music is configured, does it play while the Title Screen is visible?
 - If a background image is configured, is it stretched/scaled to fit the screen?
 - If no background image is configured, is a starfield generated? Do the stars oscillate brightness in grayscale?
-- Can the font be changed with immediate effect?
-- Can the theme be changed with immediate effect?
 - Is ESC wired up as a shortcut for the Exit Game action?
 - Does the game exit cleanly when Exit Game is selected?
 - "Sprite" rename was completed successfully:
@@ -270,8 +268,24 @@ staged implementation plan is suggested (each stage should include tests):
      title renders per frame. This doc was flipped to `proposed` while the amendment is
      carried out (spec 10 dev plan stage 8); flip it back to `active` on completion.
      **Completed 2026-10-11**: the title is now a `Label` drawn as screen chrome between
-     the background and the menu (the spec's paint order), not registered in the menu's
-     widget list; `_draw_title`/`_rendered_title` and the title-text caching tests are
-     gone, replaced by structural + pixel pins in `TestTitleScreenTitle` at the design
-     resolution. Full suite: 753 passed.
+      the background and the menu (the spec's paint order), not registered in the menu's
+      widget list; `_draw_title`/`_rendered_title` and the title-text caching tests are
+      gone, replaced by structural + pixel pins in `TestTitleScreenTitle` at the design
+      resolution. Full suite: 753 passed.
+ 11. Amendment 2026-10-14 per spec 13 (Options Screen): remove the temporary font/theme
+      ChoiceLists and all screen-local Theme-rebuild machinery (the sentinel/initial-index
+      behavior moves to the Options screen, sourced from the app theme config); add an
+      Options button above the Exit Game button (`OPTIONS_LABEL`); reduce
+      `MENU_OPTION_SPACING` 35 -> 24 and `MENU_OPTION_BORDER_WIDTH` 4 -> 2; extend
+      `ScreenAction` with `SHOW_TITLE_SCREEN = 2` and `SHOW_OPTIONS_SCREEN = 3`; move
+      title-music startup into the `TitleScreen` constructor; main now builds a fresh
+      `Theme` from the latest config before every screen instantiation and dispatches
+      screen transitions through a table in `main.py`. Flip this doc to `proposed` while
+      the amendment is carried out; flip it back to `active` on completion.
+      **Completed 2026-10-14**: the choosers and the `_apply_choices`/`_map_choice`/
+      `_initial_choice_index` machinery are gone; the menu column is exactly Options +
+      Exit Game; `TitleScreen` requests its own music in its constructor; `main.py`
+      gained `_SCREEN_FACTORIES`/`_create_screen` and builds a fresh `Theme` from the
+      latest config for every screen, including the startup Title screen. Full suite:
+      941 passed.
 

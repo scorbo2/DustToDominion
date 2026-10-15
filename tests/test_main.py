@@ -1,6 +1,7 @@
 """Unit tests for the application entry point (spec 00 / 01 / 02 / 03 / 04 / 05 integration)."""
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pygame
@@ -8,6 +9,7 @@ import pytest
 from loguru import logger
 
 from dtd import audio
+from dtd import game_config
 from dtd import game_constants
 from dtd import main as app_main
 from dtd import resource_loader
@@ -18,6 +20,7 @@ from dtd.errors import (
     UnsupportedResourceVersionError,
 )
 from dtd.game_config import GameConfig
+from dtd.screens.base import ScreenAction
 
 
 @pytest.fixture
@@ -32,11 +35,19 @@ def synthesized_project(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path
     theme/font values use the built-in defaults without ever querying the
     loader (spec 04), so one text file is all ``run()`` needs to get to a
     window.
+
+    A synthesized ``themes/blue.json`` rides along so a test can persist
+    it as the configured theme and watch a fresh screen resolve it
+    through the real loader (spec 13: Testing - the Title screen picks
+    up theme changes after the back transition).
     """
     project = tmp_path / "fake-project"
     resource = project / "resources/data/hermetic.txt"
     resource.parent.mkdir(parents=True)
     resource.write_text("synthesized for a hermetic test", encoding="utf-8")
+    theme = project / "resources/themes/blue.json"
+    theme.parent.mkdir(parents=True, exist_ok=True)
+    theme.write_text(json.dumps({"foregroundSelected": "FF0000"}), encoding="utf-8")
     monkeypatch.setattr(resource_loader, "game_directory", lambda: project)
     return project
 
@@ -186,8 +197,10 @@ class TestRun:
         synthesized_project: Path,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        # GIVEN spies on the AudioManager methods startup and the loop are
-        # supposed to call (spec 08: Title Screen audio / Integration):
+        # GIVEN spies on the AudioManager methods the screens and the
+        # loop are supposed to call (spec 08: Title Screen audio /
+        # Integration, as amended by spec 13 - each screen starts its
+        # own music, the loop stops it):
         calls: list[str] = []
         real_play = audio.AudioManager.play_music_first_match
         real_stop = audio.AudioManager.stop_music
@@ -219,15 +232,362 @@ class TestRun:
         # WHEN run() executes,
         exit_code = app_main.run()
 
-        # THEN the title music candidates were offered in spec order at
-        # startup, and the loop stopped the music on exit. (No track
-        # resolves in this hermetic project, so the play is a no-op -
-        # what is pinned here is the wiring, not the sound.)
+        # THEN the TitleScreen constructor offered the title music
+        # candidates in spec order, and the loop stopped the music on
+        # exit. (No track resolves in this hermetic project, so the play
+        # is a no-op - what is pinned here is the wiring, not the sound.)
         assert exit_code == 0
         assert calls == [
             f"play:{tuple(game_constants.TITLE_SCREEN_MUSIC_IDS)}",
             "stop",
         ]
+
+    def test_should_buildFreshThemeFromConfig_beforeEachScreenInstantiation(
+        self,
+        bootstrapped_persistence: Path,
+        synthesized_project: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        # GIVEN spies recording every config load and Theme build, in
+        # order (spec 08: Integration, as amended by spec 13 - a new
+        # Theme is created from config before each screen is
+        # instantiated):
+        order: list[str] = []
+        real_load = app_main.game_config.load_game_config
+
+        def spy_load():
+            order.append("config")
+            return real_load()
+
+        monkeypatch.setattr(app_main.game_config, "load_game_config", spy_load)
+
+        real_theme = app_main.Theme
+
+        def spy_theme(theme_value: str, font_value: str, loader) -> app_main.Theme:
+            order.append("theme")
+            return real_theme(theme_value, font_value, loader)
+
+        monkeypatch.setattr(app_main, "Theme", spy_theme)
+
+        # AND a TitleScreen that requests the Options transition on its
+        # first handle() call (standing in for an Options-button click -
+        # the button itself is pinned in test_title_screen.py):
+        handle_calls = 0
+        real_title_screen = app_main.TitleScreen
+
+        class TransitioningTitleScreen(real_title_screen):
+            def handle(self, events):
+                nonlocal handle_calls
+                handle_calls += 1
+                if handle_calls == 1:
+                    return ScreenAction.SHOW_OPTIONS_SCREEN
+                return super().handle(events)
+
+        monkeypatch.setattr(app_main, "TitleScreen", TransitioningTitleScreen)
+
+        # AND an OptionsScreen spy so the dispatch target is observable:
+        created_screens: list[str] = []
+        real_options_screen = app_main.OptionsScreen
+
+        class RecordingOptionsScreen(real_options_screen):
+            def __init__(self, *args, **kwargs):
+                super().__init__(*args, **kwargs)
+                created_screens.append("options")
+
+        monkeypatch.setattr(app_main, "OptionsScreen", RecordingOptionsScreen)
+
+        # AND a QUIT event posted on the SECOND pump, so the loop exits
+        # after the transition has completed:
+        pump_count = 0
+        real_event_get = pygame.event.get
+
+        def event_get(*args, **kwargs):
+            nonlocal pump_count
+            pump_count += 1
+            if pump_count == 2:
+                pygame.event.post(pygame.event.Event(pygame.QUIT))
+            return real_event_get(*args, **kwargs)
+
+        monkeypatch.setattr(pygame.event, "get", event_get)
+
+        # WHEN run() executes,
+        exit_code = app_main.run()
+
+        # THEN the loop dispatched SHOW_OPTIONS_SCREEN to a brand-new
+        # OptionsScreen instance, and every screen - the startup Title
+        # screen AND the transitioned-to Options screen - got its Theme
+        # built from a config load immediately before construction:
+        assert exit_code == 0
+        assert created_screens == ["options"]
+        assert order == ["config", "config", "theme", "config", "theme"]
+
+    def test_should_transitionBackToFreshTitleScreen_onOptionsBackAction_andStopMusicOnBothTransitions(
+        self,
+        bootstrapped_persistence: Path,
+        synthesized_project: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        # GIVEN spies on the AudioManager methods the screens and the
+        # loop call (spec 13: Testing - screen transitions in both
+        # directions stop any music that was playing):
+        calls: list[str] = []
+        real_play = audio.AudioManager.play_music_first_match
+        real_stop = audio.AudioManager.stop_music
+
+        def spy_play(self, ids):
+            calls.append(f"play:{tuple(ids)}")
+            return real_play(self, ids)
+
+        def spy_stop(self):
+            calls.append("stop")
+            return real_stop(self)
+
+        monkeypatch.setattr(audio.AudioManager, "play_music_first_match", spy_play)
+        monkeypatch.setattr(audio.AudioManager, "stop_music", spy_stop)
+
+        # AND screen subclasses that record every instantiation and drive
+        # the round trip: the first Title screen requests Options on its
+        # first handle() call, and the Options screen requests Title on
+        # its first handle() call - standing in for button clicks whose
+        # own wiring is pinned in test_title_screen.py and
+        # test_options_screen.py:
+        created_screens: list[str] = []
+        real_title_screen = app_main.TitleScreen
+        real_options_screen = app_main.OptionsScreen
+        title_handle_calls = 0
+
+        class TransitioningTitleScreen(real_title_screen):
+            def __init__(self, *args, **kwargs):
+                super().__init__(*args, **kwargs)
+                created_screens.append("title")
+
+            def handle(self, events):
+                nonlocal title_handle_calls
+                title_handle_calls += 1
+                if title_handle_calls == 1:
+                    return ScreenAction.SHOW_OPTIONS_SCREEN
+                return super().handle(events)
+
+        options_handle_calls = 0
+
+        class TransitioningOptionsScreen(real_options_screen):
+            def __init__(self, *args, **kwargs):
+                super().__init__(*args, **kwargs)
+                created_screens.append("options")
+
+            def handle(self, events):
+                nonlocal options_handle_calls
+                options_handle_calls += 1
+                if options_handle_calls == 1:
+                    return ScreenAction.SHOW_TITLE_SCREEN
+                return super().handle(events)
+
+        monkeypatch.setattr(app_main, "TitleScreen", TransitioningTitleScreen)
+        monkeypatch.setattr(app_main, "OptionsScreen", TransitioningOptionsScreen)
+
+        # AND a QUIT event posted on the third pump, after the round
+        # trip has completed:
+        pump_count = 0
+        real_event_get = pygame.event.get
+
+        def event_get(*args, **kwargs):
+            nonlocal pump_count
+            pump_count += 1
+            if pump_count == 3:
+                pygame.event.post(pygame.event.Event(pygame.QUIT))
+            return real_event_get(*args, **kwargs)
+
+        monkeypatch.setattr(pygame.event, "get", event_get)
+
+        # WHEN run() executes,
+        exit_code = app_main.run()
+
+        # THEN the loop dispatched the round trip through the factory
+        # table - startup Title screen, a brand-new OptionsScreen, and a
+        # brand-new second TitleScreen (spec 08: Integration, as amended
+        # by spec 13),
+        assert exit_code == 0
+        assert created_screens == ["title", "options", "title"]
+        # ...every screen started its own music in its constructor
+        # (spec 08 as amended by spec 13; spec 13: Audio handling), the
+        # loop stopped the music on BOTH transitions (title->options and
+        # options->title), and the finally-block stop covers the loop
+        # exit:
+        title_play = f"play:{tuple(game_constants.TITLE_SCREEN_MUSIC_IDS)}"
+        options_play = f"play:{tuple(game_constants.OPTIONS_SCREEN_MUSIC_IDS)}"
+        assert calls == [title_play, "stop", options_play, "stop", title_play, "stop"]
+
+    def test_when_optionsScreenChangesTheme_shouldBuildNextTitleScreenWithThatTheme(
+        self,
+        bootstrapped_persistence: Path,
+        synthesized_project: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        # GIVEN spies that capture every TitleScreen instance the loop
+        # builds, and screen subclasses driving one round trip,
+        created_titles: list[app_main.TitleScreen] = []
+        created_screens: list[str] = []
+        real_title_screen = app_main.TitleScreen
+        real_options_screen = app_main.OptionsScreen
+        title_handle_calls = 0
+        options_handle_calls = 0
+
+        class TransitioningTitleScreen(real_title_screen):
+            def __init__(self, *args, **kwargs):
+                super().__init__(*args, **kwargs)
+                created_titles.append(self)
+                created_screens.append("title")
+
+            def handle(self, events):
+                nonlocal title_handle_calls
+                title_handle_calls += 1
+                if title_handle_calls == 1:
+                    return ScreenAction.SHOW_OPTIONS_SCREEN
+                return super().handle(events)
+
+        class TransitioningOptionsScreen(real_options_screen):
+            def __init__(self, *args, **kwargs):
+                super().__init__(*args, **kwargs)
+                created_screens.append("options")
+
+            def handle(self, events):
+                nonlocal options_handle_calls
+                options_handle_calls += 1
+                if options_handle_calls == 1:
+                    # Stand in for a theme ChoiceList selection: the
+                    # real callback persists through this very call
+                    # (spec 13: Interactions and persistence).
+                    game_config.set_theme("themes/blue.json")
+                    return ScreenAction.SHOW_TITLE_SCREEN
+                return super().handle(events)
+
+        monkeypatch.setattr(app_main, "TitleScreen", TransitioningTitleScreen)
+        monkeypatch.setattr(app_main, "OptionsScreen", TransitioningOptionsScreen)
+
+        # AND a QUIT event posted on the third pump, after the round
+        # trip has completed:
+        pump_count = 0
+        real_event_get = pygame.event.get
+
+        def event_get(*args, **kwargs):
+            nonlocal pump_count
+            pump_count += 1
+            if pump_count == 3:
+                pygame.event.post(pygame.event.Event(pygame.QUIT))
+            return real_event_get(*args, **kwargs)
+
+        monkeypatch.setattr(pygame.event, "get", event_get)
+
+        # WHEN run() executes,
+        exit_code = app_main.run()
+
+        # THEN the round trip happened,
+        assert exit_code == 0
+        assert created_screens == ["title", "options", "title"]
+        # ...the startup Title screen used the built-in default theme,
+        assert (
+            created_titles[0]._theme.get_theme_resource_id()
+            == game_constants.DEFAULT_THEME_VALUE
+        )
+        # ...and the second Title screen was built from the freshly
+        # persisted config, resolving the theme chosen on the Options
+        # screen through the real loader (spec 13: Testing - "the Title
+        # screen should use the new values when transitioning back"):
+        assert (
+            created_titles[1]._theme.get_theme_resource_id()
+            == "themes/blue.json"
+        )
+
+    def test_when_screenRequestsUndispatchedAction_shouldLogErrorAndKeepRenderingFrames(
+        self,
+        bootstrapped_persistence: Path,
+        synthesized_project: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        # GIVEN a wiring bug: SHOW_OPTIONS_SCREEN is removed from the
+        # dispatch table (monkeypatch restores it after the test) while
+        # a TitleScreen subclass keeps requesting it for three frames -
+        # the exact "screen asks for a screen this build cannot provide"
+        # scenario the loop must survive. The regression this pins: the
+        # old code ``continue``d past rendering AND the frame limiter,
+        # so a screen stuck on an undispatched action spun the CPU on an
+        # invisible loop instead of keeping a frame-limited one:
+        monkeypatch.delitem(
+            app_main._SCREEN_FACTORIES, ScreenAction.SHOW_OPTIONS_SCREEN
+        )
+        handle_calls = 0
+        real_title_screen = app_main.TitleScreen
+
+        class StuckTitleScreen(real_title_screen):
+            def handle(self, events):
+                nonlocal handle_calls
+                handle_calls += 1
+                if handle_calls <= 3:
+                    return ScreenAction.SHOW_OPTIONS_SCREEN
+                return super().handle(events)
+
+        monkeypatch.setattr(app_main, "TitleScreen", StuckTitleScreen)
+
+        # AND counters on the two steps only a COMPLETE frame reaches:
+        # the present and the frame limiter.
+        frame_steps: list[str] = []
+        real_flip = pygame.display.flip
+
+        def flip_spy(*args, **kwargs):
+            frame_steps.append("flip")
+            return real_flip(*args, **kwargs)
+
+        monkeypatch.setattr(pygame.display, "flip", flip_spy)
+        # ``pygame.time.Clock`` is a C type that refuses both method
+        # patching and subclassing, so swap the module attribute for a
+        # pure-Python counting wrapper (the loop looks the class up at
+        # call time and only ever constructs it and calls ``tick``):
+        real_clock = pygame.time.Clock
+
+        class CountingClock:
+            def __init__(self, *args, **kwargs):
+                self._real = real_clock(*args, **kwargs)
+
+            def tick(self, *args, **kwargs):
+                frame_steps.append("tick")
+                return self._real.tick(*args, **kwargs)
+
+        monkeypatch.setattr(pygame.time, "Clock", CountingClock)
+
+        # AND a QUIT event posted on the fourth pump, after the three
+        # stuck frames have run:
+        pump_count = 0
+        real_event_get = pygame.event.get
+
+        def event_get(*args, **kwargs):
+            nonlocal pump_count
+            pump_count += 1
+            if pump_count == 4:
+                pygame.event.post(pygame.event.Event(pygame.QUIT))
+            return real_event_get(*args, **kwargs)
+
+        monkeypatch.setattr(pygame.event, "get", event_get)
+
+        error_records: list[str] = []
+        sink_id = logger.add(
+            lambda message: error_records.append(str(message)), level="ERROR"
+        )
+        try:
+            # WHEN run() executes,
+            exit_code = app_main.run()
+        finally:
+            logger.remove(sink_id)
+
+        # THEN the wiring bug was logged once per stuck frame...
+        assert exit_code == 0
+        assert len(error_records) == 3
+        assert all("unhandled" in record for record in error_records)
+        # ...every stuck frame still presented and frame-limited (the
+        # fourth pump's QUIT exits before rendering):
+        assert frame_steps == ["flip", "tick"] * 3
+        # ...the loop survived all four pumps, and the game kept
+        # running on the original screen the whole time:
+        assert handle_calls == 4
 
     def test_when_unrelated_pygame_modules_fail_should_open_window_and_exit_cleanly(
         self,
@@ -295,15 +655,18 @@ class TestRun:
 
 
 class TestStartupOrder:
-    def test_should_run_config_then_pygame_then_resources_then_ui_then_audio_then_window(
+    def test_should_run_config_then_pygame_then_resources_then_audio_then_window_then_screenWithTheme(
         self, bootstrapped_persistence: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        # Spec 03 startup order as amended by specs 04 and 05: (1) config,
-        # (2) pygame init, (3) resource loading, (4) UI initialization
-        # (Theme + UIManager), (5) AudioManager initialization, (6) main
-        # window. Record the call order without replacing the real work
-        # (pygame must really init for the event loop to run under the
-        # dummy driver).
+        # Spec 03 startup order as amended by specs 04, 05, and 13:
+        # (1) config, (2) pygame init, (3) resource loading,
+        # (4) AudioManager initialization, (5) main window, (6) the
+        # startup screen - and the Theme is no longer built once before
+        # the window: the screen factory builds it from a fresh config
+        # load right before each screen is instantiated (spec 04, as
+        # amended by spec 13). Record the call order without replacing
+        # the real work (pygame must really init for the event loop to
+        # run under the dummy driver).
         order: list[str] = []
 
         def spy_load_config():
@@ -359,7 +722,17 @@ class TestStartupOrder:
         monkeypatch.setattr(pygame.event, "get", event_get)
 
         assert app_main.run() == 0
-        assert order == ["config", "pygame", "resources", "ui", "audio", "window"]
+        # The trailing "config", "ui" pair is the startup screen's
+        # factory: a fresh config load, then the Theme it feeds.
+        assert order == [
+            "config",
+            "pygame",
+            "resources",
+            "audio",
+            "window",
+            "config",
+            "ui",
+        ]
 
 
 class TestInitPygame:
