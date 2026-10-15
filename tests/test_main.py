@@ -311,6 +311,100 @@ class TestRun:
         assert created_screens == ["options"]
         assert order == ["config", "config", "theme", "config", "theme"]
 
+    def test_should_transitionBackToFreshTitleScreen_onOptionsBackAction_andStopMusicOnBothTransitions(
+        self,
+        bootstrapped_persistence: Path,
+        synthesized_project: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        # GIVEN spies on the AudioManager methods the screens and the
+        # loop call (spec 13: Testing - screen transitions in both
+        # directions stop any music that was playing):
+        calls: list[str] = []
+        real_play = audio.AudioManager.play_music_first_match
+        real_stop = audio.AudioManager.stop_music
+
+        def spy_play(self, ids):
+            calls.append(f"play:{tuple(ids)}")
+            return real_play(self, ids)
+
+        def spy_stop(self):
+            calls.append("stop")
+            return real_stop(self)
+
+        monkeypatch.setattr(audio.AudioManager, "play_music_first_match", spy_play)
+        monkeypatch.setattr(audio.AudioManager, "stop_music", spy_stop)
+
+        # AND screen subclasses that record every instantiation and drive
+        # the round trip: the first Title screen requests Options on its
+        # first handle() call, and the Options screen requests Title on
+        # its first handle() call - standing in for button clicks whose
+        # own wiring is pinned in test_title_screen.py and
+        # test_options_screen.py:
+        created_screens: list[str] = []
+        real_title_screen = app_main.TitleScreen
+        real_options_screen = app_main.OptionsScreen
+        title_handle_calls = 0
+
+        class TransitioningTitleScreen(real_title_screen):
+            def __init__(self, *args, **kwargs):
+                super().__init__(*args, **kwargs)
+                created_screens.append("title")
+
+            def handle(self, events):
+                nonlocal title_handle_calls
+                title_handle_calls += 1
+                if title_handle_calls == 1:
+                    return ScreenAction.SHOW_OPTIONS_SCREEN
+                return super().handle(events)
+
+        options_handle_calls = 0
+
+        class TransitioningOptionsScreen(real_options_screen):
+            def __init__(self, *args, **kwargs):
+                super().__init__(*args, **kwargs)
+                created_screens.append("options")
+
+            def handle(self, events):
+                nonlocal options_handle_calls
+                options_handle_calls += 1
+                if options_handle_calls == 1:
+                    return ScreenAction.SHOW_TITLE_SCREEN
+                return super().handle(events)
+
+        monkeypatch.setattr(app_main, "TitleScreen", TransitioningTitleScreen)
+        monkeypatch.setattr(app_main, "OptionsScreen", TransitioningOptionsScreen)
+
+        # AND a QUIT event posted on the third pump, after the round
+        # trip has completed:
+        pump_count = 0
+        real_event_get = pygame.event.get
+
+        def event_get(*args, **kwargs):
+            nonlocal pump_count
+            pump_count += 1
+            if pump_count == 3:
+                pygame.event.post(pygame.event.Event(pygame.QUIT))
+            return real_event_get(*args, **kwargs)
+
+        monkeypatch.setattr(pygame.event, "get", event_get)
+
+        # WHEN run() executes,
+        exit_code = app_main.run()
+
+        # THEN the loop dispatched the round trip through the factory
+        # table - startup Title screen, a brand-new OptionsScreen, and a
+        # brand-new second TitleScreen (spec 08: Integration, as amended
+        # by spec 13),
+        assert exit_code == 0
+        assert created_screens == ["title", "options", "title"]
+        # ...each TitleScreen started its own music in its constructor,
+        # the loop stopped the music on BOTH transitions
+        # (title->options and options->title), and the finally-block stop
+        # covers the loop exit:
+        title_play = f"play:{tuple(game_constants.TITLE_SCREEN_MUSIC_IDS)}"
+        assert calls == [title_play, "stop", "stop", title_play, "stop"]
+
     def test_when_unrelated_pygame_modules_fail_should_open_window_and_exit_cleanly(
         self,
         bootstrapped_persistence: Path,

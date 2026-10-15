@@ -136,6 +136,10 @@ OPTIONS_SCREEN_TEST_SPEECH = "audio/sfx/test_speech.wav"
 #: added by spec 13). Clicking it transitions to the Options screen; it also
 #: labels the Options screen's title Label (spec 13: Exit control and title).
 OPTIONS_LABEL = "Options"
+#: Label of the Options screen's "< Back" button (spec 13: Exit control and
+#: title). Clicking it - or pressing ESC on the Options screen - transitions
+#: back to the Title screen.
+OPTIONS_LABEL_BACK = "< Back"
 #: Label of the Title Screen's Exit Game button (spec 08: Buttons and
 #: options). ESC on the Title Screen is equivalent to clicking it.
 EXIT_GAME_LABEL = "Exit Game"

@@ -264,11 +264,21 @@ The tests need to use the `mixer_ready` + `init_audio_manager` pattern to proces
    "< Back" button and no other widget. No background handling
    or music at this point - just focus on the transition from
    Title Screen to Options Screen and back.
+   **Completed 2026-10-14**: the "< Back" button (80x40 at (24,24),
+   `OPTIONS_LABEL_BACK`, `MENU_OPTION_BORDER_WIDTH`) and the ESC
+   shortcut both return `SHOW_TITLE_SCREEN`; the dispatch table
+   round-trips Title -> Options -> Title with fresh instances and
+   music stopped on both transitions. Full suite: 946 passed.
+   Note: the "Options" title Label from "Exit control and title"
+   is not part of this stage ("no other widget") and was not
+   assigned to any later stage - it is folded into stage 3 below.
 3. Implement background handling (image scaling/stretching, with
    starfield generator as a fallback). Implement background music
    on the Options screen and ensure that it terminates when
    transitioning back to the Title screen. Still no UI widgets
-   at this stage, other than the back button.
+   at this stage, other than the back button and the "Options"
+   title Label (reassigned here from stage 2, which left it
+   unassigned).
 4. Implement control group 1: the audio controls. Handle
    screen placement of this group, ensure the initial state
    of all controls matches current audio config, and wire up
