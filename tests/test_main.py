@@ -498,6 +498,97 @@ class TestRun:
             == "themes/blue.json"
         )
 
+    def test_when_screenRequestsUndispatchedAction_shouldLogErrorAndKeepRenderingFrames(
+        self,
+        bootstrapped_persistence: Path,
+        synthesized_project: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        # GIVEN a wiring bug: SHOW_OPTIONS_SCREEN is removed from the
+        # dispatch table (monkeypatch restores it after the test) while
+        # a TitleScreen subclass keeps requesting it for three frames -
+        # the exact "screen asks for a screen this build cannot provide"
+        # scenario the loop must survive. The regression this pins: the
+        # old code ``continue``d past rendering AND the frame limiter,
+        # so a screen stuck on an undispatched action spun the CPU on an
+        # invisible loop instead of keeping a frame-limited one:
+        monkeypatch.delitem(
+            app_main._SCREEN_FACTORIES, ScreenAction.SHOW_OPTIONS_SCREEN
+        )
+        handle_calls = 0
+        real_title_screen = app_main.TitleScreen
+
+        class StuckTitleScreen(real_title_screen):
+            def handle(self, events):
+                nonlocal handle_calls
+                handle_calls += 1
+                if handle_calls <= 3:
+                    return ScreenAction.SHOW_OPTIONS_SCREEN
+                return super().handle(events)
+
+        monkeypatch.setattr(app_main, "TitleScreen", StuckTitleScreen)
+
+        # AND counters on the two steps only a COMPLETE frame reaches:
+        # the present and the frame limiter.
+        frame_steps: list[str] = []
+        real_flip = pygame.display.flip
+
+        def flip_spy(*args, **kwargs):
+            frame_steps.append("flip")
+            return real_flip(*args, **kwargs)
+
+        monkeypatch.setattr(pygame.display, "flip", flip_spy)
+        # ``pygame.time.Clock`` is a C type that refuses both method
+        # patching and subclassing, so swap the module attribute for a
+        # pure-Python counting wrapper (the loop looks the class up at
+        # call time and only ever constructs it and calls ``tick``):
+        real_clock = pygame.time.Clock
+
+        class CountingClock:
+            def __init__(self, *args, **kwargs):
+                self._real = real_clock(*args, **kwargs)
+
+            def tick(self, *args, **kwargs):
+                frame_steps.append("tick")
+                return self._real.tick(*args, **kwargs)
+
+        monkeypatch.setattr(pygame.time, "Clock", CountingClock)
+
+        # AND a QUIT event posted on the fourth pump, after the three
+        # stuck frames have run:
+        pump_count = 0
+        real_event_get = pygame.event.get
+
+        def event_get(*args, **kwargs):
+            nonlocal pump_count
+            pump_count += 1
+            if pump_count == 4:
+                pygame.event.post(pygame.event.Event(pygame.QUIT))
+            return real_event_get(*args, **kwargs)
+
+        monkeypatch.setattr(pygame.event, "get", event_get)
+
+        error_records: list[str] = []
+        sink_id = logger.add(
+            lambda message: error_records.append(str(message)), level="ERROR"
+        )
+        try:
+            # WHEN run() executes,
+            exit_code = app_main.run()
+        finally:
+            logger.remove(sink_id)
+
+        # THEN the wiring bug was logged once per stuck frame...
+        assert exit_code == 0
+        assert len(error_records) == 3
+        assert all("unhandled" in record for record in error_records)
+        # ...every stuck frame still presented and frame-limited (the
+        # fourth pump's QUIT exits before rendering):
+        assert frame_steps == ["flip", "tick"] * 3
+        # ...the loop survived all four pumps, and the game kept
+        # running on the original screen the whole time:
+        assert handle_calls == 4
+
     def test_when_unrelated_pygame_modules_fail_should_open_window_and_exit_cleanly(
         self,
         bootstrapped_persistence: Path,

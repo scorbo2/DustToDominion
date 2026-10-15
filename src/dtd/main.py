@@ -177,9 +177,12 @@ def _run_event_loop(
 
     Per frame: (1) pump events, (2) ``current_screen.update(events)`` -
     widgets react and their callbacks fire, (3) ``current_screen.handle``
-    - QUIT ends the loop, any other action transitions to a brand-new
-    instance of the requested screen via the dispatch table, (4)
-    app-level events via ``_pump_app_events`` - QUIT ends the loop,
+    - QUIT ends the loop, a dispatched action transitions to a brand-new
+    instance of the requested screen via the dispatch table, and an
+    undispatched action is logged as a wiring bug and the frame
+    carries on rendering (a screen stuck returning one would otherwise
+    spin the loop past the frame limiter), (4) app-level events via
+    ``_pump_app_events`` - QUIT ends the loop,
     (5) clear the screen (black default background), (6) game rendering
     - none yet, it arrives with a future spec, (7)
     ``current_screen.draw(screen)``, (8) ``pygame.display.flip()`` to
@@ -197,19 +200,21 @@ def _run_event_loop(
             action = current_screen.handle(events)
             if action is ScreenAction.QUIT:
                 return
-            if action is not None:
-                if action not in _SCREEN_FACTORIES:
-                    # A screen asking for a screen this build cannot
-                    # provide is a wiring bug, not a game-over event:
-                    # log loudly and keep playing.
-                    logger.error(
-                        "screen requested unhandled ScreenAction {}; ignoring",
-                        action,
-                    )
-                else:
-                    audio.get_audio_manager().stop_music()
-                    current_screen = _create_screen(action, resource_loader)
+            if action in _SCREEN_FACTORIES:
+                audio.get_audio_manager().stop_music()
+                current_screen = _create_screen(action, resource_loader)
                 continue
+            if action is not None:
+                # A screen asking for a screen this build cannot
+                # provide is a wiring bug, not a game-over event: log
+                # loudly and keep playing - and keep playing means
+                # keep RENDERING, so a screen that requests it every
+                # frame stays frame-limited instead of spinning the
+                # CPU on an invisible loop.
+                logger.error(
+                    "screen requested unhandled ScreenAction {}; ignoring",
+                    action,
+                )
             if _pump_app_events(window, events):
                 return
             screen = pygame.display.get_surface()
