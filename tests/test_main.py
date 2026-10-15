@@ -1,6 +1,7 @@
 """Unit tests for the application entry point (spec 00 / 01 / 02 / 03 / 04 / 05 integration)."""
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pygame
@@ -8,6 +9,7 @@ import pytest
 from loguru import logger
 
 from dtd import audio
+from dtd import game_config
 from dtd import game_constants
 from dtd import main as app_main
 from dtd import resource_loader
@@ -33,11 +35,19 @@ def synthesized_project(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path
     theme/font values use the built-in defaults without ever querying the
     loader (spec 04), so one text file is all ``run()`` needs to get to a
     window.
+
+    A synthesized ``themes/blue.json`` rides along so a test can persist
+    it as the configured theme and watch a fresh screen resolve it
+    through the real loader (spec 13: Testing - the Title screen picks
+    up theme changes after the back transition).
     """
     project = tmp_path / "fake-project"
     resource = project / "resources/data/hermetic.txt"
     resource.parent.mkdir(parents=True)
     resource.write_text("synthesized for a hermetic test", encoding="utf-8")
+    theme = project / "resources/themes/blue.json"
+    theme.parent.mkdir(parents=True, exist_ok=True)
+    theme.write_text(json.dumps({"foregroundSelected": "FF0000"}), encoding="utf-8")
     monkeypatch.setattr(resource_loader, "game_directory", lambda: project)
     return project
 
@@ -406,6 +416,87 @@ class TestRun:
         title_play = f"play:{tuple(game_constants.TITLE_SCREEN_MUSIC_IDS)}"
         options_play = f"play:{tuple(game_constants.OPTIONS_SCREEN_MUSIC_IDS)}"
         assert calls == [title_play, "stop", options_play, "stop", title_play, "stop"]
+
+    def test_when_optionsScreenChangesTheme_shouldBuildNextTitleScreenWithThatTheme(
+        self,
+        bootstrapped_persistence: Path,
+        synthesized_project: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        # GIVEN spies that capture every TitleScreen instance the loop
+        # builds, and screen subclasses driving one round trip,
+        created_titles: list[app_main.TitleScreen] = []
+        created_screens: list[str] = []
+        real_title_screen = app_main.TitleScreen
+        real_options_screen = app_main.OptionsScreen
+        title_handle_calls = 0
+        options_handle_calls = 0
+
+        class TransitioningTitleScreen(real_title_screen):
+            def __init__(self, *args, **kwargs):
+                super().__init__(*args, **kwargs)
+                created_titles.append(self)
+                created_screens.append("title")
+
+            def handle(self, events):
+                nonlocal title_handle_calls
+                title_handle_calls += 1
+                if title_handle_calls == 1:
+                    return ScreenAction.SHOW_OPTIONS_SCREEN
+                return super().handle(events)
+
+        class TransitioningOptionsScreen(real_options_screen):
+            def __init__(self, *args, **kwargs):
+                super().__init__(*args, **kwargs)
+                created_screens.append("options")
+
+            def handle(self, events):
+                nonlocal options_handle_calls
+                options_handle_calls += 1
+                if options_handle_calls == 1:
+                    # Stand in for a theme ChoiceList selection: the
+                    # real callback persists through this very call
+                    # (spec 13: Interactions and persistence).
+                    game_config.set_theme("themes/blue.json")
+                    return ScreenAction.SHOW_TITLE_SCREEN
+                return super().handle(events)
+
+        monkeypatch.setattr(app_main, "TitleScreen", TransitioningTitleScreen)
+        monkeypatch.setattr(app_main, "OptionsScreen", TransitioningOptionsScreen)
+
+        # AND a QUIT event posted on the third pump, after the round
+        # trip has completed:
+        pump_count = 0
+        real_event_get = pygame.event.get
+
+        def event_get(*args, **kwargs):
+            nonlocal pump_count
+            pump_count += 1
+            if pump_count == 3:
+                pygame.event.post(pygame.event.Event(pygame.QUIT))
+            return real_event_get(*args, **kwargs)
+
+        monkeypatch.setattr(pygame.event, "get", event_get)
+
+        # WHEN run() executes,
+        exit_code = app_main.run()
+
+        # THEN the round trip happened,
+        assert exit_code == 0
+        assert created_screens == ["title", "options", "title"]
+        # ...the startup Title screen used the built-in default theme,
+        assert (
+            created_titles[0]._theme.get_theme_resource_id()
+            == game_constants.DEFAULT_THEME_VALUE
+        )
+        # ...and the second Title screen was built from the freshly
+        # persisted config, resolving the theme chosen on the Options
+        # screen through the real loader (spec 13: Testing - "the Title
+        # screen should use the new values when transitioning back"):
+        assert (
+            created_titles[1]._theme.get_theme_resource_id()
+            == "themes/blue.json"
+        )
 
     def test_when_unrelated_pygame_modules_fail_should_open_window_and_exit_cleanly(
         self,

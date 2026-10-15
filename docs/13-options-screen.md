@@ -303,10 +303,21 @@ The tests need to use the `mixer_ready` + `init_audio_manager` pattern to proces
    shared `dtd/screens/background.py` helper (both screens), and the
    base `Screen` now owns `_esc_action` + `_pending_action`. Full
    suite: 969 passed.
-5. Implement control group 2: the UI controls. Handle screen
-   placement of this group, and wire up the font and theme
-   choosers. All changes should be immediate, and persistence
-   to game config should also be immediate.
+ 5. Implement control group 2: the UI controls. Handle screen
+    placement of this group, and wire up the font and theme
+    choosers. All changes should be immediate, and persistence
+    to game config should also be immediate.
+    **Completed 2026-10-14**: the "UI options" section label plus the
+    font and theme ChoiceLists (320x36, `MENU_OPTION_BORDER_WIDTH`)
+    centered in the right screen half with the group's top edge aligned
+    to group 1's (via the approved `_layout_column` split), 32px
+    margins; preselection from the Theme accessors with the sentinel
+    fallbacks (unconfigured, invalid, or absent values); selections
+    persist immediately via `game_config.set_font`/`set_theme` and
+    rebuild the screen-local Theme so the change lands next frame; the
+    back transition hands the new values to a fresh TitleScreen (main
+    rebuilds each screen's Theme from the freshly persisted config).
+    Full suite: 981 passed.
 6. Final verification pass. Do all tests pass? Are all acceptance
    criteria met? Review the code for any TODO comments, or comments
    that reference dev plan stages in future tense (for example:

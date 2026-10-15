@@ -1,15 +1,22 @@
 """The Options Screen (spec 13: Options Screen).
 
-Spec 13 dev plan stage 4: control group 1 - the audio controls. The
-"Audio options" section title plus, for each audio category (game sfx,
-UI sfx, speech, music), a Checkbox/Slider pair stacked vertically.
+Spec 13 dev plan stage 5: control group 2 - the UI options. The "UI
+options" section title plus the font and theme ChoiceLists (formerly
+on the Title screen), horizontally centered in the right half of the
+screen with their top edge aligned to group 1's. Selecting an item
+persists it immediately via ``game_config.set_font``/``set_theme`` and
+rebuilds the screen-local Theme so the change lands on the very next
+frame (spec 13: Interactions and persistence).
+
+Stage 4 stays: control group 1 - the audio controls. The "Audio
+options" section title plus, for each audio category (game sfx, UI
+sfx, speech, music), a Checkbox/Slider pair stacked vertically.
 Initial state comes from the AudioManager getters; every change is
-immediate in memory *and* on disk (spec 13: Interactions and
-persistence) - the callbacks write straight to the AudioManager, whose
-property setters validate, apply, and persist (spec 05). Every volume
-change plays that category's sample sound (the music category has
-none), and re-enabling music re-requests the Options track. Group 2
-(the UI choosers) arrives in stage 5.
+immediate in memory *and* on disk - the callbacks write straight to
+the AudioManager, whose property setters validate, apply, and persist
+(spec 05). Every volume change plays that category's sample sound (the
+music category has none), and re-enabling music re-requests the
+Options track.
 
 Stage 3 machinery stays: the shared ``Background`` helper (first
 ``OPTIONS_SCREEN_BACKGROUND_IMAGE_IDS`` image that resolves, scaled
@@ -45,7 +52,7 @@ from typing import Final
 
 import pygame
 
-from dtd import audio, game_constants
+from dtd import audio, game_config, game_constants
 from dtd.audio import AudioManager
 from dtd.resource_loader import ResourceLoader
 from dtd.screens.background import Background
@@ -53,6 +60,7 @@ from dtd.screens.base import Screen, ScreenAction
 from dtd.ui import Theme, UIManager, Widget
 from dtd.widgets.button import Button
 from dtd.widgets.checkbox import Checkbox
+from dtd.widgets.choice_list import ChoiceList
 from dtd.widgets.label import Label
 from dtd.widgets.slider import Slider
 
@@ -64,11 +72,13 @@ _BACK_BUTTON_RECT = pygame.Rect(24, 24, 80, 40)
 #: title): fixed 100x50, rect top-left (128, 24).
 _TITLE_LABEL_RECT = pygame.Rect(128, 24, 100, 50)
 
-#: Control group 1 geometry in design space (spec 13: UI controls -
-#: group 1): the section title size, the shared Checkbox/Slider size,
-#: and the fixed margin between controls in the centered column.
+#: Control group geometry in design space (spec 13: UI controls -
+#: groups 1 and 2): the shared section-title size, the Checkbox/Slider
+#: size, the ChoiceList size, and the fixed margin between controls in
+#: each centered column.
 _SECTION_LABEL_SIZE = (480, 48)
 _CONTROL_SIZE = (480, 36)
+_CHOICE_LIST_SIZE = (320, 36)
 _CONTROL_MARGIN = 32
 
 
@@ -126,9 +136,8 @@ _AUDIO_ROWS: Final[_AudioRowSpec, ...] = (
 
 
 class OptionsScreen(Screen):
-    """The options screen (spec 13) - stage 4: exit control, title
-    Label, background, music, and control group 1; group 2 arrives in
-    stage 5."""
+    """The options screen (spec 13) - stage 5: exit control, title
+    Label, background, music, and control groups 1 and 2."""
 
     #: ESC is equivalent to clicking the "< Back" button (spec 13:
     #: Interactions and persistence).
@@ -142,6 +151,11 @@ class OptionsScreen(Screen):
     ) -> None:
         self._theme = theme
         self._resource_loader = resource_loader
+        # The config-style values the choosers edit. They start from the
+        # incoming Theme's accessors, so the screen never probes
+        # resources itself (the Title screen chooser precedent).
+        self._current_theme_value = theme.get_theme_resource_id()
+        self._current_font_value = theme.get_font_resource_id()
         self._ui = UIManager(theme)
         # Exactly one background is active (spec 13: Background): the
         # first image resource that resolves, or a generated starfield.
@@ -152,9 +166,14 @@ class OptionsScreen(Screen):
             game_constants.OPTIONS_SCREEN_BACKGROUND_IMAGE_IDS,
             rng if rng is not None else random.Random(),
         )
+        # Group 2 aligns its top edge to group 1's (spec 13: UI controls -
+        # group 2); _build_audio_controls lays group 1 out first and
+        # records the value.
+        self._group1_top: int = 0
         self._build_back_button()
         self._build_title_label()
         self._build_audio_controls()
+        self._build_ui_controls()
         # Spec 13: Audio handling - each screen starts its own music
         # (spec 08: Title Screen audio, as amended by spec 13); the main
         # loop stops it on any transition. Whether a resolved track
@@ -221,12 +240,7 @@ class OptionsScreen(Screen):
         Checkbox's checked state.
         """
         manager = audio.get_audio_manager()
-        section = Label(
-            pygame.Rect(0, 0, *_SECTION_LABEL_SIZE),
-            text=game_constants.OPTIONS_LABEL_AUDIO_OPTIONS,
-            border_width=0,
-        )
-        section.set_opaque(False)
+        section = self._build_section_label(game_constants.OPTIONS_LABEL_AUDIO_OPTIONS)
         controls: list[Widget] = [section]
         for row in _AUDIO_ROWS:
             enabled = getattr(manager, f"{row.config_prefix}_enabled")
@@ -254,26 +268,6 @@ class OptionsScreen(Screen):
             controls.extend((checkbox, slider))
         self._layout_group_centered_in_left_half(controls)
         self._ui.widgets.extend(controls)
-
-    def _layout_group_centered_in_left_half(self, controls: list[Widget]) -> None:
-        """Center the whole control group horizontally and vertically
-        within the left half of the screen, stacked in one column with
-        the fixed margin between controls (spec 13: UI controls -
-        group 1).
-        """
-        total_height = (
-            sum(control.rect.height for control in controls)
-            + _CONTROL_MARGIN * (len(controls) - 1)
-        )
-        widest = max(control.rect.width for control in controls)
-        left = (game_constants.DESIGN_W // 2 - widest) // 2
-        top = (game_constants.DESIGN_H - total_height) // 2
-        y = top
-        for control in controls:
-            control.rect = pygame.Rect(
-                left, y, control.rect.width, control.rect.height
-            )
-            y += control.rect.height + _CONTROL_MARGIN
 
     def _on_enabled_toggled(
         self, row: _AudioRowSpec, checkbox: Checkbox, slider: Slider
@@ -303,3 +297,173 @@ class OptionsScreen(Screen):
         setattr(manager, f"{row.config_prefix}_volume", value)
         if row.sample_sfx_id is not None and row.sample_player is not None:
             row.sample_player(manager, row.sample_sfx_id)
+
+    # -- control group 2: UI (spec 13: UI controls - group 2) ---------------
+
+    def _build_ui_controls(self) -> None:
+        """Create and register control group 2: the "UI options" section
+        title and the font and theme ChoiceLists (spec 13: UI controls -
+        group 2), preselected from the incoming Theme's accessors.
+
+        The loader's id lists are sentinel-first by contract (spec 03, as
+        amended by spec 08), so an unconfigured or unresolvable value
+        always lands on the sentinel.
+        """
+        font_ids = self._resource_loader.get_font_resource_ids()
+        theme_ids = self._resource_loader.get_theme_resource_ids()
+        section = self._build_section_label(game_constants.OPTIONS_LABEL_UI_OPTIONS)
+        font_list = ChoiceList(
+            pygame.Rect(0, 0, *_CHOICE_LIST_SIZE),
+            items=font_ids,
+            initial_index=self._initial_choice_index(
+                font_ids,
+                self._current_font_value,
+                game_constants.DEFAULT_FONT_DISPLAY_VALUE,
+                game_constants.DEFAULT_FONT_VALUE,
+            ),
+            border_width=game_constants.MENU_OPTION_BORDER_WIDTH,
+            selection_callback=self._on_font_choice,
+        )
+        theme_list = ChoiceList(
+            pygame.Rect(0, 0, *_CHOICE_LIST_SIZE),
+            items=theme_ids,
+            initial_index=self._initial_choice_index(
+                theme_ids,
+                self._current_theme_value,
+                game_constants.DEFAULT_THEME_DISPLAY_VALUE,
+                game_constants.DEFAULT_THEME_VALUE,
+            ),
+            border_width=game_constants.MENU_OPTION_BORDER_WIDTH,
+            selection_callback=self._on_theme_choice,
+        )
+        controls = [section, font_list, theme_list]
+        self._layout_group_in_right_half_at_group1_top(controls)
+        self._ui.widgets.extend(controls)
+
+    def _build_section_label(self, text: str) -> Label:
+        """A group section title Label (spec 13: UI controls): fixed
+        480x48, left-aligned (the Label default), non-opaque, no border.
+        """
+        section = Label(
+            pygame.Rect(0, 0, *_SECTION_LABEL_SIZE),
+            text=text,
+            border_width=0,
+        )
+        section.set_opaque(False)
+        return section
+
+    @staticmethod
+    def _initial_choice_index(
+        items: list[str], current_value: str, sentinel: str, default_value: str
+    ) -> int:
+        """Which chooser item to preselect (spec 13: Testing).
+
+        A "default" value - meaning the Theme's font/theme chains fell
+        through to fallbacks - maps to the sentinel display value. A
+        resolved value that is absent from the list falls back to the
+        sentinel too, which the loader always places first.
+        """
+        wanted = sentinel if current_value == default_value else current_value
+        return items.index(wanted) if wanted in items else 0
+
+    @staticmethod
+    def _map_choice(display_value: str, sentinel: str, default_value: str) -> str:
+        """Map a chooser display value back to a config-style value.
+
+        Display names are full resource ids and need no translation;
+        only the sentinel maps back to the "default" sentinel value.
+        """
+        return default_value if display_value == sentinel else display_value
+
+    def _on_font_choice(self, display_value: str) -> None:
+        """Adopt the chosen font immediately: persist it (spec 13:
+        Interactions and persistence) and rebuild the screen-local
+        Theme so the change lands on the next frame."""
+        self._current_font_value = self._map_choice(
+            display_value,
+            game_constants.DEFAULT_FONT_DISPLAY_VALUE,
+            game_constants.DEFAULT_FONT_VALUE,
+        )
+        game_config.set_font(self._current_font_value)
+        self._apply_current_theme_and_font()
+
+    def _on_theme_choice(self, display_value: str) -> None:
+        """Adopt the chosen theme immediately: persist it and rebuild
+        the screen-local Theme (see ``_on_font_choice``)."""
+        self._current_theme_value = self._map_choice(
+            display_value,
+            game_constants.DEFAULT_THEME_DISPLAY_VALUE,
+            game_constants.DEFAULT_THEME_VALUE,
+        )
+        game_config.set_theme(self._current_theme_value)
+        self._apply_current_theme_and_font()
+
+    def _apply_current_theme_and_font(self) -> None:
+        """Rebuild the screen-local Theme from the current values and
+        hand it to the UIManager (spec 13: Interactions and
+        persistence - "takes effect on next frame": widgets receive the
+        theme from the UIManager on every draw, and the background cache
+        is Theme-independent and stays valid).
+
+        The Title screen's old ``_apply_choices`` never persisted; this
+        screen persists first and then applies - and main builds the
+        *next* screen's Theme from the freshly persisted config, so the
+        change propagates on the back transition (spec 13: Testing).
+        """
+        self._theme = Theme(
+            self._current_theme_value,
+            self._current_font_value,
+            self._resource_loader,
+        )
+        self._ui.set_theme(self._theme)
+
+    # -- control group layout (spec 13: UI controls - groups 1 and 2) ------
+
+    def _layout_group_centered_in_left_half(self, controls: list[Widget]) -> None:
+        """Center the whole control group horizontally and vertically
+        within the left half of the screen (spec 13: UI controls -
+        group 1), and remember its top edge: group 2 aligns to it so
+        the two section titles sit on one line.
+        """
+        top = (game_constants.DESIGN_H - self._column_height(controls)) // 2
+        left = (game_constants.DESIGN_W // 2 - self._widest(controls)) // 2
+        self._group1_top = top
+        self._layout_column(controls, left, top)
+
+    def _layout_group_in_right_half_at_group1_top(self, controls: list[Widget]) -> None:
+        """Center the control group horizontally within the right half
+        of the screen, its top edge aligned with group 1's top edge
+        (spec 13: UI controls - group 2: "NOT vertically centered ...
+        top edge ... aligned").
+        """
+        left = game_constants.DESIGN_W // 2 + (
+            game_constants.DESIGN_W // 2 - self._widest(controls)
+        ) // 2
+        self._layout_column(controls, left, self._group1_top)
+
+    @staticmethod
+    def _layout_column(controls: list[Widget], left: int, top: int) -> None:
+        """Stack controls in one column from ``top``, with the fixed
+        margin between each (the group anchor is the caller's call).
+        """
+        y = top
+        for control in controls:
+            control.rect = pygame.Rect(
+                left, y, control.rect.width, control.rect.height
+            )
+            y += control.rect.height + _CONTROL_MARGIN
+
+    @staticmethod
+    def _column_height(controls: list[Widget]) -> int:
+        """The total height of a laid-out column: every control plus the
+        margins between them.
+        """
+        return (
+            sum(control.rect.height for control in controls)
+            + _CONTROL_MARGIN * (len(controls) - 1)
+        )
+
+    @staticmethod
+    def _widest(controls: list[Widget]) -> int:
+        """The width the column centers itself around."""
+        return max(control.rect.width for control in controls)

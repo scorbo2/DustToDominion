@@ -25,6 +25,7 @@ from dtd.screens.starfield import Star
 from dtd.ui import Theme, UIManager
 from dtd.widgets.button import Button
 from dtd.widgets.checkbox import Checkbox
+from dtd.widgets.choice_list import ChoiceList
 from dtd.widgets.label import Label
 from dtd.widgets.slider import Slider
 
@@ -58,6 +59,48 @@ class _StubImageLoader(ResourceLoader):
         return self._images.get(resource_id)
 
 
+class _StubChooserLoader(ResourceLoader):
+    """A loader offering exactly one font and one theme - sentinel-first,
+    as the real accessors guarantee (spec 03, as amended by spec 08) -
+    and resolving both (spec 13: UI controls - group 2 chooser wiring;
+    the spec 08 Title screen precedent).
+
+    ``list_configured_ids=False`` hides the configured ids from the
+    listing while still resolving them, simulating a configured value
+    that is absent from the chooser list (spec 13: Testing).
+    """
+
+    FONT_ID = "fonts/Iceland-Regular.ttf"
+    THEME_ID = "themes/blue.json"
+
+    def __init__(self, list_configured_ids: bool = True) -> None:
+        super().__init__()
+        self._list_configured_ids = list_configured_ids
+
+    def get_font_resource_ids(self) -> list[str]:
+        ids = [game_constants.DEFAULT_FONT_DISPLAY_VALUE]
+        if self._list_configured_ids:
+            ids.append(self.FONT_ID)
+        return ids
+
+    def get_theme_resource_ids(self) -> list[str]:
+        ids = [game_constants.DEFAULT_THEME_DISPLAY_VALUE]
+        if self._list_configured_ids:
+            ids.append(self.THEME_ID)
+        return ids
+
+    def get_json_resource(self, resource_id: str):
+        if resource_id == self.THEME_ID:
+            # A theme that is impossible to miss: red selected foreground.
+            return {"foregroundSelected": "FF0000"}
+        return None
+
+    def get_font_resource(self, resource_id: str, size: int):
+        if resource_id == self.FONT_ID:
+            return pygame.font.Font(None, size)
+        return None
+
+
 def _back_button(screen: OptionsScreen) -> Button:
     """The screen's first registered widget, asserted to be a Button."""
     button = screen._ui.widgets[0]
@@ -86,22 +129,25 @@ class TestOptionsScreenConstruction:
         assert first._ui.theme is theme
         assert first._ui is not second._ui
 
-    def test_constructor_shouldRegisterExitControlThenTitleLabelThenGroup1(
+    def test_constructor_shouldRegisterExitControlThenTitleLabelThenGroup1ThenGroup2(
         self, font_ready: None
     ) -> None:
         # GIVEN the screen,
         screen = OptionsScreen(_default_theme(), ResourceLoader())
 
-        # THEN its widget list is the back Button, the title Label, and
-        # exactly the nine group 1 controls - no group 2 widgets until
-        # dev plan stage 5 (spec 13 dev plan stage 4):
-        assert len(screen._ui.widgets) == 11
+        # THEN its widget list is the back Button, the title Label, the
+        # nine group 1 controls, then the group 2 section Label and the
+        # font and theme ChoiceLists (spec 13: UI controls - group 2):
+        assert len(screen._ui.widgets) == 14
         assert isinstance(screen._ui.widgets[0], Button)
         assert isinstance(screen._ui.widgets[1], Label)
         assert isinstance(screen._ui.widgets[2], Label)
         for index in range(3, 11, 2):
             assert isinstance(screen._ui.widgets[index], Checkbox)
             assert isinstance(screen._ui.widgets[index + 1], Slider)
+        assert isinstance(screen._ui.widgets[11], Label)
+        assert isinstance(screen._ui.widgets[12], ChoiceList)
+        assert isinstance(screen._ui.widgets[13], ChoiceList)
 
 
 class TestOptionsScreenExitControl:
@@ -537,7 +583,7 @@ class TestOptionsScreenAudioControls:
         total_height = sum(heights) + 32 * 8
         left = (game_constants.DESIGN_W // 2 - 480) // 2
         expected_y = (game_constants.DESIGN_H - total_height) // 2
-        controls = screen._ui.widgets[self._SECTION:]
+        controls = screen._ui.widgets[self._SECTION:self._SECTION + 9]
         assert len(controls) == 9
         for control, height in zip(controls, heights):
             assert control.rect == pygame.Rect(left, expected_y, 480, height)
@@ -703,6 +749,233 @@ class TestOptionsScreenAudioControls:
             (bootstrapped_persistence / "game.json").read_text(encoding="utf-8")
         )
         assert payload["audio"]["game_sfx_enabled"] is False
+
+
+class TestOptionsScreenUiControls:
+    """Control group 2: the "UI options" section Label and the font and
+    theme ChoiceLists (spec 13: UI controls - group 2, Interactions and
+    persistence, Testing)."""
+
+    _SECTION = 11
+
+    def _font_list(self, screen: OptionsScreen) -> ChoiceList:
+        list_widget = screen._ui.widgets[self._SECTION + 1]
+        assert isinstance(list_widget, ChoiceList)
+        return list_widget
+
+    def _theme_list(self, screen: OptionsScreen) -> ChoiceList:
+        list_widget = screen._ui.widgets[self._SECTION + 2]
+        assert isinstance(list_widget, ChoiceList)
+        return list_widget
+
+    def test_group2_shouldBeCenteredInTheRightHalfWithTopAlignedToGroup1Top(
+        self, font_ready: None
+    ) -> None:
+        # GIVEN the screen,
+        screen = OptionsScreen(_default_theme(), ResourceLoader())
+        widgets = screen._ui.widgets
+
+        # THEN the section Label sits horizontally centered in the right
+        # half (left margin equals the right margin, both edges inside
+        # 960..1920), its top edge aligned with group 1's top edge,
+        section = widgets[self._SECTION]
+        group1_top = min(control.rect.top for control in widgets[2:11])
+        assert section.rect.left - 960 == 1920 - section.rect.right
+        assert section.rect.top == group1_top
+        # ...then the font ChoiceList, then the theme ChoiceList, each
+        # separated by the fixed 32px margin (spec 13: UI controls -
+        # group 2),
+        font_list = widgets[self._SECTION + 1]
+        theme_list = widgets[self._SECTION + 2]
+        assert font_list.rect.top - section.rect.bottom == 32
+        assert theme_list.rect.top - font_list.rect.bottom == 32
+        # ...and the whole group shares one left edge:
+        assert font_list.rect.left == section.rect.left
+        assert theme_list.rect.left == section.rect.left
+
+    def test_group2Widgets_shouldHaveSpecSizesAndTheSectionLabelSpecAppearance(
+        self, font_ready: None
+    ) -> None:
+        # GIVEN the screen,
+        screen = OptionsScreen(_default_theme(), ResourceLoader())
+        section = screen._ui.widgets[self._SECTION]
+        font_list = screen._ui.widgets[self._SECTION + 1]
+        theme_list = screen._ui.widgets[self._SECTION + 2]
+
+        # THEN the ChoiceLists are fixed 320x36 with the shared menu
+        # border width,
+        assert font_list.rect.size == (320, 36)
+        assert theme_list.rect.size == (320, 36)
+        assert font_list.border_width == game_constants.MENU_OPTION_BORDER_WIDTH
+        assert theme_list.border_width == game_constants.MENU_OPTION_BORDER_WIDTH
+        # ...and the section Label is 480x48, left-aligned (the Label
+        # default), non-opaque, borderless, carrying the spec text:
+        assert isinstance(section, Label)
+        assert section.rect.size == (480, 48)
+        assert section.border_width == 0
+        assert section.text == game_constants.OPTIONS_LABEL_UI_OPTIONS
+
+    def test_fontList_withNothingConfigured_shouldPreselectTheSentinel(
+        self, font_ready: None
+    ) -> None:
+        # GIVEN a Theme with nothing configured (built-in defaults),
+        loader = _StubChooserLoader()
+
+        # WHEN the screen is built,
+        screen = OptionsScreen(Theme("", "", loader), loader)
+
+        # THEN the font chooser preselects the sentinel display value
+        # (spec 13: Testing):
+        assert (
+            self._font_list(screen).get_current_item()
+            == game_constants.DEFAULT_FONT_DISPLAY_VALUE
+        )
+
+    def test_themeList_withNothingConfigured_shouldPreselectTheSentinel(
+        self, font_ready: None
+    ) -> None:
+        # GIVEN a Theme with nothing configured (built-in defaults),
+        loader = _StubChooserLoader()
+
+        # WHEN the screen is built,
+        screen = OptionsScreen(Theme("", "", loader), loader)
+
+        # THEN the theme chooser preselects the sentinel display value
+        # (spec 13: Testing):
+        assert (
+            self._theme_list(screen).get_current_item()
+            == game_constants.DEFAULT_THEME_DISPLAY_VALUE
+        )
+
+    def test_fontList_withConfiguredFontPresentInList_shouldPreselectThatFont(
+        self, font_ready: None
+    ) -> None:
+        # GIVEN a Theme whose configured font resolves and is listed,
+        loader = _StubChooserLoader()
+
+        # WHEN the screen is built,
+        screen = OptionsScreen(Theme("", loader.FONT_ID, loader), loader)
+
+        # THEN the font chooser preselects that font id verbatim
+        # (spec 13: Testing):
+        assert self._font_list(screen).get_current_item() == loader.FONT_ID
+
+    def test_themeList_withConfiguredThemePresentInList_shouldPreselectThatTheme(
+        self, font_ready: None
+    ) -> None:
+        # GIVEN a Theme whose configured theme resolves and is listed,
+        loader = _StubChooserLoader()
+
+        # WHEN the screen is built,
+        screen = OptionsScreen(Theme(loader.THEME_ID, "", loader), loader)
+
+        # THEN the theme chooser preselects that theme id verbatim
+        # (spec 13: Testing):
+        assert self._theme_list(screen).get_current_item() == loader.THEME_ID
+
+    def test_fontList_withConfiguredFontAbsentFromList_shouldPreselectTheSentinel(
+        self, font_ready: None
+    ) -> None:
+        # GIVEN a Theme whose configured font resolves but is NOT listed,
+        loader = _StubChooserLoader(list_configured_ids=False)
+
+        # WHEN the screen is built,
+        screen = OptionsScreen(Theme("", loader.FONT_ID, loader), loader)
+
+        # THEN the font chooser falls back to the sentinel (spec 13:
+        # Testing: "configured item is invalid (or not in the list)"):
+        assert (
+            self._font_list(screen).get_current_item()
+            == game_constants.DEFAULT_FONT_DISPLAY_VALUE
+        )
+
+    def test_themeList_withConfiguredThemeAbsentFromList_shouldPreselectTheSentinel(
+        self, font_ready: None
+    ) -> None:
+        # GIVEN a Theme whose configured theme resolves but is NOT listed,
+        loader = _StubChooserLoader(list_configured_ids=False)
+
+        # WHEN the screen is built,
+        screen = OptionsScreen(Theme(loader.THEME_ID, "", loader), loader)
+
+        # THEN the theme chooser falls back to the sentinel (spec 13:
+        # Testing):
+        assert (
+            self._theme_list(screen).get_current_item()
+            == game_constants.DEFAULT_THEME_DISPLAY_VALUE
+        )
+
+    def test_fontList_selectingAFont_shouldPersistItAndRebuildTheScreenTheme(
+        self, bootstrapped_persistence: Path, font_ready: None
+    ) -> None:
+        # GIVEN a screen with a font listed and resolvable,
+        loader = _StubChooserLoader()
+        screen = OptionsScreen(Theme("", "", loader), loader)
+        font_list = self._font_list(screen)
+        stale_theme = screen._theme
+
+        # WHEN a font is selected,
+        font_list.set_current_item(loader.FONT_ID)
+
+        # THEN it is on disk immediately (spec 13: Interactions and
+        # persistence),
+        payload = json.loads(
+            (bootstrapped_persistence / "game.json").read_text(encoding="utf-8")
+        )
+        assert payload["font"] == loader.FONT_ID
+        # ...the screen rebuilt its local Theme with the new font,
+        assert screen._theme is not stale_theme
+        assert screen._theme.get_font_resource_id() == loader.FONT_ID
+        # ...and the UIManager carries the rebuilt Theme, so every
+        # widget draws with the new font on the very next frame:
+        assert screen._ui.theme is screen._theme
+
+    def test_fontList_selectingTheSentinel_shouldPersistTheDefaultValue(
+        self, bootstrapped_persistence: Path, font_ready: None
+    ) -> None:
+        # GIVEN a screen whose font chooser already has the real font
+        # selected,
+        loader = _StubChooserLoader()
+        screen = OptionsScreen(Theme("", loader.FONT_ID, loader), loader)
+        font_list = self._font_list(screen)
+
+        # WHEN the sentinel display value is selected,
+        font_list.set_current_item(game_constants.DEFAULT_FONT_DISPLAY_VALUE)
+
+        # THEN game.json stores the "default" sentinel value (spec 13:
+        # Interactions and persistence),
+        payload = json.loads(
+            (bootstrapped_persistence / "game.json").read_text(encoding="utf-8")
+        )
+        assert payload["font"] == game_constants.DEFAULT_FONT_VALUE
+        # ...and the rebuilt Theme falls back to the built-in default:
+        assert (
+            screen._theme.get_font_resource_id()
+            == game_constants.DEFAULT_FONT_VALUE
+        )
+
+    def test_themeList_selectingATheme_shouldPersistItAndRebuildTheScreenTheme(
+        self, bootstrapped_persistence: Path, font_ready: None
+    ) -> None:
+        # GIVEN a screen with a theme listed and resolvable,
+        loader = _StubChooserLoader()
+        screen = OptionsScreen(Theme("", "", loader), loader)
+        theme_list = self._theme_list(screen)
+        stale_theme = screen._theme
+
+        # WHEN a theme is selected,
+        theme_list.set_current_item(loader.THEME_ID)
+
+        # THEN it is on disk immediately,
+        payload = json.loads(
+            (bootstrapped_persistence / "game.json").read_text(encoding="utf-8")
+        )
+        assert payload["theme"] == loader.THEME_ID
+        # ...the screen rebuilt its local Theme with the new theme,
+        assert screen._theme is not stale_theme
+        assert screen._theme.get_theme_resource_id() == loader.THEME_ID
+        # ...and the UIManager carries it for the next frame:
+        assert screen._ui.theme is screen._theme
 
 
 class TestOptionsScreenConstants:

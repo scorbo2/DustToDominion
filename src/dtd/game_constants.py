@@ -152,6 +152,9 @@ OPTIONS_LABEL_GAME_SFX_ENABLED = "Game sound effects enabled"
 OPTIONS_LABEL_UI_SFX_ENABLED = "UI sound effects enabled"
 OPTIONS_LABEL_SPEECH_ENABLED = "Speech enabled"
 OPTIONS_LABEL_MUSIC_ENABLED = "Music enabled"
+#: Label of the Options screen's "UI options" section title (spec 13:
+#: UI controls - group 2).
+OPTIONS_LABEL_UI_OPTIONS = "UI options"
 #: Label of the Title Screen's Exit Game button (spec 08: Buttons and
 #: options). ESC on the Title Screen is equivalent to clicking it.
 EXIT_GAME_LABEL = "Exit Game"
