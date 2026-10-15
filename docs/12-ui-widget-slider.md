@@ -184,9 +184,22 @@ current location.
 Text that is too large to fit the value label display area should clip at the bounds of that area.
 
 Note that there is no option to hide the value label: it is always visible (unless contents are not
-displayed due to very small inner rect).
+displayed due to very small inner rect, or unless the shared margin consumes the value tenth -
+see the starvation note below).
 
 The value label respects the computed margin on all edges. This affects auto-scale of the value label.
+
+Note (amended 2026-10-15 per issue #63): when the margin is derived from the display label's effective
+size (auto-scaled or pinned), that margin is charged on both edges of the value label's tenth. When
+twice the margin leaves little or no horizontal room for the value text, the value label may be
+effectively invisible: at the hard threshold - twice the margin equals or exceeds the tenth's width -
+no point size fits at all and the code falls back to the smallest point size explicitly; just below
+the threshold the search may pick a size too small for a given platform's rasterizer to leave any ink
+(issue #63 measured exactly this on Windows: a 14px margin left a 2px text budget in a 30px tenth,
+and the value rendered without a single detectable pixel). This is an accepted consequence of the
+shared-margin rule - the same consequence already accepted for the display label at very large pinned
+sizes - not a rendering bug. This corner cannot arise when no display label is present: there the
+margin is re-derived from the value label's own candidate sizes and shrinks along with them.
 
 ## The tab control
 
@@ -393,6 +406,17 @@ The tests need to use the `mixer_ready` + `init_audio_manager` pattern to proces
 - The tab control is not draggable on a disabled Slider.
 - The tab control is not draggable if the current range min == current range max.
 - The value label updates as the tab control is dragged.
+- Margin starvation (issue #63): a Slider whose display label is pinned to a point size large enough
+  that twice the shared margin equals or exceeds the value tenth's width draws the value label at the
+  smallest point size fallback instead of running a search that cannot succeed. This is deterministic
+  on any plausible platform font (a 60pt `0` glyph is far taller than a 30px tenth can afford), so the
+  test pins the chosen size via the font-size spy, not the rendered pixels - whether any pixel of the
+  fallback-size text survives the platform rasterizer is exactly the coin flip that made the old
+  pixel assertion Windows-red.
+- The normal-case "value label renders within the right tenth" test uses a display label long enough
+  that the auto-scaled label margin cannot starve the tenth on any plausible platform font (a short
+  label over a narrow platform font lets the auto-scaler grow the shared margin until the value text
+  budget collapses to a couple of pixels - the Windows failure in issue #63).
 - The `on_change()` callback is only invoked when the mouse is released, and even then, only
   if the new value is different from the old value.
 - The mouse wheel can be used to increment/decrement the current value by 10%, with range clamping
@@ -427,7 +451,8 @@ The tests need to use the `mixer_ready` + `init_audio_manager` pattern to proces
 - Does a Slider present a horizontal track with a draggable tab control for a valid input range?
 - Is the display label optional? Can a caller pass None or empty/blank string to hide it?
   - Does the horizontal track fill the space that would have been used by the display label in that case?
-- Does the value label always show the current value?
+- Does the value label always show the current value, subject to the accepted margin-starvation
+  corner (see The value label note)?
 - Does a disabled Slider stop responding to click+drag events?
 - Does `on_change` only fire when a drag *completes*, and not continuously during the drag?
 - Does the tab control always render in `foregroundSelected` regardless of the Slider's state?
@@ -462,4 +487,13 @@ The tests need to use the `mixer_ready` + `init_audio_manager` pattern to proces
    ``origin``) at the single place that knows both spaces, and add regression tests for
    press-snap and full drag on a Slider offset from the display origin.
    **Completed 2026-10-13**
+7. Amendment per issue #63 (Windows font-metric portability): relax the value label's
+   "always visible" promise for the margin-starvation corner - when the display-label-derived
+   shared margin leaves no point size that fits the value tenth, the value label falls back to
+   the smallest point size explicitly. Name the starvation condition in ``slider.py`` so the
+   spec note, the code, and the tests share one definition. Adjust the two knife-edge layout
+   tests (longer label text in the normal-case test; pin the fallback size via the font spy
+   instead of asserting value ink in the oversized-pin test) and widen the title screen's
+   ink-center vertical tolerance for platform ascent/descent metrics.
+   **Completed 2026-10-15**
 

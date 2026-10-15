@@ -384,7 +384,15 @@ class TestTitleScreenTitle:
         assert bbox is not None, "no title pixels found near the expected center"
         box_center = (bbox[0] + (bbox[2] - 1) // 2, bbox[1] + (bbox[3] - 1) // 2)
         assert abs(box_center[0] - expected_center[0]) <= 5
-        assert abs(box_center[1] - expected_center[1]) <= 5
+        # The vertical tolerance is deliberately looser than the
+        # horizontal one (issue #63): the Label centers the rendered
+        # surface, but the ink of an all-caps title sits high inside
+        # that surface by roughly half the descent, and the
+        # ascent/descent split is a platform font-metric constant -
+        # 6px of that bias was measured on Windows against ~1px on
+        # Linux, so a 5px window was a dev-machine constant wearing a
+        # portability hat.
+        assert abs(box_center[1] - expected_center[1]) <= 10
         # ...and the whole title stays inside the upper half:
         assert bbox[1] + bbox[3] - 1 < surface.get_height() // 2
 
