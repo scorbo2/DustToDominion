@@ -13,6 +13,10 @@ and are also persisted to the game's config file.
 
 The Options screen lives in the `dtd/screens/options.py` module.
 
+OptionScreen's constructor should accept a `random.Random` object
+to enable the unit tests to properly test starfield generation
+(copy the precedent from the existing TitleScreen class).
+
 ## Amendments to previous spec docs
 
 ### Changes to Title Screen (08 spec)
@@ -58,8 +62,17 @@ Title screen music is currently started in `main.run()`, but this logic should m
 the TitleScreen class. Each screen class should be responsible for starting its own music;
 the main loop should be responsible for stopping music on any transition between screens.
 
+A dispatch table should be added to `main.py` to handle constructing a new
+OptionsScreen instance when `SHOW_OPTIONS_SCREEN` is received.
+
 Additionally, spec 08 currently contains "A future OptionsScreen will wire up a
 propagation mechanism to publish changes to other screens" - this wording should be removed.
+
+Tests to add to the 08 spec:
+- An Options button appears above the Exit Game button.
+- Only two Buttons are created and displayed.
+- Clicking the Options button triggers a transition to the Options screen.
+- a new Theme object is created from config before each screen transition.
 
 ### Changes to UI framework (04 spec)
 
@@ -82,12 +95,12 @@ can programmatically update the `theme` and `font` options in the game config:
 def set_theme(theme: str | None):
     # If theme is None, blank, empty, or "default", set "default" in config.
     # Otherwise, set the given value verbatim.
-    # On any persistence failure (OSError for example), log warning and continue.
+    # On any persistence failure (OSError or ConfigError for example), log warning and continue.
 
 def set_font(font: str | None):
     # If font is None, blank, empty, or "default", set "default" in config.
     # Otherwise, set the given value verbatim.
-    # On any persistence failure (OSError for example), log warning and continue.
+    # On any persistence failure (OSError or ConfigError for example), log warning and continue.
 ```
 
 These can be module-level functions in `game_config.py` that load the existing
@@ -95,6 +108,12 @@ config, patch the new value via shallow single-key merge, and save it.
 `main` should construct a new Theme from configuration before
 each screen is instantiated, and supply it to the screen's constructor, so
 that each screen transition automatically gets the latest configuration.
+
+Tests to add to doc 04:
+- `set_theme` given "default", None, or a blank/empty string sets "default" in config.
+- `set_theme` given any other string value sets the value verbatim in config.
+- if `set_theme` encounters OSError or ConfigError, it logs a warning and returns.
+- Similar tests for `set_font`
 
 ## Additional dependencies
 
@@ -165,7 +184,7 @@ column.
     a pair of controls (stacked vertically, not side-by-side: a Checkbox
     labeled with `OPTIONS_LABEL_*_ENABLED` (for example:
     `OPTIONS_LABEL_GAME_SFX_ENABLED`, see "New constants" section), and then
-    a Slider control with label "Volume" with a range of `VOLUME_MIN_PERCENT`
+    a Slider control with label "Volume:" with a range of `VOLUME_MIN_PERCENT`
     to `VOLUME_MAX_PERCENT` indicating
     audio volume percent for that audio type. The initial value of the
     Slider should represent the current volume for that audio type
@@ -202,22 +221,23 @@ group 2, just as with group 1.
 
 ## New constants
 
-New constants should be added in `game_constants.py` for all Button
-and Checkbox labels:
+New constants should be added in `game_constants.py` for all Button,
+Label, and Checkbox labels:
 
 - `OPTIONS_LABEL`: "Options"
 - `OPTIONS_LABEL_BACK`: "< Back"
-- `OPTIONS_LABEL_VOLME`: "Volume:"
+- `OPTIONS_LABEL_VOLUME`: "Volume:"
 - `OPTIONS_LABEL_GAME_SFX_ENABLED`: "Game sound effects enabled"
 - `OPTIONS_LABEL_UI_SFX_ENABLED`: "UI sound effects enabled"
 - `OPTIONS_LABEL_SPEECH_ENABLED`: "Speech enabled"
+- `OPTIONS_LABEL_MUSIC_ENABLED`: "Music enabled"
 - `OPTIONS_LABEL_AUDIO_OPTIONS`: "Audio options"
 - `OPTIONS_LABEL_UI_OPTIONS`: "UI options"
 
 ## Audio handling
 
-On first update, the Options screen should request playback of any
-configured music track: `play_music_first_match(OPTIONS_SCREEN_MUSIC_IDS)`
+The Options screen should request playback of any configured music
+track in its constructor: `play_music_first_match(OPTIONS_SCREEN_MUSIC_IDS)`
 
 The "Music enabled" Checkbox should make the same call whenever music
 transitions from disabled to enabled.
@@ -260,17 +280,17 @@ The tests need to use the `mixer_ready` + `init_audio_manager` pattern to proces
 - The "Options" label renders at the correct location as described in "Exit control and title".
 - Screen transitions in both directions stop any music that was playing.
 - If a resource with id matching any of `OPTIONS_SCREEN_BACKGROUND_IMAGE_IDS` exists:
-  - it is displayed in the background of the Title Screen.
+  - it is displayed in the background of the Options Screen.
   - the search order is respected based on the constant's list order.
-  - if the given image doesn't have a 16:9 aspect ratio, it is stretched to fit the entire title screen.
-  - if the given image is larger or smaller than our display, it is scaled as needed to fit the entire title screen.
+  - if the given image doesn't have a 16:9 aspect ratio, it is stretched to fit the entire options screen.
+  - if the given image is larger or smaller than our display, it is scaled as needed to fit the entire options screen.
 - If there is no background image resource, a random starfield is generated.
   - a count of stars between 150 and 300 is generated.
   - all generated stars are grayscale with values ranging from (0,0,0) to (192,192,192).
   - stars change their brightness by (1,1,1) per frame, oscillating between the two limits.
   - if the resolution is changed (we support 3), star positions do not change.
 - If a music track with an id matching any of `OPTIONS_SCREEN_MUSIC_IDS` exists, and if `music_enabled`
-  is true, then it is loaded and played.
+  is True, then it is loaded and played.
   - the search order is respected based on the constant's list order.
   - if none resolve, no music plays.
   - disabling `music_enabled` stops the track.
@@ -291,6 +311,8 @@ The tests need to use the `mixer_ready` + `init_audio_manager` pattern to proces
   UI widgets on the Options screen.
 - Changing any options control triggers an immediate write of the
   game config file with the new setting.
+- The audio enabled checkboxes have an initial state driven from the AudioManager getters.
+- Each audio enabled checkbox toggles its associated Slider's enabled status when checked status changes.
 - Pressing ESC while the Options screen is visible causes a transition
   back to the Title screen, as though the user had clicked the "< Back"
   button.
@@ -302,6 +324,8 @@ The tests need to use the `mixer_ready` + `init_audio_manager` pattern to proces
   Otherwise, display the returned resource id as-is.
 - Changing the current font takes effect on next frame with persistence to game config file.
 - Changing the current theme takes effect on next frame with persistence to game config file.
+- If font and/or theme are changed in Options screen, then Title screen should use the new
+  values when transitioning back to Title screen.
 
 ## Acceptance criteria
 
@@ -317,6 +341,7 @@ The tests need to use the `mixer_ready` + `init_audio_manager` pattern to proces
 - Do sfx sliders play their associated sample audio (if present)?
 - Does the music slider change the volume of the Options screen music (if playing)?
 - Can font and theme be changed with immediate effect and immediate persistence?
+  - Are the font and theme changes propagated to Title screen when exiting Options screen?
 
 ## Dev plan
 
