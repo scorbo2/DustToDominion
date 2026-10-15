@@ -1,28 +1,26 @@
 """The Options Screen (spec 13: Options Screen).
 
-Spec 13 dev plan stage 5: control group 2 - the UI options. The "UI
-options" section title plus the font and theme ChoiceLists (formerly
-on the Title screen), horizontally centered in the right half of the
-screen with their top edge aligned to group 1's. Selecting an item
-persists it immediately via ``game_config.set_font``/``set_theme`` and
-rebuilds the screen-local Theme so the change lands on the very next
-frame (spec 13: Interactions and persistence).
+Two control groups share the screen. Control group 1 - the audio
+controls - lives in the left half: the "Audio options" section title
+plus, for each audio category (game sfx, UI sfx, speech, music), a
+Checkbox/Slider pair stacked vertically. Initial state comes from the
+AudioManager getters; every change is immediate in memory *and* on
+disk - the callbacks write straight to the AudioManager, whose property
+setters validate, apply, and persist (spec 05). Every volume change
+plays that category's sample sound (the music category has none), and
+re-enabling music re-requests the Options track.
 
-Stage 4 stays: control group 1 - the audio controls. The "Audio
-options" section title plus, for each audio category (game sfx, UI
-sfx, speech, music), a Checkbox/Slider pair stacked vertically.
-Initial state comes from the AudioManager getters; every change is
-immediate in memory *and* on disk - the callbacks write straight to
-the AudioManager, whose property setters validate, apply, and persist
-(spec 05). Every volume change plays that category's sample sound (the
-music category has none), and re-enabling music re-requests the
-Options track.
+Control group 2 - the UI options - lives in the right half, its top
+edge aligned with group 1's: the "UI options" section title plus the
+font and theme ChoiceLists (formerly on the Title screen). Selecting an
+item persists it immediately via ``game_config.set_font``/``set_theme``
+and rebuilds the screen-local Theme so the change lands on the very
+next frame (spec 13: Interactions and persistence).
 
-Stage 3 machinery stays: the shared ``Background`` helper (first
+The background comes from the shared ``Background`` helper: the first
 ``OPTIONS_SCREEN_BACKGROUND_IMAGE_IDS`` image that resolves, scaled
-and stretched to fill; a generated starfield otherwise), the
-constructor's music request, and the "Options" title Label beside the
-"< Back" button.
+and stretched to fill; a generated starfield otherwise. The
+constructor requests the Options music track.
 
 The exit control lives in the upper left corner (spec 13: Exit control
 and title): a fixed 80x40 design-space rect at (24, 24) - the spec's
@@ -136,8 +134,8 @@ _AUDIO_ROWS: Final[_AudioRowSpec, ...] = (
 
 
 class OptionsScreen(Screen):
-    """The options screen (spec 13) - stage 5: exit control, title
-    Label, background, music, and control groups 1 and 2."""
+    """The options screen (spec 13): exit control, title Label,
+    background, music, and control groups 1 and 2."""
 
     #: ESC is equivalent to clicking the "< Back" button (spec 13:
     #: Interactions and persistence).

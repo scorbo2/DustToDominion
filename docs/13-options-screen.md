@@ -1,6 +1,6 @@
 ---
 description: Describes the game's options screen.
-status: proposed
+status: active
 ---
 
 # Options Screen
@@ -13,9 +13,9 @@ and are also persisted to the game's config file.
 
 The Options screen lives in the `dtd/screens/options.py` module.
 
-OptionScreen's constructor should accept a `random.Random` object
-to enable the unit tests to properly test starfield generation
-(copy the precedent from the existing TitleScreen class).
+The OptionsScreen constructor accepts a `random.Random` object so the
+unit tests can deterministically test starfield generation (following
+the precedent from the TitleScreen class).
 
 ## Additional dependencies
 
@@ -43,13 +43,15 @@ of the Options screen. The first resource found using the list of candidate IDs 
 screen uses: cache the scaled background per surface size and re-scale only when
 the target size changes.
 
-If no such image resource exists, a random starfield will be generated. The Options
-screen can use the same starfield generation mechanism used by the Title screen.
-This background starfield should have the same "twinkle" effect as the Title screen.
+If no such image resource exists, a random starfield is generated,
+using the same starfield generation mechanism used by the Title
+screen. This background starfield has the same "twinkle" effect as the
+Title screen.
 
 ### Exit control and title
 
-In the upper left corner of the screen, a Button and a Label will be displayed:
+In the upper left corner of the screen, a Button and a Label are
+displayed:
 - margin of 24px on left and top edge
 - Button:
   - fixed size of 80x40
@@ -64,13 +66,14 @@ In the upper left corner of the screen, a Button and a Label will be displayed:
   - not opaque
   - rect top-left: (128,24)
 
-Clicking the button should transition from Options screen back to Title screen.
-Any music that is playing should stop as part of this screen transition.
+Clicking the button transitions from the Options screen back to the
+Title screen. Any music that is playing stops as part of this screen
+transition.
 
 ### UI controls - group 1
 
 Horizontally and vertically centered in the left half of the screen
-are the "group 1" options. Exact rect coordinates should be computed
+are the "group 1" options. Exact rect coordinates are computed
 by centering the entire group using the component dimensions below
 plus a 32px margin between controls. Controls are laid out in a single
 column.
@@ -82,22 +85,22 @@ column.
   - label: "Audio options"
   - not opaque
 - Audio options:
-  - each audio type (game sfx, ui sfx, speech, and music) should have
+  - each audio type (game sfx, ui sfx, speech, and music) has
     a pair of controls (stacked vertically, not side-by-side: a Checkbox
     labeled with `OPTIONS_LABEL_*_ENABLED` (for example:
     `OPTIONS_LABEL_GAME_SFX_ENABLED`, see "New constants" section), and then
     a Slider control with label "Volume:" with a range of `VOLUME_MIN_PERCENT`
     to `VOLUME_MAX_PERCENT` indicating
     audio volume percent for that audio type. The initial value of the
-    Slider should represent the current volume for that audio type
+    Slider represents the current volume for that audio type
     as reported by AudioManager's getters (example: `game_sfx_volume`).
     Both controls are not opaque and have a border width of 0.
-    The checkbox's initially selected state should be taken from
+    The checkbox's initially selected state is taken from
     AudioManager's getters (Example: `game_sfx_enabled`).
-    The Slider's enabled status should be tied to the checkbox's
+    The Slider's enabled status is tied to the checkbox's
     checked state. For example, if `game_sfx_enabled` is False, then
-    the game sfx Slider should be initially disabled. Each Checkbox
-    should have a callback that updates its Slider's enabled status
+    the game sfx Slider is initially disabled. Each Checkbox
+    has a callback that updates its Slider's enabled status
     as the Checkbox is checked or unchecked. All Checkboxes and Sliders
     have the same fixed dimensions: 480x36.
 
@@ -117,14 +120,14 @@ group 2, just as with group 1.
   - label: "UI options"
   - not opaque
 - ChoiceLists:
-  - the font ChoiceList formerly on the Title screen should appear here.
-  - the theme ChoiceList formerly on the Title screen should appear here.
+  - the font ChoiceList formerly on the Title screen appears here.
+  - the theme ChoiceList formerly on the Title screen appears here.
   - each ChoiceList has a border width of `MENU_OPTION_BORDER_WIDTH` and a fixed size of 320x36.
 
 ## New constants
 
-New constants should be added in `game_constants.py` for all Button,
-Label, and Checkbox labels:
+The following constants live in `game_constants.py`, covering all
+Button, Label, and Checkbox labels:
 
 - `OPTIONS_LABEL`: "Options"
 - `OPTIONS_LABEL_BACK`: "< Back"
@@ -138,10 +141,10 @@ Label, and Checkbox labels:
 
 ## Audio handling
 
-The Options screen should request playback of any configured music
+The Options screen requests playback of any configured music
 track in its constructor: `play_music_first_match(OPTIONS_SCREEN_MUSIC_IDS)`
 
-The "Music enabled" Checkbox should make the same call whenever music
+The "Music enabled" Checkbox makes the same call whenever music
 transitions from disabled to enabled.
 
 ## Interactions and persistence
@@ -150,30 +153,30 @@ All changes to any UI control take effect immediately!
 
 Persistence is also immediate - the game config file is updated as each
 change is made. There is no "cancel" option - changes are live.
-Checkbox/Slider callbacks should use AudioManager to set the new enabled
+Checkbox/Slider callbacks use AudioManager to set the new enabled
 and volume values.
 
-The ESC key should trigger the same transition as the "< Back" button.
+The ESC key triggers the same transition as the "< Back" button.
 Stop any music that is playing, and transition back to the Title screen.
 
-Every volume slider change event should play the associated
+Every volume slider change event plays the associated
 sample audio for that audio type:
 - Game sfx volume: `play_game_sfx(OPTIONS_SCREEN_TEST_GAME_SFX)`
 - UI sfx volume: `play_ui_sfx(OPTIONS_SCREEN_TEST_UI_SFX)`
 - Speech volume: `play_speech(OPTIONS_SCREEN_TEST_SPEECH)`
-
 (It is not an error if these resource IDs do not resolve - AudioManager
-will deal with it appropriately).
+deals with it appropriately).
 
 The music volume slider does not have an associated sample audio.
 
-The Options screen should build a screen-local Theme on font/theme change
+The Options screen builds a screen-local Theme on font/theme change
 in addition to persisting via `set_theme`/`set_font`.
 
 ## Testing
 
-Note: the tests need to use the `bootstrapped_persistence` fixture for game config persistence tests.
-The tests need to use the `mixer_ready` + `init_audio_manager` pattern to process audio events.
+Note: the tests use the `bootstrapped_persistence` fixture for game config persistence tests.
+
+The tests use the `mixer_ready` + `init_audio_manager` pattern to process audio events.
 
 - Title screen has an "Options" button that transitions to Options screen.
 - Options screen has a "< Back" button in the top left that transitions
@@ -226,8 +229,8 @@ The tests need to use the `mixer_ready` + `init_audio_manager` pattern to proces
   Otherwise, display the returned resource id as-is.
 - Changing the current font takes effect on next frame with persistence to game config file.
 - Changing the current theme takes effect on next frame with persistence to game config file.
-- If font and/or theme are changed in Options screen, then Title screen should use the new
-  values when transitioning back to Title screen.
+- If font and/or theme are changed in Options screen, then the Title
+  screen uses the new values when transitioning back to Title screen.
 
 ## Acceptance criteria
 
@@ -324,7 +327,13 @@ The tests need to use the `mixer_ready` + `init_audio_manager` pattern to proces
    "this will land once dev stage 4 is implemented"). Clean up
    these comments as needed. Modify this doc to change all
    "proposes" or future tense prose to "describes" and present
-   tense. Examples: "this document proposes..." -> change
-   to "this document describes...", "this button should..." ->
-   change to "this button...". Mark this doc as `active`.
+    tense. Examples: "this document proposes..." -> change
+    to "this document describes...", "this button should..." ->
+    change to "this button...". Mark this doc as `active`.
+    **Completed 2026-10-14**: full suite green (981 passed); every
+    acceptance criterion pinned by tests; all spec 13 dev-plan stage
+    narration scrubbed from `options.py` and `test_options_screen.py`
+    docstrings (past-tense attributions to other specs' completed dev
+    plans left as historical record); normative prose converted to
+    present tense; doc flipped to `active`.
 

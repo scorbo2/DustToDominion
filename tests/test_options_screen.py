@@ -1,11 +1,12 @@
 """Unit tests for the OptionsScreen (spec 13).
 
-Stage 1 gave the Title Screen's Options button and the main loop's
-transition dispatch table a target; stage 2 added the "< Back" button
-and the round-trip transition; stage 3 added background handling (image
-or starfield fallback), the constructor's music request, and the
-"Options" title Label. Stage 4 adds control group 1 - the audio
-controls. Group 2 arrives in stage 5; its tests arrive with it.
+Covers the exit "< Back" button and ESC-as-back, the "Options" title
+Label, background handling (image probe order, scaling, starfield
+fallback), the constructor's music request, control group 1 (the audio
+Checkbox/Slider pairs and their immediate apply-and-persist wiring),
+and control group 2 (the font and theme ChoiceLists, their sentinel
+preselection, and their persist-plus-screen-local-Theme-rebuild
+wiring). The round-trip transition itself is pinned in test_main.py.
 """
 from __future__ import annotations
 
@@ -110,7 +111,7 @@ def _back_button(screen: OptionsScreen) -> Button:
 
 class TestOptionsScreenConstruction:
     def test_constructor_should_produce_a_screen(self, font_ready: None) -> None:
-        # GIVEN the stage-3 screen,
+        # GIVEN the screen,
         # THEN it fulfills the Screen contract the main loop relies on:
         assert isinstance(OptionsScreen(_default_theme(), ResourceLoader()), Screen)
 
