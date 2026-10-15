@@ -9,10 +9,11 @@ F11) and stops the screen's music on any transition.
 
 The three-method contract mirrors the main loop's frame steps:
 ``handle`` (screen-level input, possibly yielding a ``ScreenAction``),
-``update`` (per-frame state), and ``draw`` (rendering). Defaults are
-deliberately inert: a screen with no screen-level keys does not need to
-override ``handle``, and a screen with no per-frame state does not need
-to override ``update``.
+``update`` (per-frame state), and ``draw`` (rendering). The base
+``handle`` already covers the shared screen-level patterns - the ESC
+shortcut and widget-recorded actions (see ``Screen``); ``update`` and
+``draw`` stay deliberately inert: a screen with no per-frame state does
+not need to override ``update``.
 """
 from __future__ import annotations
 
@@ -42,16 +43,40 @@ class Screen:
     create their own ``UIManager``: the only real UIManager state is the
     widget list, which is inherently screen-scoped and should be created
     and destroyed with the screen.
+
+    Two pieces of input plumbing are identical on every screen that has
+    them, so the base class owns them:
+
+    * ``_esc_action`` - the ``ScreenAction`` a screen returns when ESC
+      is pressed (``None`` = ESC does nothing here). Title Screen ESC
+      is QUIT (spec 08 stage 4); Options Screen ESC is the Back
+      transition (spec 13: Interactions and persistence).
+    * ``_pending_action`` - widget callbacks (clicks, toggles) fire
+      inside ``update()``, before ``handle()`` runs; a callback records
+      its intent here and ``handle()`` reports and clears it on the
+      same frame.
     """
+
+    #: Class-level defaults: a screen with no ESC semantics and no
+    #: widgets needs no constructor cooperation at all.
+    _esc_action: ScreenAction | None = None
+    _pending_action: ScreenAction | None = None
 
     def handle(self, events: list[pygame.event.Event]) -> ScreenAction | None:
         """Interpret screen-level input; return an action, or ``None``.
 
-        The main loop owns app-level events (QUIT, F11). This method is
-        for keys that only carry meaning on this screen - example: ESC
-        on the Title Screen, which moved here from the main loop in
-        spec 08 stage 4.
+        The main loop owns app-level events (QUIT, F11). This method
+        covers the two screen-level patterns every screen shares: a
+        recorded widget action (reported once, then cleared) and the
+        ESC shortcut.
         """
+        if self._pending_action is not None:
+            action, self._pending_action = self._pending_action, None
+            return action
+        if self._esc_action is not None:
+            for event in events:
+                if event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
+                    return self._esc_action
         return None
 
     def update(self, events: list[pygame.event.Event]) -> None:

@@ -2,26 +2,31 @@
 
 Stage 1 gave the Title Screen's Options button and the main loop's
 transition dispatch table a target; stage 2 added the "< Back" button
-and the round-trip transition. Stage 3 adds background handling (image
+and the round-trip transition; stage 3 added background handling (image
 or starfield fallback), the constructor's music request, and the
-"Options" title Label. The option controls arrive in stages 4 and 5;
-their tests arrive with them.
+"Options" title Label. Stage 4 adds control group 1 - the audio
+controls. Group 2 arrives in stage 5; its tests arrive with it.
 """
 from __future__ import annotations
 
+import json
 import random
+from pathlib import Path
 
 import pygame
 import pytest
 
 from dtd import audio, game_constants
+from dtd.game_config import AudioConfig
 from dtd.resource_loader import ResourceLoader
 from dtd.screens.base import Screen, ScreenAction
 from dtd.screens.options import OptionsScreen
 from dtd.screens.starfield import Star
 from dtd.ui import Theme, UIManager
 from dtd.widgets.button import Button
+from dtd.widgets.checkbox import Checkbox
 from dtd.widgets.label import Label
+from dtd.widgets.slider import Slider
 
 
 @pytest.fixture(autouse=True)
@@ -81,18 +86,22 @@ class TestOptionsScreenConstruction:
         assert first._ui.theme is theme
         assert first._ui is not second._ui
 
-    def test_constructor_shouldRegisterExactlyBackButtonThenTitleLabel(
+    def test_constructor_shouldRegisterExitControlThenTitleLabelThenGroup1(
         self, font_ready: None
     ) -> None:
         # GIVEN the screen,
         screen = OptionsScreen(_default_theme(), ResourceLoader())
 
-        # THEN its widget list is exactly the back Button followed by the
-        # title Label - no option controls until dev plan stages 4 and 5
-        # (spec 13 dev plan stage 3):
-        assert len(screen._ui.widgets) == 2
+        # THEN its widget list is the back Button, the title Label, and
+        # exactly the nine group 1 controls - no group 2 widgets until
+        # dev plan stage 5 (spec 13 dev plan stage 4):
+        assert len(screen._ui.widgets) == 11
         assert isinstance(screen._ui.widgets[0], Button)
         assert isinstance(screen._ui.widgets[1], Label)
+        assert isinstance(screen._ui.widgets[2], Label)
+        for index in range(3, 11, 2):
+            assert isinstance(screen._ui.widgets[index], Checkbox)
+            assert isinstance(screen._ui.widgets[index + 1], Slider)
 
 
 class TestOptionsScreenExitControl:
@@ -216,8 +225,8 @@ class TestOptionsScreenBackground:
         # THEN probing stopped at the first hit in spec order (the png),
         # and no starfield was generated:
         assert loader.requested_ids == ["graphics/screens/options_screen.png"]
-        assert screen._background_image is png
-        assert screen._stars is None
+        assert screen._background.image is png
+        assert screen._background.stars is None
 
     def test_constructor_withOnlyJpegBackground_shouldUseItAfterProbingTheOthers(
         self, font_ready: None
@@ -233,8 +242,8 @@ class TestOptionsScreenBackground:
         assert loader.requested_ids == list(
             game_constants.OPTIONS_SCREEN_BACKGROUND_IMAGE_IDS
         )
-        assert screen._background_image is jpeg
-        assert screen._stars is None
+        assert screen._background.image is jpeg
+        assert screen._background.stars is None
 
     def test_constructor_withNoBackgroundImage_shouldGenerateAStarfieldFromTheSuppliedRng(
         self, font_ready: None
@@ -246,10 +255,10 @@ class TestOptionsScreenBackground:
         screen = OptionsScreen(_default_theme(), loader, rng=random.Random(3))
 
         # THEN a starfield was generated instead, within spec bounds:
-        assert screen._background_image is None
+        assert screen._background.image is None
         assert (
             game_constants.STARFIELD_MIN_STARS
-            <= len(screen._stars)
+            <= len(screen._background.stars)
             <= game_constants.STARFIELD_MAX_STARS
         )
 
@@ -294,14 +303,14 @@ class TestOptionsScreenBackground:
         screen = OptionsScreen(
             _default_theme(), _StubImageLoader({}), rng=random.Random(5)
         )
-        before = [star.brightness for star in screen._stars]
+        before = [star.brightness for star in screen._background.stars]
 
         # WHEN one frame updates,
         screen.update([])
 
         # THEN every star moved exactly one brightness step (spec 13:
         # the same twinkle as the Title screen):
-        for star, previous in zip(screen._stars, before):
+        for star, previous in zip(screen._background.stars, before):
             assert (
                 abs(star.brightness - previous) == game_constants.STARFIELD_BRIGHTNESS_STEP
             )
@@ -313,7 +322,7 @@ class TestOptionsScreenBackground:
         screen = OptionsScreen(
             _default_theme(), _StubImageLoader({}), rng=random.Random(1)
         )
-        screen._stars = [Star(x=300, y=400, brightness=100, direction=1)]
+        screen._background.stars = [Star(x=300, y=400, brightness=100, direction=1)]
         surface = pygame.Surface((1280, 720))
 
         # WHEN the screen renders,
@@ -330,7 +339,7 @@ class TestOptionsScreenBackground:
         screen = OptionsScreen(
             _default_theme(), _StubImageLoader({}), rng=random.Random(9)
         )
-        snapshot = [(s.x, s.y) for s in screen._stars]
+        snapshot = [(s.x, s.y) for s in screen._background.stars]
 
         # WHEN it renders at two different resolutions,
         screen.draw(pygame.Surface((1280, 720)))
@@ -338,7 +347,7 @@ class TestOptionsScreenBackground:
 
         # THEN the design-space positions are unchanged (spec 13: no
         # regeneration on resolution change):
-        assert [(s.x, s.y) for s in screen._stars] == snapshot
+        assert [(s.x, s.y) for s in screen._background.stars] == snapshot
 
 
 class TestOptionsScreenDrawCaching:
@@ -423,6 +432,277 @@ class TestOptionsScreenAudio:
         # THEN the Options Screen music candidates were offered in spec
         # order (the literal order is pinned in TestOptionsScreenConstants):
         assert requested == [tuple(game_constants.OPTIONS_SCREEN_MUSIC_IDS)]
+
+
+class TestOptionsScreenAudioControls:
+    """Control group 1 (spec 13: UI controls - group 1, and Interactions
+    and persistence). AudioManager property setters validate, apply, and
+    persist every change (spec 05) - these tests pin the screen's wiring
+    to them."""
+
+    #: Group 1 widget indices within ``screen._ui.widgets``.
+    _SECTION = 2
+    _ROW_START = 3  # row 0's Checkbox; each row's Slider sits at +1
+
+    def _rows(self, screen: OptionsScreen) -> list[tuple[Checkbox, Slider]]:
+        """The four Checkbox/Slider pairs, in spec order."""
+        return [
+            (
+                screen._ui.widgets[self._ROW_START + offset],
+                screen._ui.widgets[self._ROW_START + offset + 1],
+            )
+            for offset in range(0, 8, 2)
+        ]
+
+    def _click(self, screen: OptionsScreen, widget) -> None:
+        """A full left-button click on the widget's center (no display
+        surface, so design space and pixels are identical)."""
+        center = widget.rect.center
+        screen.update(
+            [
+                pygame.event.Event(pygame.MOUSEBUTTONDOWN, pos=center, button=1),
+                pygame.event.Event(pygame.MOUSEBUTTONUP, pos=center, button=1),
+            ]
+        )
+
+    def _wheel_step(
+        self, screen: OptionsScreen, slider: Slider, direction: int = 1
+    ) -> None:
+        """One mouse wheel step over the slider: hover first (the wheel
+        only answers hovered Sliders, spec 12), then scroll."""
+        screen.update(
+            [
+                pygame.event.Event(
+                    pygame.MOUSEMOTION, pos=slider.rect.center, rel=(0, 0)
+                )
+            ]
+        )
+        screen.update([pygame.event.Event(pygame.MOUSEWHEEL, x=0, y=direction)])
+
+    def test_constructor_shouldAddAudioSectionLabel_leftAlignedNonOpaqueAndBorderless(
+        self, font_ready: None
+    ) -> None:
+        # GIVEN the screen,
+        screen = OptionsScreen(_default_theme(), ResourceLoader())
+
+        # THEN the section title Label matches spec 13: group 1 -
+        # "Audio options", fixed 480x48, border 0, non-opaque,
+        # left-aligned:
+        section = screen._ui.widgets[self._SECTION]
+        assert isinstance(section, Label)
+        assert section.text == game_constants.OPTIONS_LABEL_AUDIO_OPTIONS
+        assert section.rect.size == (480, 48)
+        assert section.border_width == 0
+        assert section._opaque is False
+        assert section._text_centered is False
+
+    def test_constructor_shouldLabelAndConfigureEveryRow_perSpec(self, font_ready: None
+    ) -> None:
+        # GIVEN the screen,
+        screen = OptionsScreen(_default_theme(), ResourceLoader())
+
+        # THEN each row carries its spec Checkbox label and a "Volume:"
+        # Slider over the spec percent range, all 480x36, borderless,
+        # and non-opaque (spec 13: UI controls - group 1):
+        expected_labels = (
+            game_constants.OPTIONS_LABEL_GAME_SFX_ENABLED,
+            game_constants.OPTIONS_LABEL_UI_SFX_ENABLED,
+            game_constants.OPTIONS_LABEL_SPEECH_ENABLED,
+            game_constants.OPTIONS_LABEL_MUSIC_ENABLED,
+        )
+        for (checkbox, slider), label in zip(self._rows(screen), expected_labels):
+            assert checkbox.text == label
+            assert checkbox.rect.size == (480, 36)
+            assert checkbox.border_width == 0
+            assert checkbox._opaque is False
+            assert slider.text == game_constants.OPTIONS_LABEL_VOLUME
+            assert slider.rect.size == (480, 36)
+            assert slider.border_width == 0
+            assert slider._opaque is False
+            assert slider.get_min_value() == game_constants.VOLUME_MIN_PERCENT
+            assert slider.get_max_value() == game_constants.VOLUME_MAX_PERCENT
+
+    def test_group1_shouldCenterTheWholeGroupInLeftScreenHalf_with32pxMargins(
+        self, font_ready: None
+    ) -> None:
+        # GIVEN the screen,
+        screen = OptionsScreen(_default_theme(), ResourceLoader())
+
+        # THEN the nine group 1 controls form one column centered
+        # horizontally and vertically in the left half of design space,
+        # with a fixed 32px margin between each control (spec 13: UI
+        # controls - group 1). The expected rects are computed here from
+        # the spec's literals, not from the screen's own layout code:
+        heights = [48] + [36] * 8
+        total_height = sum(heights) + 32 * 8
+        left = (game_constants.DESIGN_W // 2 - 480) // 2
+        expected_y = (game_constants.DESIGN_H - total_height) // 2
+        controls = screen._ui.widgets[self._SECTION:]
+        assert len(controls) == 9
+        for control, height in zip(controls, heights):
+            assert control.rect == pygame.Rect(left, expected_y, 480, height)
+            expected_y += height + 32
+
+    def test_constructor_shouldDriveControlInitialState_fromAudioManagerGetters(
+        self, font_ready: None
+    ) -> None:
+        # GIVEN an AudioManager with distinctive values (standing in for
+        # a persisted config, spec 05):
+        audio.init_audio_manager(
+            ResourceLoader(),
+            AudioConfig(
+                game_sfx_enabled=False,
+                game_sfx_volume=25,
+                ui_sfx_volume=42,
+                speech_enabled=False,
+                music_volume=10,
+            ),
+        )
+
+        # WHEN the screen is constructed,
+        screen = OptionsScreen(_default_theme(), ResourceLoader())
+        game_row, ui_row, speech_row, music_row = self._rows(screen)
+
+        # THEN every Checkbox mirrors its enabled getter and every
+        # Slider mirrors its volume getter, with the Slider's enabled
+        # status tied to its Checkbox (spec 13: UI controls - group 1):
+        assert game_row[0].is_checked() is False
+        assert game_row[1].enabled is False
+        assert game_row[1].get_value() == 25
+        assert ui_row[0].is_checked() is True
+        assert ui_row[1].enabled is True
+        assert ui_row[1].get_value() == 42
+        assert speech_row[0].is_checked() is False
+        assert speech_row[1].enabled is False
+        assert music_row[0].is_checked() is True
+        assert music_row[1].get_value() == 10
+
+    def test_update_withClickOnGameSfxCheckbox_shouldDisableThenReEnableItsSlider(
+        self, font_ready: None
+    ) -> None:
+        # GIVEN the screen over the default (all-enabled) config,
+        screen = OptionsScreen(_default_theme(), ResourceLoader())
+        checkbox, slider = self._rows(screen)[0]
+        assert slider.enabled is True
+
+        # WHEN the Checkbox is clicked off, THEN the flag, the Checkbox,
+        # and the Slider's enabled status all follow (spec 13: each
+        # Checkbox toggles its Slider):
+        self._click(screen, checkbox)
+        assert checkbox.is_checked() is False
+        assert slider.enabled is False
+        assert audio.get_audio_manager().game_sfx_enabled is False
+
+        # WHEN it is clicked back on, THEN everything re-enables:
+        self._click(screen, checkbox)
+        assert checkbox.is_checked() is True
+        assert slider.enabled is True
+        assert audio.get_audio_manager().game_sfx_enabled is True
+
+    def test_update_withWheelOnGameSfxSlider_shouldSetVolumeAndPlaySample(
+        self, font_ready: None
+    ) -> None:
+        # GIVEN an AudioManager whose game sfx volume starts at 50 and
+        # whose sample playback is recorded:
+        manager = audio.init_audio_manager(
+            ResourceLoader(), AudioConfig(game_sfx_volume=50)
+        )
+        played: list[str] = []
+        manager.play_game_sfx = lambda resource_id: played.append(resource_id)
+
+        # WHEN one wheel step moves the game sfx Slider,
+        screen = OptionsScreen(_default_theme(), ResourceLoader())
+        _, slider = self._rows(screen)[0]
+        self._wheel_step(screen, slider)
+
+        # THEN the value moved one step (10% of the 0-100 range), the
+        # AudioManager carries the new volume, and the game sfx sample
+        # was played (spec 13: Interactions and persistence):
+        assert slider.get_value() == 60
+        assert manager.game_sfx_volume == 60
+        assert played == [game_constants.OPTIONS_SCREEN_TEST_GAME_SFX]
+
+    def test_update_withWheelOnMusicSlider_shouldSetVolumeAndPlayNoSample(
+        self, font_ready: None
+    ) -> None:
+        # GIVEN an AudioManager whose music volume starts at 50 and
+        # whose three sample players are recorded:
+        manager = audio.init_audio_manager(
+            ResourceLoader(), AudioConfig(music_volume=50)
+        )
+        played: list[str] = []
+        manager.play_game_sfx = lambda resource_id: played.append(resource_id)
+        manager.play_ui_sfx = lambda resource_id: played.append(resource_id)
+        manager.play_speech = lambda resource_id: played.append(resource_id)
+
+        # WHEN one wheel step moves the music Slider,
+        screen = OptionsScreen(_default_theme(), ResourceLoader())
+        _, slider = self._rows(screen)[3]
+        self._wheel_step(screen, slider)
+
+        # THEN the new volume is applied to the music category (the
+        # AudioManager adjusts the playing track, spec 05) and none of
+        # the three sample sounds plays - the music slider has none
+        # (spec 13). Hovering the Slider legitimately produces the
+        # shared UI hover sound (spec 07), so the assertion targets the
+        # sample ids specifically:
+        assert slider.get_value() == 60
+        assert manager.music_volume == 60
+        sample_ids = {
+            game_constants.OPTIONS_SCREEN_TEST_GAME_SFX,
+            game_constants.OPTIONS_SCREEN_TEST_UI_SFX,
+            game_constants.OPTIONS_SCREEN_TEST_SPEECH,
+        }
+        assert not sample_ids.intersection(played)
+
+    def test_update_withMusicCheckboxToggledOffThenOn_shouldStopAndReRequestMusic(
+        self, font_ready: None, silent_audio_manager: audio.AudioManager
+    ) -> None:
+        # GIVEN the screen, and THEN a recorder on the singleton's
+        # music entry point installed after construction, so the
+        # constructor's own request is not counted (it is pinned in
+        # TestOptionsScreenAudio):
+        screen = OptionsScreen(_default_theme(), ResourceLoader())
+        requested: list[tuple[str, ...]] = []
+        silent_audio_manager.play_music_first_match = (
+            lambda ids: requested.append(tuple(ids))
+        )
+        checkbox, slider = self._rows(screen)[3]
+
+        # WHEN the Music Checkbox is clicked off, THEN the spec 05
+        # setter stops the track, the flag flips, the Slider follows,
+        # and nothing is re-requested:
+        self._click(screen, checkbox)
+        assert silent_audio_manager.music_enabled is False
+        assert slider.enabled is False
+        assert requested == []
+
+        # WHEN it is clicked back on, THEN the screen re-requests the
+        # Options track (spec 13: Audio handling):
+        self._click(screen, checkbox)
+        assert silent_audio_manager.music_enabled is True
+        assert slider.enabled is True
+        assert requested == [tuple(game_constants.OPTIONS_SCREEN_MUSIC_IDS)]
+
+    def test_update_withCheckboxClick_shouldWriteAudioSectionToGameConfigImmediately(
+        self, font_ready: None, bootstrapped_persistence: Path
+    ) -> None:
+        # GIVEN the startup audio pattern over the bootstrapped
+        # persistence dir (defaults: game sfx enabled):
+        audio.init_audio_manager(ResourceLoader(), AudioConfig())
+        screen = OptionsScreen(_default_theme(), ResourceLoader())
+        checkbox, _ = self._rows(screen)[0]
+
+        # WHEN the game sfx Checkbox is clicked,
+        self._click(screen, checkbox)
+
+        # THEN game.json already carries the new value - persistence is
+        # immediate, riding the spec 05 setter (spec 13: Interactions
+        # and persistence):
+        payload = json.loads(
+            (bootstrapped_persistence / "game.json").read_text(encoding="utf-8")
+        )
+        assert payload["audio"]["game_sfx_enabled"] is False
 
 
 class TestOptionsScreenConstants:

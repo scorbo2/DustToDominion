@@ -292,6 +292,17 @@ The tests need to use the `mixer_ready` + `init_audio_manager` pattern to proces
    the Checkbox listeners to enable or disable the volume
    sliders as needed. All changes should be immediate, and
    persistence to game config should also be immediate.
+   **Completed 2026-10-14**: the "Audio options" section label plus
+   four Checkbox/Slider pairs (480x36, non-opaque, border 0) centered
+   as one group with 32px margins in the left screen half; initial
+   state read from the AudioManager getters; Checkbox clicks toggle
+   their Slider and write the enabled flag through the spec 05 setters
+   (immediate apply + persist); Slider changes set the volume and play
+   the category sample (music has none); re-enabling music re-requests
+   `OPTIONS_SCREEN_MUSIC_IDS`. Also landed the approved refactor: the
+   shared `dtd/screens/background.py` helper (both screens), and the
+   base `Screen` now owns `_esc_action` + `_pending_action`. Full
+   suite: 969 passed.
 5. Implement control group 2: the UI controls. Handle screen
    placement of this group, and wire up the font and theme
    choosers. All changes should be immediate, and persistence

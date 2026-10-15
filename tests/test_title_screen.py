@@ -177,8 +177,8 @@ class TestTitleScreenBackground:
         # THEN probing stopped at the first hit in spec order (the png),
         # and no starfield was generated:
         assert loader.requested_ids == ["graphics/screens/title_screen.png"]
-        assert screen._background_image is png
-        assert screen._stars is None
+        assert screen._background.image is png
+        assert screen._background.stars is None
 
     def test_constructor_withOnlyJpegBackground_shouldUseItAfterProbingTheOthers(
         self, font_ready: None
@@ -194,8 +194,8 @@ class TestTitleScreenBackground:
         assert loader.requested_ids == list(
             game_constants.TITLE_SCREEN_BACKGROUND_IMAGE_IDS
         )
-        assert screen._background_image is jpeg
-        assert screen._stars is None
+        assert screen._background.image is jpeg
+        assert screen._background.stars is None
 
     def test_constructor_withNoBackgroundImage_shouldGenerateAStarfieldFromTheSuppliedRng(
         self, font_ready: None
@@ -207,10 +207,10 @@ class TestTitleScreenBackground:
         screen = TitleScreen(_default_theme(), loader, rng=random.Random(3))
 
         # THEN a starfield was generated instead, within spec bounds:
-        assert screen._background_image is None
+        assert screen._background.image is None
         assert (
             game_constants.STARFIELD_MIN_STARS
-            <= len(screen._stars)
+            <= len(screen._background.stars)
             <= game_constants.STARFIELD_MAX_STARS
         )
 
@@ -255,13 +255,13 @@ class TestTitleScreenBackground:
         screen = TitleScreen(
             _default_theme(), _StubImageLoader({}), rng=random.Random(5)
         )
-        before = [star.brightness for star in screen._stars]
+        before = [star.brightness for star in screen._background.stars]
 
         # WHEN one frame updates,
         screen.update([])
 
         # THEN every star moved exactly one brightness step:
-        for star, previous in zip(screen._stars, before):
+        for star, previous in zip(screen._background.stars, before):
             assert abs(star.brightness - previous) == game_constants.STARFIELD_BRIGHTNESS_STEP
 
     def test_draw_withStarfieldActive_shouldPaintStarsAsSinglePixelsOnTargetSurface(
@@ -271,7 +271,7 @@ class TestTitleScreenBackground:
         screen = TitleScreen(
             _default_theme(), _StubImageLoader({}), rng=random.Random(1)
         )
-        screen._stars = [Star(x=300, y=400, brightness=100, direction=1)]
+        screen._background.stars = [Star(x=300, y=400, brightness=100, direction=1)]
         surface = pygame.Surface((1280, 720))
 
         # WHEN the screen renders,
@@ -288,7 +288,7 @@ class TestTitleScreenBackground:
         screen = TitleScreen(
             _default_theme(), _StubImageLoader({}), rng=random.Random(9)
         )
-        snapshot = [(s.x, s.y) for s in screen._stars]
+        snapshot = [(s.x, s.y) for s in screen._background.stars]
 
         # WHEN it renders at two different resolutions,
         screen.draw(pygame.Surface((1280, 720)))
@@ -296,7 +296,7 @@ class TestTitleScreenBackground:
 
         # THEN the design-space positions are unchanged (spec 08: no
         # regeneration on resolution change):
-        assert [(s.x, s.y) for s in screen._stars] == snapshot
+        assert [(s.x, s.y) for s in screen._background.stars] == snapshot
 
 
 class TestTitleScreenTitle:
@@ -340,7 +340,7 @@ class TestTitleScreenTitle:
 
         theme.get_font = spy
         screen = TitleScreen(theme, _StubImageLoader({}), rng=random.Random(1))
-        screen._stars = []
+        screen._background.stars = []
 
         # WHEN the screen renders at the design resolution,
         screen.draw(pygame.Surface((game_constants.DESIGN_W, game_constants.DESIGN_H)))
@@ -359,7 +359,7 @@ class TestTitleScreenTitle:
         screen = TitleScreen(
             _default_theme(), _StubImageLoader({}), rng=random.Random(1)
         )
-        screen._stars = []
+        screen._background.stars = []
         surface = pygame.Surface((game_constants.DESIGN_W, game_constants.DESIGN_H))
         expected_center = (
             game_constants.DESIGN_W // 2,

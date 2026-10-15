@@ -140,6 +140,18 @@ OPTIONS_LABEL = "Options"
 #: title). Clicking it - or pressing ESC on the Options screen - transitions
 #: back to the Title screen.
 OPTIONS_LABEL_BACK = "< Back"
+#: Label of the Options screen's "Audio options" section title (spec 13:
+#: UI controls - group 1).
+OPTIONS_LABEL_AUDIO_OPTIONS = "Audio options"
+#: Label of every Options screen volume Slider (spec 13: UI controls -
+#: group 1).
+OPTIONS_LABEL_VOLUME = "Volume:"
+#: Checkbox labels for the four audio categories (spec 13: UI controls -
+#: group 1). Each Checkbox drives the matching AudioManager enabled flag.
+OPTIONS_LABEL_GAME_SFX_ENABLED = "Game sound effects enabled"
+OPTIONS_LABEL_UI_SFX_ENABLED = "UI sound effects enabled"
+OPTIONS_LABEL_SPEECH_ENABLED = "Speech enabled"
+OPTIONS_LABEL_MUSIC_ENABLED = "Music enabled"
 #: Label of the Title Screen's Exit Game button (spec 08: Buttons and
 #: options). ESC on the Title Screen is equivalent to clicking it.
 EXIT_GAME_LABEL = "Exit Game"
