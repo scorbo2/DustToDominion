@@ -398,12 +398,14 @@ class TestRun:
         # by spec 13),
         assert exit_code == 0
         assert created_screens == ["title", "options", "title"]
-        # ...each TitleScreen started its own music in its constructor,
-        # the loop stopped the music on BOTH transitions
-        # (title->options and options->title), and the finally-block stop
-        # covers the loop exit:
+        # ...every screen started its own music in its constructor
+        # (spec 08 as amended by spec 13; spec 13: Audio handling), the
+        # loop stopped the music on BOTH transitions (title->options and
+        # options->title), and the finally-block stop covers the loop
+        # exit:
         title_play = f"play:{tuple(game_constants.TITLE_SCREEN_MUSIC_IDS)}"
-        assert calls == [title_play, "stop", "stop", title_play, "stop"]
+        options_play = f"play:{tuple(game_constants.OPTIONS_SCREEN_MUSIC_IDS)}"
+        assert calls == [title_play, "stop", options_play, "stop", title_play, "stop"]
 
     def test_when_unrelated_pygame_modules_fail_should_open_window_and_exit_cleanly(
         self,

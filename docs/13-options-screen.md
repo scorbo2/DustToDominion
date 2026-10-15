@@ -279,6 +279,13 @@ The tests need to use the `mixer_ready` + `init_audio_manager` pattern to proces
    at this stage, other than the back button and the "Options"
    title Label (reassigned here from stage 2, which left it
    unassigned).
+   **Completed 2026-10-14**: background probes `OPTIONS_SCREEN_BACKGROUND_IMAGE_IDS`
+   in order with the scaled copy cached per surface size, falling back
+   to the Title screen's starfield mechanism (test-injectable `rng`);
+   the constructor requests `play_music_first_match(OPTIONS_SCREEN_MUSIC_IDS)`
+   and the loop's transition stop covers the way back; the "Options"
+   title Label (100x50 at (128,24), left-aligned, non-opaque, border 0)
+   is registered alongside the back button. Full suite: 960 passed.
 4. Implement control group 1: the audio controls. Handle
    screen placement of this group, ensure the initial state
    of all controls matches current audio config, and wire up
