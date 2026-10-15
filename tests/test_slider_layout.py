@@ -54,9 +54,17 @@ class TestSliderLayout:
     def test_value_label_should_render_within_the_right_tenth(
         self, font_ready: None
     ) -> None:
-        # GIVEN a Slider at a two-digit value:
+        # GIVEN a Slider at a two-digit value, with a display label
+        # long enough that the auto-scaled label margin cannot starve
+        # the value tenth on any plausible platform font (issue #63:
+        # a short label over a narrow Windows font let the auto-scaler
+        # grow the shared margin until the value text budget collapsed
+        # to ~2px and the value went invisible):
         slider, ui = slider_ui(
-            RECT, make_theme(TEST_THEME_JSON), text="Volume", initial_value=50
+            RECT,
+            make_theme(TEST_THEME_JSON),
+            text="Volume Control",
+            initial_value=50,
         )
 
         # WHEN the UI draws,
@@ -266,18 +274,23 @@ class TestSliderFontOptions:
         assert bbox is not None
         assert bbox[2] <= text_w and bbox[3] <= text_h
 
-    def test_pinned_oversized_label_should_clip_but_the_value_label_should_still_auto_scale(
+    def test_pinned_oversized_label_should_clip_and_the_value_label_should_fall_back_to_the_smallest_size(
         self, font_ready: None
     ) -> None:
         # GIVEN a Slider pinned to a point size whose rendered label
         # overflows its third (60pt: ~35px margin, ~100px-wide "Vol"
         # blitted at the margin - it reaches past the area's right
-        # edge and must clip there):
+        # edge and must clip there) - and whose shared margin alone
+        # outgrows the 30px value tenth (2 x ~35 >= 30), starving it
+        # (spec 12: The value label note, issue #63). Deterministic on
+        # any plausible platform font: a 60pt "0" glyph is far taller
+        # than the 30px the margin rule can afford here.
         theme = make_theme(TEST_THEME_JSON)
         slider, ui = slider_ui(RECT, theme, text="Vol", initial_value=50)
         slider.set_font_point_size(60)
 
-        # WHEN the UI draws,
+        # WHEN the UI draws with a font-size spy attached,
+        requested = font_size_spy(theme)
         screen = draw_ui(ui)
 
         # THEN the label ink stays inside its area (clipped, not
@@ -289,14 +302,15 @@ class TestSliderFontOptions:
         margin = zero_margin(theme, 60)
         assert not has_red_ink(screen, LABEL_AREA_RIGHT, margin)
 
-        # ...while the value label auto-scales to fit its tenth,
-        # ignoring the pin entirely (spec 12: set_font_point_size -
-        # "not the value label, which always auto-scales"):
-        value_bbox = ink_bbox(
-            screen, (VALUE_AREA_LEFT, 0, 300 - VALUE_AREA_LEFT, 100), is_red_ink
-        )
-        assert value_bbox is not None
-        assert value_bbox[2] <= 30 and value_bbox[3] <= 100
+        # ...and the starved value label explicitly chose the smallest
+        # point size fallback instead of running a search that cannot
+        # succeed (spec 12: The value label note, issue #63). Pinned
+        # via the font spy, not pixels: whether any pixel of
+        # fallback-size text survives the platform rasterizer is
+        # exactly the coin flip that made the old pixel assertion
+        # Windows-red. The label path only ever requests 60 (pinned -
+        # no auto-scale search), so the value label's 1 stands alone.
+        assert set(requested) == {60, 1}
 
     @pytest.mark.parametrize("invalid_size", [0, -5, 12.5, "big", True])
     def test_set_font_point_size_with_invalid_value_should_warn_and_use_auto_scale(

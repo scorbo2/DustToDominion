@@ -33,7 +33,10 @@ Rendering contract (spec 12: Slider layout):
   display label font size - or at the value label's effective size
   when no display label is present (spec 12: Margin). Auto-scale
   searches run through the shared ``text_layout`` module so the margin
-  rule cannot drift (specs 07/10 precedent).
+  rule cannot drift (specs 07/10 precedent). When the label-derived
+  margin alone outgrows the value tenth, the value label falls back to
+  the smallest point size explicitly (spec 12: The value label note,
+  issue #63).
 - The track is a 2-design-pixel horizontal line with a screen-pixel
   floor of 2 (spec 12: The slider track), vertically centered in the
   inner rect, drawn in the state's ``foreground*`` color. It is not
@@ -88,6 +91,28 @@ from dtd.widgets.text_layout import (
 #: track would read as a smudge at small scales (same reasoning as the
 #: Checkbox strokes, spec 11).
 _TRACK_DESIGN_PX = 2
+
+#: The point size the value label falls back to when margin starvation
+#: leaves no fitting size (spec 12: The value label note, issue #63).
+#: Matches ``largest_fitting_size``'s default fallback; named so the
+#: explicit branch and the search agree by construction, not by luck.
+_VALUE_SIZE_FALLBACK = 1
+
+
+def _margin_starves_value_area(value_area_width: int, fixed_margin: int) -> bool:
+    """Whether the shared margin alone outgrows the value label's tenth.
+
+    The margin rule (spec 12: Margin) charges ``fixed_margin`` on both
+    horizontal edges of the value area; when twice it equals or exceeds
+    the area's width, no point size can fit the value text and the
+    auto-scale search could only ever return its fallback (issue #63:
+    a narrow platform font let the auto-scaled display label grow the
+    shared margin until the value text budget collapsed to ~2px).
+    Named here so the spec note, the fallback branch in
+    ``_effective_value_size``, and the tests' corner premise all point
+    at one definition and cannot drift.
+    """
+    return 2 * fixed_margin >= value_area_width
 
 
 def _round_half_up(x: float) -> int:
@@ -749,6 +774,13 @@ class Slider(Widget):
         ``ZERO_GLYPH_MARGIN_FITS`` predicate re-derives it per size,
         which resolves the size/margin circularity).
 
+        When the label-derived margin alone outgrows the tenth, the
+        smallest point size is chosen explicitly as the fallback
+        (spec 12: The value label note, issue #63) rather than letting
+        the search degrade silently to it - the label may be
+        effectively invisible at that size, an accepted consequence
+        mirroring the oversized pinned display label.
+
         Sized for the *displayed* text - the drag preview mid-drag -
         so a preview with more digits than the committed value (9 ->
         100) still fits instead of clipping (spec 12: the value label
@@ -759,11 +791,22 @@ class Slider(Widget):
             return None
         if label_size is not None:
             fixed_margin = zero_glyph_margin(theme.get_font(label_size))
+            if _margin_starves_value_area(value_area.w, fixed_margin):
+                # Margin starvation (spec 12: The value label note,
+                # issue #63): no point size fits, so choose the
+                # fallback up front instead of burning a doomed
+                # binary search to arrive at the same answer.
+                return _VALUE_SIZE_FALLBACK
             fits = margin_fit_predicate(lambda font: fixed_margin)
         else:
             fits = ZERO_GLYPH_MARGIN_FITS
         return largest_fitting_size(
-            theme, value_text, value_area.w, value_area.h, fits=fits
+            theme,
+            value_text,
+            value_area.w,
+            value_area.h,
+            fits=fits,
+            fallback=_VALUE_SIZE_FALLBACK,
         )
 
     def _draw_label(
