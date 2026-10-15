@@ -107,6 +107,35 @@ TITLE_SCREEN_MUSIC_IDS = (
     "audio/music/game_title.wav",
     "audio/music/game_title.ogg",
 )
+# --- Options screen resources (spec 04: Core UI Resources, added by spec 13) --
+#: Background image resource ids probed in order (spec 13: Background). The
+#: first one that resolves is stretched to fill the Options Screen; if none
+#: resolve, a starfield is generated instead.
+OPTIONS_SCREEN_BACKGROUND_IMAGE_IDS = (
+    "graphics/screens/options_screen.png",
+    "graphics/screens/options_screen.jpg",
+    "graphics/screens/options_screen.jpeg",
+)
+#: Options Screen music track ids probed in order (spec 13: Audio handling).
+#: Handed to ``AudioManager.play_music_first_match``.
+OPTIONS_SCREEN_MUSIC_IDS = (
+    "audio/music/game_options.mp3",
+    "audio/music/game_options.wav",
+    "audio/music/game_options.ogg",
+)
+#: Sample game sound effect played while adjusting the game-sfx volume slider
+#: (spec 13: Interactions and persistence).
+OPTIONS_SCREEN_TEST_GAME_SFX = "audio/sfx/test_game_sfx.wav"
+#: Sample UI sound effect played while adjusting the UI-sfx volume slider
+#: (spec 13: Interactions and persistence).
+OPTIONS_SCREEN_TEST_UI_SFX = "audio/sfx/test_ui_sfx.wav"
+#: Sample speech clip played while adjusting the speech volume slider
+#: (spec 13: Interactions and persistence).
+OPTIONS_SCREEN_TEST_SPEECH = "audio/sfx/test_speech.wav"
+#: Label of the Title Screen's Options button (spec 08: Buttons and options,
+#: added by spec 13). Clicking it transitions to the Options screen; it also
+#: labels the Options screen's title Label (spec 13: Exit control and title).
+OPTIONS_LABEL = "Options"
 #: Label of the Title Screen's Exit Game button (spec 08: Buttons and
 #: options). ESC on the Title Screen is equivalent to clicking it.
 EXIT_GAME_LABEL = "Exit Game"
@@ -115,8 +144,9 @@ EXIT_GAME_LABEL = "Exit Game"
 #: options in the single centered vertical column.
 MENU_OPTION_WIDTH = 400
 MENU_OPTION_HEIGHT = 45
-MENU_OPTION_BORDER_WIDTH = 4
-MENU_OPTION_SPACING = 35
+# Amended 2026-10-14 per spec 13: border width 4 -> 2, spacing 35 -> 24.
+MENU_OPTION_BORDER_WIDTH = 2
+MENU_OPTION_SPACING = 24
 #: Starfield bounds (spec 08: Background). The star count is inclusive at
 #: both ends; star brightness is grayscale and oscillates one step at a
 #: time between the two limits.

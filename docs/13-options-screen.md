@@ -17,104 +17,6 @@ OptionScreen's constructor should accept a `random.Random` object
 to enable the unit tests to properly test starfield generation
 (copy the precedent from the existing TitleScreen class).
 
-## Amendments to previous spec docs
-
-### Changes to Title Screen (08 spec)
-
-This doc amends `08-title-screen.md`:
-- Remove all references to the non-persisting font and theme choosers,
-  including test bullets and acceptance criteria bullets. Any historical
-  references in the Dev plan section are exempt from removal.
-  These were temporarily placed on the Title screen so that they could
-  be manually tested. Now that the Options screen is being implemented,
-  those choosers will be moved here. The sentinel/initial-index behavior
-  currently associated with them also moves here, but their initial state
-  now comes from the app theme config rather than screen-local state.
-- "Main's run() should build a Theme once from config" is outdated.
-  Main now builds a Theme from config before each Screen is instantiated.
-- All Title screen code that supports those choosers can be removed.
-  All associated tests for Title screen should be updated or removed.
-- Add a new button to the Title Screen labeled "Options" (constant name
-  for `game_constants.py`: `OPTIONS_LABEL`). This button,
-  when clicked, should transition from the Title screen to the Options
-  screen. Any playing music should be stopped during this screen transition.
-  The Options button should appear above the existing Exit Game button.
-- The existing 35px of empty space between widgets on the Title screen
-  should be reduced to 24px (in design space). (Implementation: update
-  the `MENU_OPTION_SPACING` constant in `game_constants.py`).
-- The border width of buttons should change to 2 (implementation note:
-  update the `MENU_OPTION_BORDER_WIDTH` constant in `game_constants.py`).
-
-Additionally, spec 08's Code layout section must be updated to expand the `ScreenAction`
-enum with additional values:
-
-```
-SHOW_TITLE_SCREEN=2,
-SHOW_OPTIONS_SCREEN=3,
-```
-
-And remove the comment about QUIT being the only ScreenAction.
-
-The main game loop should create a new instance of a screen on any transition to that screen,
-including the initial display of the Title screen on startup.
-
-Title screen music is currently started in `main.run()`, but this logic should move into
-the TitleScreen class. Each screen class should be responsible for starting its own music;
-the main loop should be responsible for stopping music on any transition between screens.
-
-A dispatch table should be added to `main.py` to handle constructing a new
-OptionsScreen instance when `SHOW_OPTIONS_SCREEN` is received.
-
-Additionally, spec 08 currently contains "A future OptionsScreen will wire up a
-propagation mechanism to publish changes to other screens" - this wording should be removed.
-
-Tests to add to the 08 spec:
-- An Options button appears above the Exit Game button.
-- Only two Buttons are created and displayed.
-- Clicking the Options button triggers a transition to the Options screen.
-- a new Theme object is created from config before each screen transition.
-
-### Changes to UI framework (04 spec)
-
-This doc amends `04-ui-widgets.md` to add new constants to the Core UI Resources list:
-
-```
-| `OPTIONS_SCREEN_BACKGROUND_IMAGE_IDS` | `( "graphics/screens/options_screen.png", "graphics/screens/options_screen.jpg", "graphics/screens/options_screen.jpeg" )` | List of background image resource IDs that can be displayed on the Options Screen (spec 13). |
-| `OPTIONS_SCREEN_MUSIC_IDS` | `( "audio/music/game_options.mp3", "audio/music/game_options.wav", "audio/music/game_options.ogg" )` | List of music track IDs that can be played on the Options Screen (spec 13). |
-| `OPTIONS_SCREEN_TEST_GAME_SFX` | `"audio/sfx/test_game_sfx.wav"` | Sample game sound effect for the options screen (spec 13). |
-| `OPTIONS_SCREEN_TEST_UI_SFX` | `"audio/sfx/test_ui_sfx.wav"` | Sample UI sound effect for the options screen (spec 13). |
-| `OPTIONS_SCREEN_TEST_SPEECH` | `"audio/sfx/test_speech.wav"` | Sample speech audio for the options screen (spec 13). |
-```
-
-These can be added immediately after the existing Title screen constants.
-
-Additionally, the `04` spec must specify new setter convenience methods so that game code
-can programmatically update the `theme` and `font` options in the game config:
-
-```python
-def set_theme(theme: str | None):
-    # If theme is None, blank, empty, or "default", set "default" in config.
-    # Otherwise, set the given value verbatim.
-    # On any persistence failure (OSError or ConfigError for example), log warning and continue.
-
-def set_font(font: str | None):
-    # If font is None, blank, empty, or "default", set "default" in config.
-    # Otherwise, set the given value verbatim.
-    # On any persistence failure (OSError or ConfigError for example), log warning and continue.
-```
-
-These can be module-level functions in `game_config.py` that load the existing
-config, patch the new value via shallow single-key merge, and save it.
-`main` should construct a new Theme from configuration before
-each screen is instantiated, and supply it to the screen's constructor, so
-that each screen transition automatically gets the latest configuration.
-
-Tests to add to doc 04:
-- `set_theme` given "default", None, or a blank/empty string sets "default" in config.
-- `set_theme` given any other string value sets the value verbatim in config.
-- if `set_theme` encounters OSError or ConfigError, it logs a warning and returns.
-- Similar tests for `set_font`
-
 ## Additional dependencies
 
 None.
@@ -352,6 +254,12 @@ The tests need to use the `mixer_ready` + `init_audio_manager` pattern to proces
    the change. If all is well, flip each doc back to `active`
    and remove the "Amendments to previous spec docs" section
    from this document.
+   **Completed 2026-10-14**: docs 08 and 04 amended, implemented, and
+   flipped back to `active`; the Title Screen choosers are gone, the
+   Options button + `SHOW_OPTIONS_SCREEN`/`SHOW_TITLE_SCREEN` dispatch
+   table is in place, `game_config.set_theme`/`set_font` persist
+   immediately, and main builds a fresh `Theme` from the latest config
+   before every screen instantiation. Full suite: 941 passed.
 2. Implement a mostly-stubbed Options screen with ONLY the
    "< Back" button and no other widget. No background handling
    or music at this point - just focus on the transition from

@@ -24,11 +24,15 @@ import pygame
 class ScreenAction(Enum):
     """A screen's intent, communicated to the main loop (spec 08).
 
-    ``QUIT`` is the only member for now; future screens add transition
-    actions (example: "start the game") as new specs define them.
+    ``QUIT`` ends the game loop; the ``SHOW_*`` members (added by spec 13)
+    request a transition to the named screen. The main loop stops the
+    outgoing screen's music on any transition and constructs a fresh
+    instance of the requested screen via its dispatch table.
     """
 
     QUIT = 1
+    SHOW_TITLE_SCREEN = 2
+    SHOW_OPTIONS_SCREEN = 3
 
 
 class Screen:

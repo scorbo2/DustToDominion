@@ -16,7 +16,12 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from dtd import config, persistence
 from dtd.errors import ConfigError
-from dtd.game_constants import VOLUME_MAX_PERCENT, VOLUME_MIN_PERCENT
+from dtd.game_constants import (
+    DEFAULT_FONT_VALUE,
+    DEFAULT_THEME_VALUE,
+    VOLUME_MAX_PERCENT,
+    VOLUME_MIN_PERCENT,
+)
 from dtd.main_window import MainWindowConfig
 
 #: Env var overriding the location of game.json (spec 01).
@@ -143,3 +148,46 @@ def save_game_config_section(section_name: str, section_data: BaseModel) -> None
         section_name: section_data.model_dump(exclude_none=True)
     }
     config.save_config(game_config_path(), GAME_CONFIG_ENV_VAR, top_level)
+
+
+def set_theme(theme: str | None) -> None:
+    """Persist the ``theme`` config key (spec 04, added by spec 13).
+
+    ``None``, a blank/empty string, or the literal "default" all store
+    the ``DEFAULT_THEME_VALUE`` sentinel; any other value is stored
+    verbatim. Never raises: a persistence failure is logged as a warning
+    and swallowed (spec 04: the game keeps running with whatever IS on
+    disk; the next screen instantiation rebuilds its Theme from there).
+    """
+    _set_config_string("theme", theme, DEFAULT_THEME_VALUE)
+
+
+def set_font(font: str | None) -> None:
+    """Persist the ``font`` config key (spec 04, added by spec 13).
+
+    Same normalization and never-raises rules as :func:`set_theme`, with
+    ``DEFAULT_FONT_VALUE`` as the sentinel.
+    """
+    _set_config_string("font", font, DEFAULT_FONT_VALUE)
+
+
+def _set_config_string(key: str, value: str | None, default_value: str) -> None:
+    """Patch one top-level string key into game.json (spec 04, added by
+    spec 13).
+
+    ``config.save_config`` already loads the existing file and shallow-
+    merges the given top-level keys (spec 01), so a single-key dict IS
+    the whole patch. A literal "default" needs no special-casing: it is
+    stored verbatim and lands on the same sentinel value.
+    """
+    normalized = default_value if value is None or not value.strip() else value
+    try:
+        config.save_config(game_config_path(), GAME_CONFIG_ENV_VAR, {key: normalized})
+    except (ConfigError, OSError) as exc:
+        # Spec 04: log a warning and continue - an options-screen change
+        # stays in effect in memory even when it cannot be persisted.
+        logger.warning(
+            "failed to persist {} configuration ({}); continuing without it",
+            key,
+            type(exc).__name__,
+        )

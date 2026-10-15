@@ -18,6 +18,7 @@ from dtd.errors import (
     UnsupportedResourceVersionError,
 )
 from dtd.game_config import GameConfig
+from dtd.screens.base import ScreenAction
 
 
 @pytest.fixture
@@ -186,8 +187,10 @@ class TestRun:
         synthesized_project: Path,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        # GIVEN spies on the AudioManager methods startup and the loop are
-        # supposed to call (spec 08: Title Screen audio / Integration):
+        # GIVEN spies on the AudioManager methods the screens and the
+        # loop are supposed to call (spec 08: Title Screen audio /
+        # Integration, as amended by spec 13 - each screen starts its
+        # own music, the loop stops it):
         calls: list[str] = []
         real_play = audio.AudioManager.play_music_first_match
         real_stop = audio.AudioManager.stop_music
@@ -219,15 +222,94 @@ class TestRun:
         # WHEN run() executes,
         exit_code = app_main.run()
 
-        # THEN the title music candidates were offered in spec order at
-        # startup, and the loop stopped the music on exit. (No track
-        # resolves in this hermetic project, so the play is a no-op -
-        # what is pinned here is the wiring, not the sound.)
+        # THEN the TitleScreen constructor offered the title music
+        # candidates in spec order, and the loop stopped the music on
+        # exit. (No track resolves in this hermetic project, so the play
+        # is a no-op - what is pinned here is the wiring, not the sound.)
         assert exit_code == 0
         assert calls == [
             f"play:{tuple(game_constants.TITLE_SCREEN_MUSIC_IDS)}",
             "stop",
         ]
+
+    def test_should_buildFreshThemeFromConfig_beforeEachScreenInstantiation(
+        self,
+        bootstrapped_persistence: Path,
+        synthesized_project: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        # GIVEN spies recording every config load and Theme build, in
+        # order (spec 08: Integration, as amended by spec 13 - a new
+        # Theme is created from config before each screen is
+        # instantiated):
+        order: list[str] = []
+        real_load = app_main.game_config.load_game_config
+
+        def spy_load():
+            order.append("config")
+            return real_load()
+
+        monkeypatch.setattr(app_main.game_config, "load_game_config", spy_load)
+
+        real_theme = app_main.Theme
+
+        def spy_theme(theme_value: str, font_value: str, loader) -> app_main.Theme:
+            order.append("theme")
+            return real_theme(theme_value, font_value, loader)
+
+        monkeypatch.setattr(app_main, "Theme", spy_theme)
+
+        # AND a TitleScreen that requests the Options transition on its
+        # first handle() call (standing in for an Options-button click -
+        # the button itself is pinned in test_title_screen.py):
+        handle_calls = 0
+        real_title_screen = app_main.TitleScreen
+
+        class TransitioningTitleScreen(real_title_screen):
+            def handle(self, events):
+                nonlocal handle_calls
+                handle_calls += 1
+                if handle_calls == 1:
+                    return ScreenAction.SHOW_OPTIONS_SCREEN
+                return super().handle(events)
+
+        monkeypatch.setattr(app_main, "TitleScreen", TransitioningTitleScreen)
+
+        # AND an OptionsScreen spy so the dispatch target is observable:
+        created_screens: list[str] = []
+        real_options_screen = app_main.OptionsScreen
+
+        class RecordingOptionsScreen(real_options_screen):
+            def __init__(self, *args, **kwargs):
+                super().__init__(*args, **kwargs)
+                created_screens.append("options")
+
+        monkeypatch.setattr(app_main, "OptionsScreen", RecordingOptionsScreen)
+
+        # AND a QUIT event posted on the SECOND pump, so the loop exits
+        # after the transition has completed:
+        pump_count = 0
+        real_event_get = pygame.event.get
+
+        def event_get(*args, **kwargs):
+            nonlocal pump_count
+            pump_count += 1
+            if pump_count == 2:
+                pygame.event.post(pygame.event.Event(pygame.QUIT))
+            return real_event_get(*args, **kwargs)
+
+        monkeypatch.setattr(pygame.event, "get", event_get)
+
+        # WHEN run() executes,
+        exit_code = app_main.run()
+
+        # THEN the loop dispatched SHOW_OPTIONS_SCREEN to a brand-new
+        # OptionsScreen instance, and every screen - the startup Title
+        # screen AND the transitioned-to Options screen - got its Theme
+        # built from a config load immediately before construction:
+        assert exit_code == 0
+        assert created_screens == ["options"]
+        assert order == ["config", "config", "theme", "config", "theme"]
 
     def test_when_unrelated_pygame_modules_fail_should_open_window_and_exit_cleanly(
         self,
@@ -295,15 +377,18 @@ class TestRun:
 
 
 class TestStartupOrder:
-    def test_should_run_config_then_pygame_then_resources_then_ui_then_audio_then_window(
+    def test_should_run_config_then_pygame_then_resources_then_audio_then_window_then_screenWithTheme(
         self, bootstrapped_persistence: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        # Spec 03 startup order as amended by specs 04 and 05: (1) config,
-        # (2) pygame init, (3) resource loading, (4) UI initialization
-        # (Theme + UIManager), (5) AudioManager initialization, (6) main
-        # window. Record the call order without replacing the real work
-        # (pygame must really init for the event loop to run under the
-        # dummy driver).
+        # Spec 03 startup order as amended by specs 04, 05, and 13:
+        # (1) config, (2) pygame init, (3) resource loading,
+        # (4) AudioManager initialization, (5) main window, (6) the
+        # startup screen - and the Theme is no longer built once before
+        # the window: the screen factory builds it from a fresh config
+        # load right before each screen is instantiated (spec 04, as
+        # amended by spec 13). Record the call order without replacing
+        # the real work (pygame must really init for the event loop to
+        # run under the dummy driver).
         order: list[str] = []
 
         def spy_load_config():
@@ -359,7 +444,17 @@ class TestStartupOrder:
         monkeypatch.setattr(pygame.event, "get", event_get)
 
         assert app_main.run() == 0
-        assert order == ["config", "pygame", "resources", "ui", "audio", "window"]
+        # The trailing "config", "ui" pair is the startup screen's
+        # factory: a fresh config load, then the Theme it feeds.
+        assert order == [
+            "config",
+            "pygame",
+            "resources",
+            "audio",
+            "window",
+            "config",
+            "ui",
+        ]
 
 
 class TestInitPygame:

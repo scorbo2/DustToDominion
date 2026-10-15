@@ -16,11 +16,17 @@ Widget implementation classes live in `dtd/widgets/`, each in their own module
 
 ## Changes to game startup
 
-UIManager and Theme should be initialized after configuration and resource loading, but before the
-main window is created.
+UI initialization happens after configuration and resource loading.
 
 This amends spec 03's startup order: UI initialization is inserted as a new step between resource loading
 and window creation.
+
+*Amended 2026-10-14 per spec 13 (Options Screen): the application `Theme` is no longer built
+once up front before the main window is created. Main builds a fresh `Theme` from the latest
+config before each Screen is instantiated - including the initial Title screen at startup -
+so every screen transition automatically gets the latest theme and font. `UIManager` remains
+per-screen: each Screen creates its own in its constructor, which necessarily happens after
+the main window exists (per the spec 08 amendment noted in the Theme section).*
 
 ## Changes to game loop
 
@@ -107,6 +113,33 @@ the built-in default theme will be used.
 Note that theme configuration deliberately does not include font. This is so that font can be set
 regardless of the current theme, and vice versa. However, in code, the Theme class should be aware
 of which font is selected (see Theme class).
+
+### Programmatic theme/font setters
+
+*Added 2026-10-14 per spec 13 (Options Screen).*
+
+Game code (the Options screen, spec 13) needs to update the `theme` and `font` config keys
+at runtime with immediate persistence. Two module-level convenience functions in
+`game_config.py` provide this:
+
+```python
+def set_theme(theme: str | None):
+    # If theme is None, blank, empty, or "default", set "default" in config.
+    # Otherwise, set the given value verbatim.
+    # On any persistence failure (OSError or ConfigError for example), log warning and continue.
+
+def set_font(font: str | None):
+    # If font is None, blank, empty, or "default", set "default" in config.
+    # Otherwise, set the given value verbatim.
+    # On any persistence failure (OSError or ConfigError for example), log warning and continue.
+```
+
+These load the existing config, patch the new value via a shallow single-key merge (the
+same merge semantics as `save_game_config_section`, spec 01), and save it.
+
+Main constructs a new `Theme` from configuration before each screen is instantiated, and
+supplies it to the screen's constructor, so that each screen transition automatically gets
+the latest configuration (see spec 08: Integration with the main game loop).
 
 ## Widget and Theme framework
 
@@ -304,6 +337,11 @@ They are represented in `game_constants.py`:
 | `UI_SFX_ACCEPT` | `audio/ui/accept.ogg` | Used to confirm some UI action (example: a button click). |
 | `TITLE_SCREEN_BACKGROUND_IMAGE_IDS` | `( "graphics/screens/title_screen.png", "graphics/screens/title_screen.jpg", "graphics/screens/title_screen.jpeg" )` | List of background image resource IDs that can be displayed on the Title Screen (spec 08). |
 | `TITLE_SCREEN_MUSIC_IDS` | `( "audio/music/game_title.mp3", "audio/music/game_title.wav", "audio/music/game_title.ogg" )` | List of music track IDs that can be played on the Title Screen (spec 08). |
+| `OPTIONS_SCREEN_BACKGROUND_IMAGE_IDS` | `( "graphics/screens/options_screen.png", "graphics/screens/options_screen.jpg", "graphics/screens/options_screen.jpeg" )` | List of background image resource IDs that can be displayed on the Options Screen (spec 13). |
+| `OPTIONS_SCREEN_MUSIC_IDS` | `( "audio/music/game_options.mp3", "audio/music/game_options.wav", "audio/music/game_options.ogg" )` | List of music track IDs that can be played on the Options Screen (spec 13). |
+| `OPTIONS_SCREEN_TEST_GAME_SFX` | `"audio/sfx/test_game_sfx.wav"` | Sample game sound effect for the options screen (spec 13). |
+| `OPTIONS_SCREEN_TEST_UI_SFX` | `"audio/sfx/test_ui_sfx.wav"` | Sample UI sound effect for the options screen (spec 13). |
+| `OPTIONS_SCREEN_TEST_SPEECH` | `"audio/sfx/test_speech.wav"` | Sample speech audio for the options screen (spec 13). |
 
 This table is the canonical list of UI resource ids used by any UI spec doc in this project.
 Other spec docs must reference these constants by name, never by raw resource id string.
@@ -336,6 +374,11 @@ It is never an error if these resource IDs do not resolve. All UI resources are 
   - `get_theme_resource_id()` returns "default" if an invalid theme was configured.
   - UIManager's `set_theme` can be used to change the current theme in a UIManager. All of its
     widgets receive the new Theme on subsequent calls to `draw()`.
+- `set_theme`/`set_font` module-level setters (added 2026-10-14 per spec 13: Options Screen):
+  - `set_theme` given "default", None, or a blank/empty string sets "default" in config.
+  - `set_theme` given any other string value sets the value verbatim in config.
+  - if `set_theme` encounters OSError or ConfigError, it logs a warning and returns.
+  - Similar tests for `set_font`.
 - Hover-enter notification (added 2026-10-10 per spec 07):
   - `UIManager` invokes `Widget.on_hover_enter()` when a non-disabled, non-selected Widget
     transitions from non-hovered state to hovered state - and only once per transition
@@ -405,6 +448,13 @@ The spec can be implemented in stages:
     never on disabled or selected widgets. Tests as described in the Testing section above.
     If all tests pass, flip this document back to `active` status.
     **Completed 2026-10-10** (full suite green at 678 tests)
+11. Amendment 2026-10-14 per spec 13 (Options Screen): add the five Options-screen core UI
+    resource constants to the Core UI Resources table; add the `set_theme`/`set_font`
+    module-level setters in `game_config.py` (immediate persistence, log warning and
+    continue on failure); update the startup wording so main builds a fresh `Theme` from
+    the latest config before each Screen is instantiated. Tests as described in the
+    Testing section above. If all tests pass, flip this document back to `active` status.
+    **Completed 2026-10-14** (full suite green at 941 tests)
 
 Upon completion, if all tests pass, mark this document as "active". (Done 2026-10-01;
 full suite green at 280 tests.)
