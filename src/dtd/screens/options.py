@@ -104,7 +104,7 @@ class _AudioRowSpec:
 
 #: The four audio categories, in spec order (spec 13: UI controls -
 #: group 1: game sfx, UI sfx, speech, music).
-_AUDIO_ROWS: Final[_AudioRowSpec, ...] = (
+_AUDIO_ROWS: Final[tuple[_AudioRowSpec, ...]] = (
     _AudioRowSpec(
         game_constants.OPTIONS_LABEL_GAME_SFX_ENABLED,
         "game_sfx",
