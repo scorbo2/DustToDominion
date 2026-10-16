@@ -26,6 +26,7 @@ from dtd.resource_loader import ResourceLoader
 from dtd.ui import Theme, UIManager
 from dtd.widgets.choice_list import ChoiceList, sanitize_choices
 from helpers_pixels import any_pixel_differs
+from helpers_theme_override import assert_theme_override_honored
 
 # Distinguishable custom theme: red/green in the normal state, blue/white
 # when selected, cyan/yellow on hover, dark grays when disabled.
@@ -772,6 +773,83 @@ class TestStateColors:
         assert screen.get_at(self.BACKGROUND_SAMPLE) == NORMAL_BG
         assert any_pixel_differs(screen, pygame.Rect(0, 0, 60, 60), NORMAL_BG)
         assert any_pixel_differs(screen, pygame.Rect(60, 0, 280, 60), NORMAL_BG)
+
+
+class TestChoiceListThemeOverride:
+    """The theme-override contract (spec 07 Testing, added 2026-10-15).
+
+    The generic half lives once and for all in
+    ``helpers_theme_override.assert_theme_override_honored``; these
+    tests add the ChoiceList-specific pixel proof, including the
+    selected-state chrome only this widget displays.
+    """
+
+    #: Chrome colors distinguishable from TEST_THEME_JSON, including a
+    #: blue backgroundSelected the base theme (white) can never produce.
+    OVERRIDE_JSON = {
+        "foregroundNormal": "ffff00",
+        "backgroundNormal": "ff00ff",
+        "foregroundSelected": "ff0000",
+        "backgroundSelected": "0000ff",
+    }
+    OVERRIDE_FG = (255, 255, 0, 255)
+    OVERRIDE_BG = (255, 0, 255, 255)
+    OVERRIDE_SELECTED_BG = (0, 0, 255, 255)
+
+    def test_set_theme_override_should_replace_the_draw_theme_and_none_should_restore_it(
+        self, font_ready: None
+    ) -> None:
+        # GIVEN/WHEN/THEN entirely inside the shared spec 04 pin. A
+        # ChoiceList is drawable straight away (no appearance frame):
+        assert_theme_override_honored(
+            lambda: ChoiceList(pygame.Rect(0, 0, 400, 60), ["alpha"])
+        )
+
+    def test_theme_override_should_paint_the_chrome_and_none_should_restore_the_ui_theme(
+        self, font_ready: None
+    ) -> None:
+        # GIVEN a bordered ChoiceList registered with a UIManager
+        # holding the red/green test theme:
+        widget, ui, _ = _choice_ui(
+            pygame.Rect(0, 0, 400, 60), ["alpha"], border_width=4
+        )
+
+        # WHEN a magenta/yellow theme override is set and the UI draws:
+        widget.set_theme_override(_theme(self.OVERRIDE_JSON))
+        screen = _draw(ui)
+
+        # THEN fill and border paint with the override's colors, not
+        # the UIManager's (spec 07: the override outranks the draw
+        # theme):
+        assert screen.get_at((5, 5)) == self.OVERRIDE_BG
+        assert screen.get_at((1, 1)) == self.OVERRIDE_FG
+
+        # WHEN the override is cleared and the UI draws again:
+        widget.set_theme_override(None)
+        screen = _draw(ui)
+
+        # THEN the UIManager's theme is visible once more:
+        assert screen.get_at((5, 5)) == NORMAL_BG
+        assert screen.get_at((1, 1)) == (255, 0, 0, 255)
+
+    def test_theme_override_should_supply_the_selected_state_colors_too(
+        self, font_ready: None
+    ) -> None:
+        # GIVEN a selected ChoiceList whose override carries its own
+        # *Selected colors (the state machinery must read them from the
+        # override, not the base theme):
+        widget, ui, _ = _choice_ui(pygame.Rect(0, 0, 400, 60), ["alpha"])
+        widget.selected = True
+        widget.set_theme_override(_theme(self.OVERRIDE_JSON))
+
+        # WHEN the UI draws,
+        # THEN the selected fill comes from the override's
+        # backgroundSelected - blue, which the base theme's white can
+        # never produce:
+        screen = _draw(ui)
+        assert screen.get_at(TestStateColors.BACKGROUND_SAMPLE) == (
+            self.OVERRIDE_SELECTED_BG
+        )
 
 
 class TestItemTextRendering:

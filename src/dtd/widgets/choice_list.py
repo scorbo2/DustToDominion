@@ -324,6 +324,10 @@ class ChoiceList(Widget):
 
     # -- rendering (spec 07: Visual appearance) ----------------------------
     def draw(self, surf: pygame.Surface, theme: Theme) -> None:
+        # A client-set theme override (spec 04, added 2026-10-15) wins
+        # over the Theme handed to draw(); resolve before anything reads
+        # it, so every state lookup below hits the override.
+        theme = self.resolve_theme(theme)
         scale = current_scale()
         rect = scale.rect(self.rect.x, self.rect.y, self.rect.w, self.rect.h)
         if rect.w <= 0 or rect.h <= 0:

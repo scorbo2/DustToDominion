@@ -1,6 +1,6 @@
 ---
 description: Describes a new UI widget for the game: ChoiceList
-status: proposed
+status: active
 ---
 
 # ChoiceList
@@ -354,3 +354,4 @@ implementation plan is suggested (each stage after 1 should include tests):
    `draw()` method and render with the returned Theme instead of the one supplied to
    `draw()`. Implement the tests for this. Flip this document back to `active` status
    on successful completion.
+   **Completed 2026-10-15** (full suite green at 1001 tests)
