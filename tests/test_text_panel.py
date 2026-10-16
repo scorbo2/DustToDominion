@@ -24,6 +24,7 @@ from dtd.game_config import AudioConfig, ResourcesConfig
 from dtd.resource_loader import ResourceLoader
 from dtd.ui import Theme, UIManager
 from dtd.widgets.text_panel import TextPanel, wrap_text
+from helpers_theme_override import assert_theme_override_honored
 
 # Distinguishable custom theme: red/green in the normal state, blue/
 # white when selected, dark grays when disabled.
@@ -516,6 +517,64 @@ class TestStateColors:
         # even though the base-class hover flag is set by the UIManager:
         assert panel.hovered is True
         assert _pixel(screen, 200, 160) == NORMAL_BG
+
+
+class TestThemeOverride:
+    """The theme-override contract (spec 06 Testing, added 2026-10-15).
+
+    The generic half lives once and for all in
+    ``helpers_theme_override.assert_theme_override_honored``; these
+    tests add the TextPanel-specific pixel proof.
+    """
+
+    #: Chrome colors distinguishable from TEST_THEME_JSON's green/red.
+    OVERRIDE_JSON = {
+        "foregroundNormal": "ffff00",
+        "backgroundNormal": "ff00ff",
+    }
+    OVERRIDE_FG = (255, 255, 0, 255)
+    OVERRIDE_BG = (255, 0, 255, 255)
+
+    def _appeared_panel(self) -> TextPanel:
+        """A bordered panel past its appearance frame - the shared
+        helper's factory contract: a fresh TextPanel draws nothing
+        until its first ``update()``."""
+        panel = TextPanel(pygame.Rect(100, 100, 200, 120), border_width=4)
+        ui = _register(panel, _theme(TEST_THEME_JSON))
+        ui.update([])
+        return panel
+
+    def test_set_theme_override_should_replace_the_draw_theme_and_none_should_restore_it(
+        self, font_ready: None
+    ) -> None:
+        # GIVEN/WHEN/THEN entirely inside the shared spec 04 pin:
+        assert_theme_override_honored(self._appeared_panel)
+
+    def test_theme_override_should_paint_the_chrome_and_none_should_restore_the_ui_theme(
+        self, font_ready: None
+    ) -> None:
+        # GIVEN an appeared panel registered with a UIManager holding
+        # the green/red test theme:
+        panel = TextPanel(pygame.Rect(100, 100, 200, 120), border_width=4)
+        ui = _register(panel, _theme(TEST_THEME_JSON))
+        ui.update([])
+
+        # WHEN a magenta/yellow theme override is set and the UI draws:
+        panel.set_theme_override(_theme(self.OVERRIDE_JSON))
+        screen = _draw(ui)
+
+        # THEN the chrome paints with the override's colors, not the
+        # UIManager's (spec 06: the override outranks the draw theme):
+        assert _pixel(screen, 200, 160) == self.OVERRIDE_BG
+        assert _pixel(screen, 101, 160) == self.OVERRIDE_FG
+
+        # WHEN the override is cleared and the UI draws again:
+        panel.set_theme_override(None)
+        screen = _draw(ui)
+
+        # THEN the UIManager's theme is visible once more:
+        assert _pixel(screen, 200, 160) == NORMAL_BG
+        assert _pixel(screen, 101, 160) == NORMAL_FG
 
 
 class TestPanelChrome:

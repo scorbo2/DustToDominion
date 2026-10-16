@@ -1,6 +1,6 @@
 ---
 description: Describes a new UI widget for the game: TextPanel
-status: proposed
+status: active
 ---
 
 # TextPanel
@@ -364,6 +364,11 @@ The spec was too large to implement in one pass. The following staged dev plan w
    **Completed 2026-10-04**
 6. Amendment 2026-10-15: call the base-class `resolve_theme()` helper at the top of the
    `draw()` method and render with the returned Theme instead of the one supplied to
-   `draw()`. Implement the tests for this. Flip this document back to `active` status
-   on successful completion.
+   `draw()`. Implement the tests for this. This is the first widget stage of the
+   override feature, so also extract the shared override pin here - a single
+   `assert_theme_override_honored(widget_factory)` helper in
+   `tests/helpers_theme_override.py` that every later widget suite calls instead
+   of writing its own copy (see spec 12 dev plan stage 8). Flip this document
+   back to `active` status on successful completion.
+   **Completed 2026-10-15** (full suite green at 996 tests)
 
