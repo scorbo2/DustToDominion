@@ -1,6 +1,6 @@
 ---
 description: Describes a new UI widget for the game: Label
-status: proposed
+status: active
 ---
 
 # Label
@@ -244,3 +244,4 @@ Checkbox (spec 11) inherit the override behavior unchanged.*
     `_draw_text()` extension hooks, so Checkbox (spec 11) inherits the override
     behavior unchanged. Implement the tests for this. Flip this document back to
     `active` status on successful completion.
+    **Completed 2026-10-15** (full suite green at 1004 tests)
