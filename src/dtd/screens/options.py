@@ -23,16 +23,18 @@ and stretched to fill; a generated starfield otherwise. The
 constructor requests the Options music track.
 
 The exit control lives in the upper left corner (spec 13: Exit control
-and title): a fixed 80x40 design-space rect at (24, 24) - the spec's
+and title): a fixed 130x40 design-space rect at (24, 24) - the spec's
 24px margin on the left and top edges - with the shared
-``MENU_OPTION_BORDER_WIDTH`` border, and the title Label at (128, 24)
-measuring 100x50, left-aligned, non-opaque, borderless. Clicking the
-button, or pressing ESC on this screen (spec 13: Interactions and
-persistence), requests the transition back to the Title screen; the
-main loop stops any playing music as part of that transition
-(spec 08: Integration, as amended by spec 13). Both ride the
-base-class plumbing: ``_esc_action`` is the Back transition, and the
-click callback records its intent in ``_pending_action``.
+``MENU_OPTION_BORDER_WIDTH`` border. The title Label, measuring 210x110,
+is horizontally centered at the top of the screen with its top edge
+12px from the screen top - left-aligned, non-opaque, borderless, and
+selected so its text renders in the theme's selected-state colors.
+Clicking the button, or pressing ESC on this screen (spec 13:
+Interactions and persistence), requests the transition back to the
+Title screen; the main loop stops any playing music as part of that
+transition (spec 08: Integration, as amended by spec 13). Both ride
+the base-class plumbing: ``_esc_action`` is the Back transition, and
+the click callback records its intent in ``_pending_action``.
 
 Like every screen (spec 08: Code layout), it accepts the ``Theme`` that
 main builds from the latest config right before instantiation, and it
@@ -63,20 +65,27 @@ from dtd.widgets.label import Label
 from dtd.widgets.slider import Slider
 
 #: Back-button geometry in design space (spec 13: Exit control and
-#: title): a 24px margin on the left and top edges, fixed 80x40.
-_BACK_BUTTON_RECT = pygame.Rect(24, 24, 80, 40)
+#: title): a 24px margin on the left and top edges, fixed 130x40.
+_BACK_BUTTON_RECT = pygame.Rect(24, 24, 130, 40)
 
 #: Title Label geometry in design space (spec 13: Exit control and
-#: title): fixed 100x50, rect top-left (128, 24).
-_TITLE_LABEL_RECT = pygame.Rect(128, 24, 100, 50)
+#: title): fixed 210x110, horizontally centered on the screen, top edge
+#: 12px from the screen top. The left edge is computed rather than
+#: literal so the centering intent survives any future size tweak.
+_TITLE_LABEL_SIZE = (210, 110)
+_TITLE_LABEL_RECT = pygame.Rect(
+    (game_constants.DESIGN_W - _TITLE_LABEL_SIZE[0]) // 2,
+    12,
+    *_TITLE_LABEL_SIZE,
+)
 
 #: Control group geometry in design space (spec 13: UI controls -
 #: groups 1 and 2): the shared section-title size, the Checkbox/Slider
 #: size, the ChoiceList size, and the fixed margin between controls in
 #: each centered column.
-_SECTION_LABEL_SIZE = (480, 48)
-_CONTROL_SIZE = (480, 36)
-_CHOICE_LIST_SIZE = (320, 36)
+_SECTION_LABEL_SIZE = (600, 80)
+_CONTROL_SIZE = (600, 64)
+_CHOICE_LIST_SIZE = (600, 64)
 _CONTROL_MARGIN = 32
 
 
@@ -210,8 +219,11 @@ class OptionsScreen(Screen):
 
     def _build_title_label(self) -> None:
         """Create and register the "Options" title Label (spec 13: Exit
-        control and title): fixed 100x50 at (128, 24), left-aligned text
-        (the Label default), non-opaque, no border.
+        control and title): fixed 210x110, horizontally centered on the
+        screen with its top edge 12px from the screen top, left-aligned
+        text (the Label default), non-opaque, no border, and selected so
+        its text renders in the theme's selected-state colors
+        (cosmetic-only for Labels, spec 10).
         """
         title = Label(
             _TITLE_LABEL_RECT.copy(),
@@ -219,6 +231,7 @@ class OptionsScreen(Screen):
             border_width=0,
         )
         title.set_opaque(False)
+        title.selected = True
         self._ui.widgets.append(title)
 
     def _request_back(self) -> None:
@@ -340,7 +353,10 @@ class OptionsScreen(Screen):
 
     def _build_section_label(self, text: str) -> Label:
         """A group section title Label (spec 13: UI controls): fixed
-        480x48, left-aligned (the Label default), non-opaque, no border.
+        600x80, left-aligned (the Label default), non-opaque, no border,
+        and selected so its text renders in the theme's selected-state
+        colors, distinct from the controls below it (cosmetic-only for
+        Labels, spec 10).
         """
         section = Label(
             pygame.Rect(0, 0, *_SECTION_LABEL_SIZE),
@@ -348,6 +364,7 @@ class OptionsScreen(Screen):
             border_width=0,
         )
         section.set_opaque(False)
+        section.selected = True
         return section
 
     @staticmethod

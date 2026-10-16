@@ -150,6 +150,25 @@ class TestOptionsScreenConstruction:
         assert isinstance(screen._ui.widgets[12], ChoiceList)
         assert isinstance(screen._ui.widgets[13], ChoiceList)
 
+    def test_constructor_withDefaultWidgetSet_shouldSelectOnlyTheTitleAndSectionLabels(
+        self, font_ready: None
+    ) -> None:
+        # GIVEN the screen,
+        screen = OptionsScreen(_default_theme(), ResourceLoader())
+
+        # THEN exactly the "Options" title Label (index 1) and the two
+        # section title Labels (indices 2 and 11) carry the selected
+        # flag, so their text renders in the theme's selected-state
+        # colors, and no other widget is selected (spec 13: Exit control
+        # and title / UI controls - groups 1 and 2; cosmetic-only for
+        # Labels per spec 10):
+        selected_indices = {1, 2, 11}
+        for index, widget in enumerate(screen._ui.widgets):
+            assert widget.selected is (index in selected_indices), (
+                f"widget {index} ({type(widget).__name__}) has the wrong "
+                "selected state"
+            )
+
 
 class TestOptionsScreenExitControl:
     def test_constructor_shouldAddBackButton_inTheUpperLeftCorner(
@@ -163,8 +182,8 @@ class TestOptionsScreenExitControl:
         assert back.text == game_constants.OPTIONS_LABEL_BACK
         assert back.border_width == game_constants.MENU_OPTION_BORDER_WIDTH
         # ...at the exact design-space geometry from spec 13: Exit control
-        # and title - 24px margins on the left and top edges, fixed 80x40:
-        assert back.rect == pygame.Rect(24, 24, 80, 40)
+        # and title - 24px margins on the left and top edges, fixed 130x40:
+        assert back.rect == pygame.Rect(24, 24, 130, 40)
 
     def test_constructor_shouldAddTitleLabel_leftAlignedNonOpaqueAndBorderless(
         self, font_ready: None
@@ -177,13 +196,25 @@ class TestOptionsScreenExitControl:
         title = screen._ui.widgets[1]
         assert isinstance(title, Label)
         assert title.text == game_constants.OPTIONS_LABEL
-        # ...at the exact design-space geometry - fixed 100x50 at (128,24) -
-        assert title.rect == pygame.Rect(128, 24, 100, 50)
+        # ...at the exact design-space geometry - fixed 210x110,
+        # horizontally centered on the screen with its top edge 12px
+        # from the screen top (spec 13: Exit control and title) - the
+        # expected rect is computed from the spec's literals, not from
+        # the screen's own constants:
+        expected_left = (game_constants.DESIGN_W - 210) // 2
+        assert title.rect == pygame.Rect(expected_left, 12, 210, 110)
+        # ...and it is genuinely screen-centered: left margin equals the
+        # right margin,
+        assert title.rect.left == game_constants.DESIGN_W - title.rect.right
         # ...with no border, non-opaque, and left-aligned (not centered)
         # text:
         assert title.border_width == 0
         assert title._opaque is False
         assert title._text_centered is False
+        # ...and selected, so its text renders in the theme's
+        # selected-state colors (spec 13: Exit control and title;
+        # cosmetic-only for Labels per spec 10):
+        assert title.selected is True
 
 
 class TestOptionsScreenBackButton:
@@ -192,7 +223,7 @@ class TestOptionsScreenBackButton:
     ) -> None:
         # GIVEN the screen (no display surface, so scales are identity),
         screen = OptionsScreen(_default_theme(), ResourceLoader())
-        button_center = pygame.Rect(24, 24, 80, 40).center
+        button_center = pygame.Rect(24, 24, 130, 40).center
 
         # WHEN a full left-button click lands on the "< Back" button,
         screen.update(
@@ -533,15 +564,16 @@ class TestOptionsScreenAudioControls:
         screen = OptionsScreen(_default_theme(), ResourceLoader())
 
         # THEN the section title Label matches spec 13: group 1 -
-        # "Audio options", fixed 480x48, border 0, non-opaque,
-        # left-aligned:
+        # "Audio options", fixed 600x80, border 0, non-opaque,
+        # left-aligned, and selected:
         section = screen._ui.widgets[self._SECTION]
         assert isinstance(section, Label)
         assert section.text == game_constants.OPTIONS_LABEL_AUDIO_OPTIONS
-        assert section.rect.size == (480, 48)
+        assert section.rect.size == (600, 80)
         assert section.border_width == 0
         assert section._opaque is False
         assert section._text_centered is False
+        assert section.selected is True
 
     def test_constructor_shouldLabelAndConfigureEveryRow_perSpec(self, font_ready: None
     ) -> None:
@@ -549,7 +581,7 @@ class TestOptionsScreenAudioControls:
         screen = OptionsScreen(_default_theme(), ResourceLoader())
 
         # THEN each row carries its spec Checkbox label and a "Volume:"
-        # Slider over the spec percent range, all 480x36, borderless,
+        # Slider over the spec percent range, all 600x64, borderless,
         # and non-opaque (spec 13: UI controls - group 1):
         expected_labels = (
             game_constants.OPTIONS_LABEL_GAME_SFX_ENABLED,
@@ -559,11 +591,11 @@ class TestOptionsScreenAudioControls:
         )
         for (checkbox, slider), label in zip(self._rows(screen), expected_labels):
             assert checkbox.text == label
-            assert checkbox.rect.size == (480, 36)
+            assert checkbox.rect.size == (600, 64)
             assert checkbox.border_width == 0
             assert checkbox._opaque is False
             assert slider.text == game_constants.OPTIONS_LABEL_VOLUME
-            assert slider.rect.size == (480, 36)
+            assert slider.rect.size == (600, 64)
             assert slider.border_width == 0
             assert slider._opaque is False
             assert slider.get_min_value() == game_constants.VOLUME_MIN_PERCENT
@@ -580,14 +612,14 @@ class TestOptionsScreenAudioControls:
         # with a fixed 32px margin between each control (spec 13: UI
         # controls - group 1). The expected rects are computed here from
         # the spec's literals, not from the screen's own layout code:
-        heights = [48] + [36] * 8
+        heights = [80] + [64] * 8
         total_height = sum(heights) + 32 * 8
-        left = (game_constants.DESIGN_W // 2 - 480) // 2
+        left = (game_constants.DESIGN_W // 2 - 600) // 2
         expected_y = (game_constants.DESIGN_H - total_height) // 2
         controls = screen._ui.widgets[self._SECTION:self._SECTION + 9]
         assert len(controls) == 9
         for control, height in zip(controls, heights):
-            assert control.rect == pygame.Rect(left, expected_y, 480, height)
+            assert control.rect == pygame.Rect(left, expected_y, 600, height)
             expected_y += height + 32
 
     def test_constructor_shouldDriveControlInitialState_fromAudioManagerGetters(
@@ -803,17 +835,19 @@ class TestOptionsScreenUiControls:
         font_list = screen._ui.widgets[self._SECTION + 1]
         theme_list = screen._ui.widgets[self._SECTION + 2]
 
-        # THEN the ChoiceLists are fixed 320x36 with the shared menu
+        # THEN the ChoiceLists are fixed 600x64 with the shared menu
         # border width,
-        assert font_list.rect.size == (320, 36)
-        assert theme_list.rect.size == (320, 36)
+        assert font_list.rect.size == (600, 64)
+        assert theme_list.rect.size == (600, 64)
         assert font_list.border_width == game_constants.MENU_OPTION_BORDER_WIDTH
         assert theme_list.border_width == game_constants.MENU_OPTION_BORDER_WIDTH
-        # ...and the section Label is 480x48, left-aligned (the Label
-        # default), non-opaque, borderless, carrying the spec text:
+        # ...and the section Label is 600x80, left-aligned (the Label
+        # default), non-opaque, borderless, selected, carrying the spec
+        # text:
         assert isinstance(section, Label)
-        assert section.rect.size == (480, 48)
+        assert section.rect.size == (600, 80)
         assert section.border_width == 0
+        assert section.selected is True
         assert section.text == game_constants.OPTIONS_LABEL_UI_OPTIONS
 
     def test_fontList_withNothingConfigured_shouldPreselectTheSentinel(
