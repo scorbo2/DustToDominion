@@ -200,7 +200,12 @@ class Theme:
         # Start from the built-in default theme (spec 04: Default theme),
         # then let the theme json override individual keys.
         for key, default in self._DEFAULT_COLORS.items():
-            setattr(self, key, default)
+            # Copy each default: pygame.Color is mutable, so assigning the
+            # class-level instances by reference would let an in-place tweak
+            # on any default-color Theme rewrite the built-in table for every
+            # other Theme - including Themes constructed afterwards (spec 04,
+            # amended 2026-10-15).
+            setattr(self, key, pygame.Color(default))
         self.cornerRadius = self.DEFAULT_CORNER_RADIUS
 
         value = (theme_value or "").strip()

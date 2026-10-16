@@ -17,8 +17,8 @@ where the suite knows its own chrome.
 
 The factory must return a widget that is ready to draw: a positive design
 rect and, for TextPanel (spec 06), already appeared. A widget whose
-``draw()`` early-returns without touching any Theme would satisfy the
-"override was touched" half vacuously.
+``draw()`` early-returns without touching any Theme would vacuously
+satisfy the "supplied Theme was never touched" half.
 """
 from __future__ import annotations
 

@@ -275,6 +275,37 @@ class TestThemeDefaults:
         assert isinstance(theme.get_font(24), pygame.font.Font)
         assert theme.get_font(0).get_height() > 0  # size clamped to >= 1
 
+    def test_mutating_a_default_theme_color_in_place_should_not_affect_other_theme_instances(
+        self, font_ready: None
+    ) -> None:
+        # GIVEN two Themes built with the built-in default colors:
+        first = _build_theme("default", "default")
+        second = _build_theme("default", "default")
+
+        # THEN the default colors are per-instance copies, not the shared
+        # class-level table (spec 04, amended 2026-10-15):
+        assert first.backgroundDisabled is not second.backgroundDisabled
+
+        # WHEN a color on the first Theme is mutated in place - the
+        # supported pattern advertised by set_theme_override():
+        first.backgroundDisabled.r = 0xFF
+        first.backgroundDisabled.g = 0x00
+        first.backgroundDisabled.b = 0x00
+
+        # THEN the first Theme really did change...
+        assert first.backgroundDisabled == pygame.Color(0xFF, 0x00, 0x00, 0xFF)
+
+        # ...the other existing Theme is untouched...
+        for key, color in _default_theme_colors().items():
+            assert getattr(second, key) == color
+
+        # ...and so is a Theme constructed after the mutation - the
+        # built-in default table was never rewritten (the process-wide
+        # poisoning this pins against):
+        third = _build_theme("default", "default")
+        for key, color in _default_theme_colors().items():
+            assert getattr(third, key) == color
+
 
 class TestThemeFromJson:
     def test_with_full_theme_should_apply_every_key(self, font_ready: None) -> None:

@@ -108,6 +108,12 @@ If game configuration does not specify a `theme` value, OR if game configuration
 of "default", OR if the value supplied in game configuration does not resolve to a loaded resource, then
 the built-in default theme will be used.
 
+The built-in default colors live in a shared table of mutable `pygame.Color` instances, but each Theme
+must copy them into its own `pygame.Color` instances rather than assigning them by reference. Otherwise
+an in-place color mutation on one default-color Theme (a supported pattern - see `set_theme_override`)
+silently rewrites the built-in table for every other Theme, including Themes constructed afterwards.
+(Amended 2026-10-15, bug fix.)
+
 ### Relationship between theme and font
 
 Note that theme configuration deliberately does not include font. This is so that font can be set
@@ -439,6 +445,12 @@ It is never an error if these resource IDs do not resolve. All UI resources are 
   - The copy's colors are independent: mutating one instance's colors in place
     (e.g. `copy.foregroundNormal.r = 0`) leaves the other instance's colors
     unchanged, in both directions.
+- Default color independence (added 2026-10-15, bug fix):
+  - Two Themes built with default colors must not share `pygame.Color`
+    instances. Mutating one Theme's colors in place (e.g.
+    `theme.backgroundDisabled.r = 0`) must leave the other Theme's colors
+    unchanged, and must not change the colors of a Theme constructed
+    afterwards either.
 - Widget theme overrides (added 2026-10-15; testable via a minimal stub Widget subclass):
   - A fresh Widget's `theme_override` is None by default.
   - `set_theme_override(theme)` stores the given Theme; `set_theme_override(None)`
@@ -521,6 +533,16 @@ The spec can be implemented in stages:
     subclass via amendments to their specific spec docs. If all tests pass, flip
     this document back to `active` status.
     **Completed 2026-10-15** (full suite green at 994 tests)
+13. Amendment 2026-10-15 (bug fix): `_apply_theme_json` assigned the class-level
+    default `pygame.Color` instances to each Theme *by reference*, so an in-place
+    color mutation on any default-color Theme rewrote the built-in default table
+    process-wide - affecting every other Theme, including Themes constructed
+    afterwards. (The override stage's in-place-mutation test was the first code in
+    the repo to trip on this, silently poisoning the defaults for every test that
+    ran after it.) Copy each default color per instance, and add the default-color
+    independence test described in the Testing section above. If all tests pass,
+    flip this document back to `active` status.
+    **Completed 2026-10-15** (full suite green at 1010 tests)
 
 Upon completion, if all tests pass, mark this document as "active". (Done 2026-10-01;
 full suite green at 280 tests.)
