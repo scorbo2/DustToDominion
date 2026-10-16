@@ -44,6 +44,7 @@ from dtd.resource_loader import ResourceLoader
 from dtd.ui import Theme, UIManager
 from dtd.widgets.checkbox import Checkbox
 from helpers_pixels import BLACK, any_pixel_differs, ink_bbox, is_red_ink
+from helpers_theme_override import assert_theme_override_honored
 
 # Distinguishable custom theme (same palette as test_label.py): red/
 # green in the normal state, blue/yellow when selected, magenta/cyan
@@ -311,6 +312,96 @@ class TestCheckboxStateColors:
         # THEN the hover appearance is restored - hover is live for
         # Checkboxes, unlike Label (spec 11: events and cosmetics):
         assert screen.get_at(self.SAMPLE) == HOVER_BG
+
+
+class TestCheckboxThemeOverride:
+    """The inherited theme-override contract (spec 11 Testing, added
+    2026-10-15; spec 11 dev plan stage 6: no code change - Checkbox
+    inherits Label's ``draw()``, which resolves the override before
+    invoking the extension hooks Checkbox itself overrides).
+
+    The generic half lives in
+    ``helpers_theme_override.assert_theme_override_honored``; these
+    tests prove the inheritance end-to-end on a real Checkbox, with
+    override colors landing on chrome only the Checkbox hooks produce
+    (the box outline) and on the hover state only Checkbox honors.
+    """
+
+    #: Chrome colors distinguishable from TEST_THEME_JSON in every
+    #: state - the blue hover background is one the base theme can
+    #: never produce in any state.
+    OVERRIDE_JSON = {
+        "foregroundNormal": "ffff00",
+        "backgroundNormal": "ff00ff",
+        "foregroundHover": "ff00ff",
+        "backgroundHover": "0000ff",
+    }
+    OVERRIDE_FG = (255, 255, 0, 255)
+    OVERRIDE_BG = (255, 0, 255, 255)
+    OVERRIDE_HOVER_BG = (0, 0, 255, 255)
+
+    RECT = pygame.Rect(0, 0, 400, 100)
+    SAMPLE = (350, 50)  # far right of the box and of any border
+
+    def test_set_theme_override_should_replace_the_draw_theme_and_none_should_restore_it(
+        self, font_ready: None
+    ) -> None:
+        # GIVEN/WHEN/THEN entirely inside the shared spec 04 pin -
+        # proves the inherited Label.draw() resolves the override:
+        assert_theme_override_honored(
+            lambda: Checkbox(pygame.Rect(0, 0, 400, 100), text="OK")
+        )
+
+    def test_theme_override_should_paint_fill_and_box_and_none_should_restore_them(
+        self, font_ready: None
+    ) -> None:
+        # GIVEN a text-bearing Checkbox at a fixed point size (so the
+        # box metrics are deterministic) registered with a UIManager
+        # holding the red/green test theme:
+        checkbox, ui = _checkbox_ui(self.RECT, _theme(TEST_THEME_JSON), text="OK")
+        checkbox.set_font_point_size(20)
+        override = _theme(self.OVERRIDE_JSON)
+
+        # WHEN the override is set and the UI draws:
+        checkbox.set_theme_override(override)
+        screen = _draw(ui)
+
+        # THEN the fill uses the override's backgroundNormal...
+        assert screen.get_at(self.SAMPLE) == self.OVERRIDE_BG
+        # ...and so does the box outline, which only Checkbox's own
+        # _draw_text hook draws - the resolved Theme reached the
+        # subclass hook through the inherited draw():
+        side = override.get_font(20).size("0")[1]
+        box_left = side // 2  # margin equals the box/text gap
+        assert screen.get_at((box_left, 100 // 2)) == self.OVERRIDE_FG
+
+        # WHEN the override is cleared and the UI draws again:
+        checkbox.set_theme_override(None)
+        screen = _draw(ui)
+
+        # THEN the UIManager's theme is visible once more, fill and
+        # box alike:
+        assert screen.get_at(self.SAMPLE) == NORMAL_BG
+        assert screen.get_at((box_left, 100 // 2)) == NORMAL_FG
+
+    def test_theme_override_should_supply_the_hover_state_colors_too(
+        self, font_ready: None, silent_audio_manager: audio.AudioManager
+    ) -> None:
+        # GIVEN a hovered Checkbox whose override carries its own
+        # *Hover colors (hover is the state only Checkbox honors, via
+        # its _state_colors hook override - spec 11):
+        checkbox, ui = _checkbox_ui(self.RECT, _theme(TEST_THEME_JSON), text="OK")
+        checkbox.set_theme_override(_theme(self.OVERRIDE_JSON))
+        ui.update([_motion((200, 50))])
+
+        # WHEN the UI draws,
+        screen = _draw(ui)
+
+        # THEN the hover fill comes from the override's
+        # backgroundHover - blue, which the base theme's hover (cyan)
+        # can never produce:
+        assert checkbox.hovered is True
+        assert screen.get_at(self.SAMPLE) == self.OVERRIDE_HOVER_BG
 
 
 class TestCheckboxBoxGeometry:

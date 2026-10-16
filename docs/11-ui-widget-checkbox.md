@@ -1,6 +1,6 @@
 ---
 description: Describes the Checkbox UI widget for the game
-status: proposed
+status: active
 ---
 
 # Checkbox
@@ -263,3 +263,7 @@ the box-aware re-layout on border-width and rect changes.
    override via the base-class `resolve_theme()` helper before invoking the extension
    hooks. Add Checkbox tests pinning this inherited behavior. Flip this document back
    to `active` status on successful completion.
+   **Completed 2026-10-15** (full suite green at 1007 tests; no code change, as
+   specified - the three new tests prove the inherited resolution reaches even the
+   hooks Checkbox overrides itself: override colors land on the box outline drawn
+   by Checkbox's `_draw_text`, and on the hover state only Checkbox honors)
