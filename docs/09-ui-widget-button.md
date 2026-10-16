@@ -1,6 +1,6 @@
 ---
-description: Describes a new UI widget for the game: Button
-status: proposed
+description: Describes the Button widget: rendering, layout, click handling, and audio.
+status: active
 ---
 
 # Button
@@ -211,3 +211,4 @@ don't resolve to valid audio resources, etc.)
    `draw()` method and render with the returned Theme instead of the one supplied to
    `draw()`. Implement the tests for this. Flip this document back to `active` status
    on successful completion.
+   **Completed 2026-10-15** (full suite green at 998 tests)
