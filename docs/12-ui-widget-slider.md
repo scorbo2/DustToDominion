@@ -503,5 +503,9 @@ The tests need to use the `mixer_ready` + `init_audio_manager` pattern to proces
    **Completed 2026-10-15**
 8. Amendment 2026-10-15: call the base-class `resolve_theme()` helper at the top of the
    `draw()` method and render with the returned Theme instead of the one supplied to
-   `draw()`. Implement the tests for this. Flip this document back to `active` status
+   `draw()`. Implement the tests for this. Note: this is the last widget doc amended for
+   the override feature - by now the near-identical override test pair ("uses the
+   override" / "restores after None") exists in all six widget suites; extract a shared
+   helper (e.g. `assert_theme_override_honored(widget_factory)`) and call it from each
+   suite instead of maintaining six copies. Flip this document back to `active` status
    on successful completion.

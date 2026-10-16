@@ -1,6 +1,6 @@
 ---
 description: Describes the game's custom UI widget handling.
-status: proposed
+status: active
 ---
 
 # UI Widgets
@@ -520,6 +520,7 @@ The spec can be implemented in stages:
     section above. Widget-specific override tests will be added to each widget
     subclass via amendments to their specific spec docs. If all tests pass, flip
     this document back to `active` status.
+    **Completed 2026-10-15** (full suite green at 994 tests)
 
 Upon completion, if all tests pass, mark this document as "active". (Done 2026-10-01;
 full suite green at 280 tests.)
