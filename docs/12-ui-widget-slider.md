@@ -1,6 +1,6 @@
 ---
 description: Describes a new UI widget for the game: Slider
-status: proposed
+status: active
 ---
 
 # Slider
@@ -508,3 +508,6 @@ The tests need to use the `mixer_ready` + `init_audio_manager` pattern to proces
    into the existing `assert_theme_override_honored(widget_factory)` helper in
    `tests/helpers_theme_override.py` instead of writing a sixth copy. Flip this
    document back to `active` status on successful completion.
+   **Completed 2026-10-15** (full suite green at 1009 tests; the appearance suite
+   wired into the shared pin as planned, plus a fill+track pixel proof that the
+   override's colors land on the font-layout-dependent track chrome)

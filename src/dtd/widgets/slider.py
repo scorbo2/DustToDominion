@@ -616,6 +616,11 @@ class Slider(Widget):
 
     def draw(self, surf: pygame.Surface, theme: Theme) -> None:
         """Fill, border, then the contents: labels, track, tab (spec 12)."""
+        # A client-set theme override (spec 04, added 2026-10-15) wins
+        # over the Theme handed to draw(); resolve before anything reads
+        # it - the layout (and the hit-test geometry cached from it) is
+        # font-dependent, so a half-resolved Theme would desync the two.
+        theme = self.resolve_theme(theme)
         scale = current_scale()
         rect = scale.rect(self.rect.x, self.rect.y, self.rect.w, self.rect.h)
         if rect.w <= 0 or rect.h <= 0:
