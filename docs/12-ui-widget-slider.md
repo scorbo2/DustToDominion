@@ -1,6 +1,6 @@
 ---
 description: Describes a new UI widget for the game: Slider
-status: active
+status: proposed
 ---
 
 # Slider
@@ -445,6 +445,10 @@ The tests need to use the `mixer_ready` + `init_audio_manager` pattern to proces
 - During a drag operation, moving the mouse past the track extent in either direction clamps the
   tab control to the endpoint of the track without ending the drag operation.
 - A non-disabled Slider plays the `UI_SFX_HOVER` sound on mouse hover.
+- A Slider given a theme override via `set_theme_override()` ignores the Theme instance supplied to its `draw()` method
+  and uses the override instead.
+- Invoking `set_theme_override(None)` causes a Slider with a theme override to stop overriding the theme and once again
+  use the Theme instance supplied to its `draw()` method.
 
 ## Acceptance criteria
 
@@ -457,6 +461,7 @@ The tests need to use the `mixer_ready` + `init_audio_manager` pattern to proces
 - Does `on_change` only fire when a drag *completes*, and not continuously during the drag?
 - Does the tab control always render in `foregroundSelected` regardless of the Slider's state?
 - Can the mouse wheel be used to change the current value on a non-disabled Slider?
+- Can a Slider be given a Theme override for custom cosmetics? Can that theme override be removed?
 
 ## Dev plan
 
@@ -496,4 +501,7 @@ The tests need to use the `mixer_ready` + `init_audio_manager` pattern to proces
    instead of asserting value ink in the oversized-pin test) and widen the title screen's
    ink-center vertical tolerance for platform ascent/descent metrics.
    **Completed 2026-10-15**
-
+8. Amendment 2026-10-15: call the base-class `resolve_theme()` helper at the top of the
+   `draw()` method and render with the returned Theme instead of the one supplied to
+   `draw()`. Implement the tests for this. Flip this document back to `active` status
+   on successful completion.

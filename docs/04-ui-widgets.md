@@ -1,6 +1,6 @@
 ---
 description: Describes the game's custom UI widget handling.
-status: active
+status: proposed
 ---
 
 # UI Widgets
@@ -154,6 +154,7 @@ class Widget:
         self.hovered = False
         self.enabled = True
         self.selected = False # programmatic only; see "Selecting widgets"
+        self.theme_override = None # optional Theme; see "set_theme_override"
 
     def hit(self, pos) -> bool:
         return self.rect.collidepoint(pos) # in design space
@@ -163,12 +164,32 @@ class Widget:
         # from non-hovered to hovered state (added 2026-10-10 per
         # spec 07). Never called on disabled or selected widgets.
 
+    def set_theme_override(self, theme: Theme | None) -> None:
+        # Set an optional Theme that should be used in place of the
+        # one supplied to the draw() method. None is a valid option,
+        # and will cause the one supplied to the draw() method to be used.
+        # The default value for this theme override is None. The given
+        # Theme is stored by reference: later in-place changes to it are
+        # visible to the widget. Use Theme.copy_theme() when an
+        # independent starting point is wanted.
+
+    def resolve_theme(self, theme: Theme) -> Theme:
+        # Return the theme override if one is set, otherwise the given
+        # theme. Every Widget subclass must call this at the top of its
+        # draw() method and render with the result.
+
     def update(self, events): ...   # state changes
     def draw(self, surf, theme): ...  # rendering only; convert to pixel space
 ```
 
 Widgets that respond to mouse clicks (buttons and such) should fire on MOUSEBUTTONUP inside the rect,
 not on press (avoids drag-off false clicks), but only when the mouse was pressed inside the rect.
+
+The Widget class stores an optional `theme_override` Theme, which defaults to None.
+Callers can set or clear a theme override via `set_theme_override()`. The base class
+provides the `resolve_theme()` helper: every Widget subclass must call it at the top of
+its `draw()` method and use the returned Theme for all rendering, so the override
+behavior cannot drift from widget to widget.
 
 ### UIManager
 
@@ -191,9 +212,10 @@ class UIManager:
         # the given theme replaces the one that was passed to the constructor.
 ```
 
-*`set_theme` added 2026-10-06 per spec 08 (Title Screen). Widgets do not store themes -
-the UIManager hands the current theme to every widget on each call to `draw()` - so a theme
-swap takes effect on the next frame.*
+UIManager tracks the current theme and supplies it to every widget on each call
+to `draw()`. If the current theme is swapped, it will take effect on the next frame.
+Note that each widget has an optional theme override that may cause that widget
+to ignore the theme instance supplied to the `draw()` method.
 
 A layout engine is not needed. Rects can be specified in design resolution and converted
 to actual pixels as needed, based on current window resolution (see Widget coordinates).
@@ -256,6 +278,22 @@ def get_font_resource_id(self) -> str:
 
 The "default" sentinel value lives in `game_constants.py` and must not be hard-coded.
 (Added 2026-10-06 per spec 08: Title Screen.)
+
+The Theme class exposes a convenience method for cloning a Theme instance, so that
+callers can easily derive a new theme from the current theme (for example, to hand a
+lightly tweaked copy to `Widget.set_theme_override()`):
+
+```python
+def copy_theme(self) -> Theme:
+    # Return a new Theme instance whose properties all match this Theme instance's.
+    # The copy must resolve fonts exactly like the original: the resolved font and
+    # loader state is private and cannot be rebuilt through the constructor (the
+    # system-font fallback name is not even a constructor argument), so it must be
+    # carried over as-is.
+    # The copy's color properties must be independent pygame.Color instances:
+    # pygame.Color is mutable, and a shallow copy would let in-place tweaks of the
+    # copy silently corrupt the original theme (and vice versa).
+```
 
 ### Disabling widgets
 
@@ -392,6 +430,22 @@ It is never an error if these resource IDs do not resolve. All UI resources are 
     state, then `Widget.on_hover_enter()` is invoked again (as we are technically transitioning from
     a non-hovered state to a hovered state).
   - Moving the mouse out of a Widget and back in invokes `Widget.on_hover_enter()` again.
+- Theme cloning (added 2026-10-15):
+  - `theme.copy_theme()` creates and returns a new Theme instance whose color and
+    cornerRadius property values are identical to those of `theme`.
+  - The copy resolves fonts exactly like the original: it reports the same
+    `get_theme_resource_id()` and `get_font_resource_id()`, and its `get_font()`
+    serves the same resolved font as the original.
+  - The copy's colors are independent: mutating one instance's colors in place
+    (e.g. `copy.foregroundNormal.r = 0`) leaves the other instance's colors
+    unchanged, in both directions.
+- Widget theme overrides (added 2026-10-15; testable via a minimal stub Widget subclass):
+  - A fresh Widget's `theme_override` is None by default.
+  - `set_theme_override(theme)` stores the given Theme; `set_theme_override(None)`
+    restores the None default.
+  - `resolve_theme(theme)` returns the override when one is set, and the supplied
+    `theme` when the override is None - including after an override has been
+    restored to None.
 
 ## Acceptance criteria
 
@@ -399,6 +453,8 @@ It is never an error if these resource IDs do not resolve. All UI resources are 
 - If the game-supplied `UI_DEFAULT_FONT` exists, is it used if no font is explicitly configured?
 - Do disabled widgets ignore mouse events?
 - Do widget layouts stay visually consistent when changing between supported resolutions?
+- If a widget carries a theme override, does it keep rendering with the override after
+  the UIManager's current theme is swapped? Can the override be removed?
 
 ## Open Questions (all resolved)
 
@@ -455,6 +511,15 @@ The spec can be implemented in stages:
     the latest config before each Screen is instantiated. Tests as described in the
     Testing section above. If all tests pass, flip this document back to `active` status.
     **Completed 2026-10-14** (full suite green at 941 tests)
+12. Amendment 2026-10-15: add the optional `theme_override` (default None) and
+    `set_theme_override()` to the Widget base class, plus the `resolve_theme()` helper
+    that every subclass's `draw()` must use; add `Theme.copy_theme()` with font-state
+    carry-over and independent color copies, as described above. Update the
+    `UIManager.set_theme()` docstring, which still claims that widgets do not store
+    themes. Add the base-class and `copy_theme()` tests described in the Testing
+    section above. Widget-specific override tests will be added to each widget
+    subclass via amendments to their specific spec docs. If all tests pass, flip
+    this document back to `active` status.
 
 Upon completion, if all tests pass, mark this document as "active". (Done 2026-10-01;
 full suite green at 280 tests.)

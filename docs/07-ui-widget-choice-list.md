@@ -1,6 +1,6 @@
 ---
 description: Describes a new UI widget for the game: ChoiceList
-status: active
+status: proposed
 ---
 
 # ChoiceList
@@ -276,6 +276,10 @@ This document introduces no new configuration keys.
   - `UI_SFX_HOVER` is played when the ChoiceList's `on_hover_enter()` is invoked. Tests can just invoke this hook directly, rather than synthesize MOUSEMOTION.
   - note that the tests need to use the `mixer_ready` + `init_audio_manager` pattern to process audio events.
   - if `UI_SFX_HOVER` or `UI_SFX_ACCEPT` do not resolve to valid audio resources, no error is raised.
+- A ChoiceList given a theme override via `set_theme_override()` ignores the Theme instance supplied to its `draw()` method
+  and uses the override instead.
+- Invoking `set_theme_override(None)` causes a ChoiceList with a theme override to stop overriding the theme and once again
+  use the Theme instance supplied to its `draw()` method.
 
 ## Acceptance criteria
 
@@ -290,6 +294,7 @@ This document introduces no new configuration keys.
 - Can callers query for the currently-selected item?
 - Do the pager controls allow list-wrapping at both ends of the list?
 - Does the ChoiceList de-duplicate and sanitize input lists as expected?
+- Can a ChoiceList be given a Theme override for custom cosmetics? Can that theme override be removed?
 
 ## Dev plan
 
@@ -345,4 +350,7 @@ implementation plan is suggested (each stage after 1 should include tests):
    Button measures line height while ChoiceList/Label measure rendered glyph extent
    plus margin - for text with descenders those differ, and a single margin knob would
    have silently changed Button's behavior.)
-
+8. Amendment 2026-10-15: call the base-class `resolve_theme()` helper at the top of the
+   `draw()` method and render with the returned Theme instead of the one supplied to
+   `draw()`. Implement the tests for this. Flip this document back to `active` status
+   on successful completion.
