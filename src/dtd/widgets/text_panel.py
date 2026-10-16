@@ -452,7 +452,13 @@ class TextPanel(Widget):
 
         The chrome+contents overlay is cached and only rebuilt when
         something visible actually changed; see :meth:`_rendered_overlay`.
+
+        A client-set theme override (spec 04, added 2026-10-15) replaces
+        the supplied Theme before anything reads it; the overlay cache
+        key covers the resolved colors and corner radius, so switching
+        an override in or out rebuilds on the next draw.
         """
+        theme = self.resolve_theme(theme)
         if not self._has_appeared or self._alpha <= 0:
             return
         scale = current_scale()

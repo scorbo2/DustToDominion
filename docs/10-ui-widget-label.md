@@ -111,6 +111,11 @@ code. Code comments in `label.py` explain why each hook exists. This is a docume
 and-comments-only change: no behavior, no renames, no new tests; the existing suite
 must stay green.
 
+*Amended 2026-10-15 per spec 04 (theme overrides): when a theme override is in play,
+`draw()` resolves it via the base-class `resolve_theme()` helper before invoking the
+hooks, so the hooks always receive the effective Theme - and subclasses such as
+Checkbox (spec 11) inherit the override behavior unchanged.*
+
 ## Testing
 
 - A label with default settings (no mutators invoked after construction) auto-scales and left-aligns
@@ -148,6 +153,10 @@ must stay green.
 - An unreasonably large border width prevents label text from drawing, if the resulting inner rect
   has a 0 or negative size.
 - If given a theme with a non-zero corner radius, the radius is respected by both rect fill and border.
+- A Label given a theme override via `set_theme_override()` ignores the Theme instance supplied to its `draw()` method
+  and uses the override instead.
+- Invoking `set_theme_override(None)` causes a Label with a theme override to stop overriding the theme and once again
+  use the Theme instance supplied to its `draw()` method.
 
 ## Acceptance criteria
 
@@ -159,6 +168,7 @@ must stay green.
   - Can a Label's text be centered? Can it be left-aligned again?
 - Do both Button and Label use the same shared code for text auto-scale?
 - Does the TitleScreen use a Label for title display?
+- Can a Label be given a Theme override for custom cosmetics? Can that theme override be removed?
 
 ## Open questions (all resolved)
 
@@ -214,7 +224,7 @@ must stay green.
    **Completed 2026-10-11** (Full suite green at 738 tests.)
 7. Implement `set_opaque()` to allow toggling rect-filling, and `set_border_width()`
    to enable/disable border display.  **Completed 2026-10-11** (Full suite green at 753 tests.)
- 8. Implement the spec 08 changes to modify TitleScreen to use the new Label widget
+8. Implement the spec 08 changes to modify TitleScreen to use the new Label widget
     and remove the old caching code. Mark the new stage in the 08 Dev plan section
     as complete with today's date. Flip the 08 spec back to `active` status on
     successful completion of this stage. **Completed 2026-10-11** (Full suite green at 753 tests.)
@@ -228,4 +238,10 @@ must stay green.
     `draw()` itself is inherited as-is, and this doc gains the "Subclass extension
     hooks" section above. Docs and comments only; the full suite must stay green.
     **Completed 2026-10-11** (Full suite green at 753 tests.)
-
+11. Amendment 2026-10-15: call the base-class `resolve_theme()` helper at the top of the
+    `draw()` method and render with the returned Theme instead of the one supplied to
+    `draw()`. The resolved Theme is what gets handed to the `_state_colors()` and
+    `_draw_text()` extension hooks, so Checkbox (spec 11) inherits the override
+    behavior unchanged. Implement the tests for this. Flip this document back to
+    `active` status on successful completion.
+    **Completed 2026-10-15** (full suite green at 1004 tests)

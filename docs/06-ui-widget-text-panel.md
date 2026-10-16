@@ -49,6 +49,7 @@ class TextPanel(Widget):
         # TextPanels don't respond to mouse hover events! The "*Hover" colors are not used.
         # TextPanel can be programmatically disabled using the enabled property in parent Widget class
         # A disabled TextPanel changes colors (foregroundDisabled, backgroundDisabled)
+        # Resolve the effective theme via the parent class's `resolve_theme()` helper at the top of draw().
 
     def disappear(self) -> None:
         # Optionally invoked by the client to dismiss the panel.
@@ -318,6 +319,10 @@ This document introduces no new configuration keys.
 - if a slide-out animation was specified with an onscreen destination rect, and if no fade-out was specified, then
   `is_visible()` still returns True after the slide-out completes (this is not a bug - the client must guard against this by
   specifying an offscreen destination rect for slide-outs).
+- A TextPanel given a theme override via `set_theme_override()` ignores the Theme instance supplied to its `draw()` method
+  and uses the override instead.
+- Invoking `set_theme_override(None)` causes a TextPanel with a theme override to stop overriding the theme and once again
+  use the Theme instance supplied to its `draw()` method.
 
 ## Acceptance criteria
 
@@ -329,6 +334,7 @@ This document introduces no new configuration keys.
 - Can TextPanels overlap? (UIManager should handle this back-to-front based on their add order).
 - Can TextPanels be selected programmatically? Does it affect their appearance? Can they be unselected again?
 - Can TextPanels be disabled programmatically? Does it affect their appearance? Can they be enabled again?
+- Can a TextPanel be given a Theme override for custom cosmetics? Can that theme override be removed?
 
 ## Dev plan
 
@@ -356,4 +362,13 @@ The spec was too large to implement in one pass. The following staged dev plan w
 5. Final checks: all tests should be green, all code and docstrings should align with the spec.
    No stale TODO or "will be done in stage N" style comments or docstrings.
    **Completed 2026-10-04**
+6. Amendment 2026-10-15: call the base-class `resolve_theme()` helper at the top of the
+   `draw()` method and render with the returned Theme instead of the one supplied to
+   `draw()`. Implement the tests for this. This is the first widget stage of the
+   override feature, so also extract the shared override pin here - a single
+   `assert_theme_override_honored(widget_factory)` helper in
+   `tests/helpers_theme_override.py` that every later widget suite calls instead
+   of writing its own copy (see spec 12 dev plan stage 8). Flip this document
+   back to `active` status on successful completion.
+   **Completed 2026-10-15** (full suite green at 996 tests)
 

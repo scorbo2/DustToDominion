@@ -35,6 +35,7 @@ from dtd.resource_loader import ResourceLoader
 from dtd.ui import Theme, UIManager
 from dtd.widgets.label import Label
 from helpers_pixels import BLACK, any_pixel_differs, ink_bbox, is_red_ink
+from helpers_theme_override import assert_theme_override_honored
 
 # Distinguishable custom theme: red/green in the normal state, blue/
 # yellow when selected, dark grays when disabled, magenta/cyan on
@@ -284,6 +285,101 @@ class TestLabelStateColors:
         # framework, but the Label ignores it):
         assert screen.get_at(self.CENTER) == expected_bg
         assert screen.get_at((5, 5)) != HOVER_BG
+
+
+class TestLabelThemeOverride:
+    """The theme-override contract (spec 10 Testing, added 2026-10-15).
+
+    The generic half lives once and for all in
+    ``helpers_theme_override.assert_theme_override_honored``; these
+    tests add the Label-specific pixel proof and the extension-hook
+    plumbing that the Checkbox (spec 11) inherits for free.
+    """
+
+    #: Chrome colors distinguishable from TEST_THEME_JSON's red/green.
+    OVERRIDE_JSON = {
+        "foregroundNormal": "ffff00",
+        "backgroundNormal": "ff00ff",
+    }
+    OVERRIDE_FG = (255, 255, 0, 255)
+    OVERRIDE_BG = (255, 0, 255, 255)
+
+    def test_set_theme_override_should_replace_the_draw_theme_and_none_should_restore_it(
+        self, font_ready: None
+    ) -> None:
+        # GIVEN/WHEN/THEN entirely inside the shared spec 04 pin. A
+        # Label is drawable straight away (no appearance frame):
+        assert_theme_override_honored(
+            lambda: Label(pygame.Rect(0, 0, 400, 100), text="Hello")
+        )
+
+    def test_theme_override_should_paint_the_chrome_and_none_should_restore_the_ui_theme(
+        self, font_ready: None
+    ) -> None:
+        # GIVEN a bordered Label registered with a UIManager holding
+        # the red/green test theme (10 design-pixel border, scale 1):
+        label, ui = _label_ui(
+            pygame.Rect(0, 0, 400, 100), _theme(TEST_THEME_JSON), border_width=10
+        )
+
+        # WHEN a magenta/yellow theme override is set and the UI draws:
+        label.set_theme_override(_theme(self.OVERRIDE_JSON))
+        screen = _draw(ui)
+
+        # THEN fill and border paint with the override's colors, not
+        # the UIManager's (spec 10: the override outranks the draw
+        # theme):
+        assert screen.get_at((200, 50)) == self.OVERRIDE_BG
+        assert screen.get_at((5, 50)) == self.OVERRIDE_FG
+
+        # WHEN the override is cleared and the UI draws again:
+        label.set_theme_override(None)
+        screen = _draw(ui)
+
+        # THEN the UIManager's theme is visible once more:
+        assert screen.get_at((200, 50)) == NORMAL_BG
+        assert screen.get_at((5, 50)) == NORMAL_FG
+
+    def test_draw_should_hand_the_resolved_theme_to_the_extension_hooks(
+        self, font_ready: None
+    ) -> None:
+        # GIVEN a Label subclass recording which Theme each extension
+        # hook actually receives (spec 10: the hooks are the Checkbox's
+        # entire integration surface, so they must see the override):
+        class HookSpyLabel(Label):
+            def __init__(self, *args, **kwargs) -> None:
+                super().__init__(*args, **kwargs)
+                self.hook_themes: dict[str, Theme] = {}
+
+            def _state_colors(self, theme: Theme) -> tuple[pygame.Color, pygame.Color]:
+                self.hook_themes["state_colors"] = theme
+                return super()._state_colors(theme)
+
+            def _draw_text(
+                self, inner: pygame.Surface, theme: Theme, fg: pygame.Color, scale
+            ) -> None:
+                self.hook_themes["draw_text"] = theme
+                super()._draw_text(inner, theme, fg, scale)
+
+        label = HookSpyLabel(pygame.Rect(0, 0, 400, 100), text="Hi")
+        override = _theme(self.OVERRIDE_JSON)
+        supplied = _theme(TEST_THEME_JSON)
+        label.set_theme_override(override)
+
+        # WHEN the label draws with the supplied theme:
+        label.draw(pygame.Surface((1920, 1080)), supplied)
+
+        # THEN both hooks received the override itself, not the theme
+        # handed to draw():
+        assert label.hook_themes["state_colors"] is override
+        assert label.hook_themes["draw_text"] is override
+
+        # WHEN the override is cleared and the label draws again,
+        # THEN the hooks see the supplied theme once more:
+        label.set_theme_override(None)
+        label.draw(pygame.Surface((1920, 1080)), supplied)
+        assert label.hook_themes["state_colors"] is supplied
+        assert label.hook_themes["draw_text"] is supplied
 
 
 class TestLabelBorder:

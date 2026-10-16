@@ -19,6 +19,7 @@ from dtd.resource_loader import ResourceLoader
 from dtd.ui import Theme, UIManager
 from dtd.widgets.button import Button
 from helpers_pixels import ink_bbox, is_red_ink, is_white_ink
+from helpers_theme_override import assert_theme_override_honored
 
 
 @pytest.fixture(autouse=True)
@@ -306,6 +307,63 @@ class TestButtonRendering:
         text_visible = any(_pixel(screen, x, y) != (0, 255, 0, 255) for x in range(0, 100) for y in range(0, 100))
         assert text_visible
         assert _pixel(screen, 120, 50) == (0, 0, 0, 255)
+
+
+class TestButtonThemeOverride:
+    """The theme-override contract (spec 09 Testing, added 2026-10-15).
+
+    The generic half lives once and for all in
+    ``helpers_theme_override.assert_theme_override_honored``; these
+    tests add the Button-specific pixel proof.
+    """
+
+    #: Chrome colors distinguishable from TEST_THEME_JSON's red/green.
+    OVERRIDE_JSON = {
+        "foregroundNormal": "ffff00",
+        "backgroundNormal": "ff00ff",
+    }
+    OVERRIDE_FG = (255, 255, 0, 255)
+    OVERRIDE_BG = (255, 0, 255, 255)
+
+    def test_set_theme_override_should_replace_the_draw_theme_and_none_should_restore_it(
+        self, font_ready: None
+    ) -> None:
+        # GIVEN/WHEN/THEN entirely inside the shared spec 04 pin. A
+        # Button is drawable straight away (no appearance frame), so
+        # the factory is just the constructor:
+        assert_theme_override_honored(
+            lambda: Button(pygame.Rect(0, 0, 400, 100), text="OK")
+        )
+
+    def test_theme_override_should_paint_the_chrome_and_none_should_restore_the_ui_theme(
+        self, font_ready: None
+    ) -> None:
+        # GIVEN a bordered button registered with a UIManager holding
+        # the red/green test theme, at 1280x720 (design rect
+        # (0, 0, 960, 540) -> pixels (0, 0, 640, 360)):
+        pygame.display.set_mode((1280, 720))
+        button, ui, _ = _button_ui(
+            pygame.Rect(0, 0, 960, 540), _theme(TEST_THEME_JSON), border_width=10
+        )
+
+        # WHEN a magenta/yellow theme override is set and the UI draws:
+        button.set_theme_override(_theme(self.OVERRIDE_JSON))
+        ui.draw(pygame.display.get_surface())
+
+        # THEN the chrome paints with the override's colors, not the
+        # UIManager's (spec 09: the override outranks the draw theme):
+        screen = pygame.display.get_surface()
+        assert _pixel(screen, 320, 180) == self.OVERRIDE_BG
+        assert _pixel(screen, 2, 2) == self.OVERRIDE_FG
+
+        # WHEN the override is cleared and the UI draws again:
+        button.set_theme_override(None)
+        ui.draw(pygame.display.get_surface())
+
+        # THEN the UIManager's theme is visible once more:
+        screen = pygame.display.get_surface()
+        assert _pixel(screen, 320, 180) == (0, 255, 0, 255)
+        assert _pixel(screen, 2, 2) == (255, 0, 0, 255)
 
 
 class TestButtonIconAndTextLayout:

@@ -1,5 +1,5 @@
 ---
-description: Describes a new UI widget for the game: Button
+description: Describes the Button widget: rendering, layout, click handling, and audio.
 status: active
 ---
 
@@ -159,6 +159,10 @@ don't resolve to valid audio resources, etc.)
   - `UI_SFX_HOVER` is played when the Buttons's `on_hover_enter()` is invoked. Tests can just invoke this hook directly, rather than synthesize MOUSEMOTION.
   - note that the tests need to use the `mixer_ready` + `init_audio_manager` pattern to process audio events.
   - if `UI_SFX_HOVER` or `UI_SFX_ACCEPT` do not resolve to valid audio resources, no error is raised.
+- A Button given a theme override via `set_theme_override()` ignores the Theme instance supplied to its `draw()` method
+  and uses the override instead.
+- Invoking `set_theme_override(None)` causes a Button with a theme override to stop overriding the theme and once again
+  use the Theme instance supplied to its `draw()` method.
 
 ## Acceptance criteria
 
@@ -168,6 +172,7 @@ don't resolve to valid audio resources, etc.)
 - Is a button's icon left-aligned if a text label is present? Does it center otherwise?
 - Does a button's text scale appropriately to fit its available space, if no font point size is provided?
 - Does a button's text render at the specified font point size, if one is provided?
+- Can a Button be given a Theme override for custom cosmetics? Can that theme override be removed?
 
 ## Dev plan
 
@@ -202,3 +207,8 @@ don't resolve to valid audio resources, etc.)
    pinned against the shared module; the former Button test of that name was retargeted
    to `test_auto_scale_should_delegate_to_shared_search_with_inner_rect_height` - it
    still exercises the draw path, but its intent is now delegation, not the algorithm.)
+6. Amendment 2026-10-15: call the base-class `resolve_theme()` helper at the top of the
+   `draw()` method and render with the returned Theme instead of the one supplied to
+   `draw()`. Implement the tests for this. Flip this document back to `active` status
+   on successful completion.
+   **Completed 2026-10-15** (full suite green at 998 tests)

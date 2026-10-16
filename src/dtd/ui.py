@@ -14,6 +14,8 @@ concrete widget (``dtd.widgets.button``).
 """
 from __future__ import annotations
 
+import copy
+
 import pygame
 from loguru import logger
 
@@ -84,6 +86,7 @@ class Widget:
         self.hovered = False
         self.enabled = True
         self.selected = False  # set only by client code (spec 06 amendment)
+        self.theme_override = None  # optional Theme (spec 04, added 2026-10-15)
 
     def hit(self, pos: tuple[float, float]) -> bool:
         """Whether a design-space position is inside this widget's rect."""
@@ -98,6 +101,29 @@ class Widget:
         never calls it on disabled or selected widgets - "selected"
         suppresses hover semantics here just as it does for rendering.
         """
+
+    def set_theme_override(self, theme: "Theme | None") -> None:
+        """Use ``theme`` in place of the Theme handed to ``draw()``.
+
+        ``None`` clears the override and restores the draw-time theme
+        (spec 04, added 2026-10-15). The Theme is stored by reference:
+        later in-place changes to it are visible to the widget - callers
+        wanting an independent starting point pass a ``copy_theme()``
+        clone instead.
+        """
+        self.theme_override = theme
+
+    def resolve_theme(self, theme: "Theme") -> "Theme":
+        """The Theme this widget should render with (spec 04, added
+        2026-10-15).
+
+        Returns the override when one is set, otherwise the theme the
+        caller supplied. Every Widget subclass must call this at the top
+        of its ``draw()`` and render with the result: one chokepoint for
+        the whole framework, so the override behavior cannot drift from
+        widget to widget.
+        """
+        return self.theme_override if self.theme_override is not None else theme
 
     def update(self, events: list[pygame.event.Event]) -> None:
         """State changes from the frame's event batch (spec 04: the
@@ -174,7 +200,12 @@ class Theme:
         # Start from the built-in default theme (spec 04: Default theme),
         # then let the theme json override individual keys.
         for key, default in self._DEFAULT_COLORS.items():
-            setattr(self, key, default)
+            # Copy each default: pygame.Color is mutable, so assigning the
+            # class-level instances by reference would let an in-place tweak
+            # on any default-color Theme rewrite the built-in table for every
+            # other Theme - including Themes constructed afterwards (spec 04,
+            # amended 2026-10-15).
+            setattr(self, key, pygame.Color(default))
         self.cornerRadius = self.DEFAULT_CORNER_RADIUS
 
         value = (theme_value or "").strip()
@@ -312,6 +343,28 @@ class Theme:
         widgets preselect the current value."""
         return self._font_resource_id or game_constants.DEFAULT_FONT_VALUE
 
+    # -- cloning (spec 04, added 2026-10-15) --------------------------------
+    def copy_theme(self) -> "Theme":
+        """A clone whose properties all match this instance's (spec 04).
+
+        The convenience that lets callers derive a tweaked override from
+        the live theme via ``Widget.set_theme_override()`` without
+        hand-copying every property.
+
+        The resolved font/loader state is carried over as-is rather than
+        rebuilt: the constructor re-resolves from resource ids, and the
+        deterministic system-font fallback name is not even a constructor
+        argument, so a rebuild could silently serve a different font.
+        """
+        clone = copy.copy(self)
+        # pygame.Color is mutable and pygame-ce has no Color.copy():
+        # rebuild each color so in-place tweaks of the clone cannot
+        # corrupt the original theme (and vice versa).
+        for key in self._DEFAULT_COLORS:
+            color = getattr(clone, key)
+            setattr(clone, key, pygame.Color(color.r, color.g, color.b, color.a))
+        return clone
+
 
 class UIManager:
     """Manages all active widgets (spec 04: UIManager).
@@ -380,6 +433,8 @@ class UIManager:
 
     def set_theme(self, theme: Theme) -> None:
         """Replace the Theme handed to widgets on every draw (spec 04, as
-        amended by spec 08). Widgets do not store themes, so the swap takes
-        effect on the next frame with no per-widget notification needed."""
+        amended by spec 08). The swap takes effect on the next frame with
+        no per-widget notification needed - though a widget carrying a
+        theme override (spec 04, added 2026-10-15) keeps rendering with
+        its override regardless of what happens here."""
         self.theme = theme

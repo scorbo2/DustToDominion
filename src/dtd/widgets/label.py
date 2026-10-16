@@ -167,6 +167,12 @@ class Label(Widget):
 
     # -- rendering (spec 10: Label options / Label layout) ------------------
     def draw(self, surf: pygame.Surface, theme: Theme) -> None:
+        # A client-set theme override (spec 04, added 2026-10-15) wins
+        # over the Theme handed to draw(). Resolving here - before the
+        # _state_colors() and _draw_text() extension hooks receive it -
+        # is what lets hook-overriding subclasses (the Checkbox, spec
+        # 11) inherit the override behavior with no code of their own.
+        theme = self.resolve_theme(theme)
         scale = current_scale()
         rect = scale.rect(self.rect.x, self.rect.y, self.rect.w, self.rect.h)
         if rect.w <= 0 or rect.h <= 0:

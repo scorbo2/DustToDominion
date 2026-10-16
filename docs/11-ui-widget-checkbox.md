@@ -208,6 +208,10 @@ the box-aware re-layout on border-width and rect changes.
   - a disabled Checkbox does not play hover audio (UIManager ensures this; can't be tested by invoking `on_hover_enter()` programmatically).
   - note that the tests need to use the `mixer_ready` + `init_audio_manager` pattern to process audio events.
   - if `UI_SFX_HOVER` or `UI_SFX_ACCEPT` do not resolve to valid audio resources, no error is raised.
+- A Checkbox given a theme override via `set_theme_override()` ignores the Theme instance supplied to its `draw()` method
+  and uses the override instead.
+- Invoking `set_theme_override(None)` causes a Checkbox with a theme override to stop overriding the theme and once again
+  use the Theme instance supplied to its `draw()` method.
 
 ## Acceptance criteria
 
@@ -221,6 +225,7 @@ the box-aware re-layout on border-width and rect changes.
 - Does a non-disabled and non-selected Checkbox respond to mouse hover events?
 - Does a non-disabled Checkbox play `UI_SFX_HOVER` on mouse hover? (Once on transition, not continuously/repeatedly during hover)
 - Does clicking a non-disabled Checkbox play `UI_SFX_ACCEPT`?
+- Can a Checkbox be given a Theme override for custom cosmetics? Can that theme override be removed?
 
 ## Dev plan
 
@@ -253,4 +258,12 @@ the box-aware re-layout on border-width and rect changes.
    rendering, blank/empty text) are replaced by a single note delegating them to
    `tests/test_label.py`, and the empty-text bullet is narrowed to the None case actually
    tested in the Checkbox suite. **Completed 2026-10-11** (Full suite green at 805 tests.)
-
+6. Amendment 2026-10-15: no code change required - Checkbox inherits `draw()` from
+   Label (spec 10: Subclass extension hooks), and Label's `draw()` resolves any theme
+   override via the base-class `resolve_theme()` helper before invoking the extension
+   hooks. Add Checkbox tests pinning this inherited behavior. Flip this document back
+   to `active` status on successful completion.
+   **Completed 2026-10-15** (full suite green at 1007 tests; no code change, as
+   specified - the three new tests prove the inherited resolution reaches even the
+   hooks Checkbox overrides itself: override colors land on the box outline drawn
+   by Checkbox's `_draw_text`, and on the hover state only Checkbox honors)

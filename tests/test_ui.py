@@ -1,9 +1,10 @@
 """Unit tests for the UI framework (spec 04: UI Widgets).
 
 Covers the design-space scaling (``Scale``/``current_scale``), the widget
-base class, ``Theme`` (built-in defaults, theme-JSON validation, font
-resolution and fallback), and ``UIManager`` (central hover tracking,
-hover-enter notification, and event broadcast).
+base class (including the theme-override contract added 2026-10-15),
+``Theme`` (built-in defaults, theme-JSON validation, font resolution and
+fallback, and ``copy_theme`` cloning), and ``UIManager`` (central hover
+tracking, hover-enter notification, and event broadcast).
 """
 from __future__ import annotations
 
@@ -172,6 +173,70 @@ class TestWidget:
         assert widget.selected is True
         assert widget.enabled is False
 
+    def test_new_widget_should_have_no_theme_override_by_default(
+        self, font_ready: None
+    ) -> None:
+        # GIVEN a freshly constructed widget:
+        widget = Widget(pygame.Rect(0, 0, 10, 10))
+
+        # THEN the theme override starts unset (spec 04, added 2026-10-15):
+        assert widget.theme_override is None
+
+    def test_set_theme_override_should_store_the_theme_and_none_should_restore_the_default(
+        self, font_ready: None
+    ) -> None:
+        # GIVEN a fresh widget and a Theme to override with:
+        widget = Widget(pygame.Rect(0, 0, 10, 10))
+        override = Theme("", "", ResourceLoader())
+
+        # WHEN an override is set:
+        widget.set_theme_override(override)
+
+        # THEN it is stored by reference (spec 04, added 2026-10-15):
+        assert widget.theme_override is override
+
+        # WHEN the override is cleared with None:
+        widget.set_theme_override(None)
+
+        # THEN the None default is restored:
+        assert widget.theme_override is None
+
+    def test_resolve_theme_with_override_set_should_return_the_override(
+        self, font_ready: None
+    ) -> None:
+        # GIVEN a widget carrying a theme override:
+        widget = Widget(pygame.Rect(0, 0, 10, 10))
+        override = Theme("", "", ResourceLoader())
+        supplied = Theme("", "", ResourceLoader())
+        widget.set_theme_override(override)
+
+        # THEN resolve_theme ignores the supplied theme (spec 04, added
+        # 2026-10-15):
+        assert widget.resolve_theme(supplied) is override
+
+    def test_resolve_theme_without_override_should_return_the_supplied_theme(
+        self, font_ready: None
+    ) -> None:
+        # GIVEN a widget with the default (None) override:
+        widget = Widget(pygame.Rect(0, 0, 10, 10))
+        supplied = Theme("", "", ResourceLoader())
+
+        # THEN resolve_theme passes the supplied theme straight through:
+        assert widget.resolve_theme(supplied) is supplied
+
+    def test_resolve_theme_after_clearing_the_override_should_return_the_supplied_theme(
+        self, font_ready: None
+    ) -> None:
+        # GIVEN a widget whose override has been restored to None:
+        widget = Widget(pygame.Rect(0, 0, 10, 10))
+        widget.set_theme_override(Theme("", "", ResourceLoader()))
+        widget.set_theme_override(None)
+        supplied = Theme("", "", ResourceLoader())
+
+        # THEN the supplied theme is used once again (spec 04, added
+        # 2026-10-15):
+        assert widget.resolve_theme(supplied) is supplied
+
 
 class TestThemeDefaults:
     def test_with_default_values_should_use_builtin_defaults(
@@ -209,6 +274,37 @@ class TestThemeDefaults:
         # THEN get_font always yields a usable Font (spec 04: never None):
         assert isinstance(theme.get_font(24), pygame.font.Font)
         assert theme.get_font(0).get_height() > 0  # size clamped to >= 1
+
+    def test_mutating_a_default_theme_color_in_place_should_not_affect_other_theme_instances(
+        self, font_ready: None
+    ) -> None:
+        # GIVEN two Themes built with the built-in default colors:
+        first = _build_theme("default", "default")
+        second = _build_theme("default", "default")
+
+        # THEN the default colors are per-instance copies, not the shared
+        # class-level table (spec 04, amended 2026-10-15):
+        assert first.backgroundDisabled is not second.backgroundDisabled
+
+        # WHEN a color on the first Theme is mutated in place - the
+        # supported pattern advertised by set_theme_override():
+        first.backgroundDisabled.r = 0xFF
+        first.backgroundDisabled.g = 0x00
+        first.backgroundDisabled.b = 0x00
+
+        # THEN the first Theme really did change...
+        assert first.backgroundDisabled == pygame.Color(0xFF, 0x00, 0x00, 0xFF)
+
+        # ...the other existing Theme is untouched...
+        for key, color in _default_theme_colors().items():
+            assert getattr(second, key) == color
+
+        # ...and so is a Theme constructed after the mutation - the
+        # built-in default table was never rewritten (the process-wide
+        # poisoning this pins against):
+        third = _build_theme("default", "default")
+        for key, color in _default_theme_colors().items():
+            assert getattr(third, key) == color
 
 
 class TestThemeFromJson:
@@ -568,6 +664,130 @@ class TestThemeResourceIdAccessors:
         assert theme.get_font_resource_id() == game_constants.DEFAULT_FONT_VALUE
 
 
+class TestThemeCloning:
+    """``Theme.copy_theme()`` (spec 04, added 2026-10-15)."""
+
+    def test_copy_theme_should_match_every_color_and_corner_radius_of_the_original(
+        self, font_ready: None
+    ) -> None:
+        # GIVEN a Theme with every property overridden away from the defaults:
+        data = {
+            "foregroundNormal": "0x010203",
+            "backgroundNormal": "0x04050607",
+            "foregroundSelected": "0x08090a",
+            "backgroundSelected": "0x0b0c0d",
+            "foregroundHover": "0x0e0f10",
+            "backgroundHover": "0x111213",
+            "foregroundDisabled": "0x141516",
+            "backgroundDisabled": "0x171819",
+            "cornerRadius": 6,
+        }
+        theme = _build_theme("themes/full.json", json_data=data)
+
+        # WHEN the theme is cloned:
+        clone = theme.copy_theme()
+
+        # THEN the clone is a distinct Theme carrying identical values
+        # (spec 04: property parity):
+        assert clone is not theme
+        assert isinstance(clone, Theme)
+        for key in _default_theme_colors():
+            assert getattr(clone, key) == getattr(theme, key)
+        assert theme.foregroundNormal == pygame.Color(0x01, 0x02, 0x03)
+        assert clone.backgroundNormal == pygame.Color(0x04, 0x05, 0x06, 0x07)
+        assert clone.cornerRadius == 6
+
+    def test_copy_theme_with_configured_font_should_resolve_fonts_identically(
+        self, font_ready: None
+    ) -> None:
+        # GIVEN a Theme whose configured theme and font ids both resolve:
+        marker = pygame.font.Font(None, 7)
+        theme = _build_theme(
+            "themes/named.json",
+            "fonts/ui.ttf",
+            json_data={"cornerRadius": 2},
+            font_resource=marker,
+        )
+
+        # WHEN the theme is cloned:
+        clone = theme.copy_theme()
+
+        # THEN the clone reports the same resource ids and serves the very
+        # same resolved font (spec 04: font state must survive the copy):
+        assert clone.get_theme_resource_id() == "themes/named.json"
+        assert clone.get_font_resource_id() == "fonts/ui.ttf"
+        assert clone.get_font(24) is marker
+
+    def test_copy_theme_with_fallback_font_should_keep_the_same_fallback(
+        self, font_ready: None
+    ) -> None:
+        # GIVEN a Theme that fell through to the deterministic system
+        # fallback (the fallback name is not a constructor argument, so a
+        # constructor-based copy could not rebuild it):
+        records, sink_id = _warning_records()
+        theme = _build_theme(font_value="fonts/missing.ttf")
+        logger.remove(sink_id)
+
+        # WHEN the theme is cloned:
+        clone = theme.copy_theme()
+
+        # THEN the clone falls back identically (spec 04: font state must
+        # survive the copy):
+        assert clone.get_font_resource_id() == game_constants.DEFAULT_FONT_VALUE
+        _assert_uses_fallback(clone)
+        assert _render_signature(clone.get_font(12)) == _render_signature(
+            theme.get_font(12)
+        )
+
+    def test_copy_theme_mutating_the_clone_colors_in_place_should_not_affect_the_original(
+        self, font_ready: None
+    ) -> None:
+        # GIVEN a Theme and its clone:
+        theme = _build_theme()
+        clone = theme.copy_theme()
+
+        # WHEN a color is mutated in place on the clone (pygame.Color is
+        # mutable):
+        clone.foregroundNormal.r = 0
+        clone.foregroundNormal.g = 0
+        clone.foregroundNormal.b = 0
+        clone.foregroundNormal.a = 0
+
+        # THEN the clone really did change, and the original is untouched
+        # (spec 04: independent color copies):
+        assert clone.foregroundNormal == pygame.Color(0, 0, 0, 0)
+        assert theme.foregroundNormal == _default_theme_colors()["foregroundNormal"]
+
+    def test_copy_theme_mutating_the_original_colors_in_place_should_not_affect_the_clone(
+        self, font_ready: None
+    ) -> None:
+        # GIVEN a Theme and its clone:
+        theme = _build_theme()
+        clone = theme.copy_theme()
+
+        # WHEN a color is mutated in place on the original:
+        theme.backgroundDisabled.r = 0xFF
+        theme.backgroundDisabled.g = 0x00
+        theme.backgroundDisabled.b = 0x00
+
+        # THEN the clone keeps the pre-mutation values (spec 04: the
+        # independence runs both directions):
+        assert theme.backgroundDisabled == pygame.Color(0xFF, 0x00, 0x00, 0xFF)
+        assert clone.backgroundDisabled == _default_theme_colors()["backgroundDisabled"]
+
+
+class ThemeRecordingWidget(Widget):
+    """A stub widget that records the theme its ``draw()`` resolved
+    (spec 04, added 2026-10-15)."""
+
+    def __init__(self, rect: pygame.Rect) -> None:
+        super().__init__(rect)
+        self.resolved_themes: list[Theme] = []
+
+    def draw(self, surf: pygame.Surface, theme: Theme) -> None:
+        self.resolved_themes.append(self.resolve_theme(theme))
+
+
 class TestUIManager:
     def _widget_at(self, rect: pygame.Rect, enabled: bool = True) -> Widget:
         widget = Widget(rect)
@@ -722,11 +942,49 @@ class TestUIManager:
         ui.draw(pygame.Surface((32, 32)))
 
         # THEN the widget received the constructor theme first and the
-        # replacement theme second - widgets do not store themes, so the
-        # swap takes effect on the next frame (spec 04, as amended by
-        # spec 08):
+        # replacement theme second - a widget without a theme override
+        # receives the swapped theme on the next frame (spec 04, as
+        # amended by spec 08; the 2026-10-15 override amendment leaves
+        # this no-override path untouched):
         assert received_themes == [first_theme, second_theme]
         assert ui.theme is second_theme
+
+    def test_draw_without_override_should_resolve_to_the_ui_manager_theme(
+        self, font_ready: None
+    ) -> None:
+        # GIVEN a stub widget that resolves its theme on each draw, with
+        # no override set:
+        ui = UIManager(Theme("", "", ResourceLoader()))
+        widget = ThemeRecordingWidget(pygame.Rect(0, 0, 10, 10))
+        ui.widgets.append(widget)
+
+        # WHEN the UIManager draws:
+        ui.draw(pygame.Surface((32, 32)))
+
+        # THEN resolve_theme passed the UIManager's theme straight
+        # through (spec 04, added 2026-10-15):
+        assert widget.resolved_themes == [ui.theme]
+
+    def test_set_theme_should_not_disturb_a_widget_theme_override(
+        self, font_ready: None
+    ) -> None:
+        # GIVEN a stub widget carrying a theme override, drawn through a
+        # UIManager holding a different theme:
+        override = Theme("", "", ResourceLoader())
+        ui = UIManager(Theme("", "", ResourceLoader()))
+        widget = ThemeRecordingWidget(pygame.Rect(0, 0, 10, 10))
+        widget.set_theme_override(override)
+        ui.widgets.append(widget)
+
+        # WHEN the UIManager draws, swaps its theme, and draws again:
+        ui.draw(pygame.Surface((32, 32)))
+        ui.set_theme(Theme("", "", ResourceLoader()))
+        ui.draw(pygame.Surface((32, 32)))
+
+        # THEN both draws resolved the override - the swap never reaches
+        # an overriding widget (spec 04 acceptance: the override survives
+        # a set_theme swap, and set_theme_override(None) would end it):
+        assert widget.resolved_themes == [override, override]
 
 
 class HoverRecordingWidget(Widget):

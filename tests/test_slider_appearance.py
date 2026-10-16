@@ -5,6 +5,7 @@ from __future__ import annotations
 
 from dtd import audio
 from dtd import game_constants
+from dtd.widgets.slider import Slider
 from helpers_pixels import BLACK
 from helpers_slider import (
     CENTER_Y,
@@ -24,6 +25,7 @@ from helpers_slider import (
     slider_ui,
     track_ink_at,
 )
+from helpers_theme_override import assert_theme_override_honored
 
 
 class TestSliderCosmetics:
@@ -181,6 +183,59 @@ class TestSliderCosmetics:
         # THEN no border ink is painted at the extreme corner pixel
         # (the rounded border curves away from it):
         assert screen.get_at((0, 0)) == BLACK
+
+
+class TestSliderThemeOverride:
+    """The theme-override contract (spec 12 Testing, added 2026-10-15).
+
+    The generic half is the shared pin in
+    ``helpers_theme_override.assert_theme_override_honored`` - wired
+    in here per spec 12 dev plan stage 8, the last widget suite to
+    adopt it. These tests add the Slider-specific pixel proof: fill
+    and track chrome painted from the override.
+    """
+
+    #: Chrome colors distinguishable from TEST_THEME_JSON in the
+    #: normal state - yellow track ink is one the base theme's normal
+    #: foreground (red) can never produce.
+    OVERRIDE_JSON = {
+        "foregroundNormal": "ffff00",
+        "backgroundNormal": "ff00ff",
+    }
+    OVERRIDE_FG = (255, 255, 0, 255)
+    OVERRIDE_BG = (255, 0, 255, 255)
+
+    def test_set_theme_override_should_replace_the_draw_theme_and_none_should_restore_it(
+        self, font_ready: None
+    ) -> None:
+        # GIVEN/WHEN/THEN entirely inside the shared spec 04 pin. A
+        # Slider is drawable straight away (no appearance frame):
+        assert_theme_override_honored(lambda: Slider(RECT, text="Vol"))
+
+    def test_theme_override_should_paint_fill_and_track_and_none_should_restore_them(
+        self, font_ready: None
+    ) -> None:
+        # GIVEN a Slider registered with a UIManager holding the
+        # red/green test theme:
+        slider, ui = slider_ui(RECT, make_theme(TEST_THEME_JSON), text="Vol")
+
+        # WHEN a magenta/yellow theme override is set and the UI draws:
+        slider.set_theme_override(make_theme(self.OVERRIDE_JSON))
+        screen = draw_ui(ui)
+
+        # THEN the fill and the track both come from the override, not
+        # the UIManager's theme (spec 12: the override outranks the
+        # draw theme):
+        assert screen.get_at((150, 10)) == self.OVERRIDE_BG
+        assert track_ink_at(screen, 150, self.OVERRIDE_FG)
+
+        # WHEN the override is cleared and the UI draws again:
+        slider.set_theme_override(None)
+        screen = draw_ui(ui)
+
+        # THEN the UIManager's theme is visible once more:
+        assert screen.get_at((150, 10)) == NORMAL_BG
+        assert track_ink_at(screen, 150, NORMAL_FG)
 
 
 class TestSliderHoverAudio:

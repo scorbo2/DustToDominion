@@ -162,6 +162,10 @@ class Button(Widget):
 
     # -- rendering (spec 09: Button options) --------------------------------
     def draw(self, surf: pygame.Surface, theme: Theme) -> None:
+        # A client-set theme override (spec 04, added 2026-10-15) wins
+        # over the Theme handed to draw(); resolve before anything reads
+        # it, or half the chrome would come from the wrong Theme.
+        theme = self.resolve_theme(theme)
         scale = current_scale()
         rect = scale.rect(self.rect.x, self.rect.y, self.rect.w, self.rect.h)
         if rect.w <= 0 or rect.h <= 0:
