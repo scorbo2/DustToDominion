@@ -50,21 +50,26 @@ Title screen.
 
 ### Exit control and title
 
-In the upper left corner of the screen, a Button and a Label are
-displayed:
-- margin of 24px on left and top edge
+In the upper left corner of the screen a Button is displayed, and the
+title Label is horizontally centered at the top of the screen:
 - Button:
-  - fixed size of 80x40
+  - margin of 24px on left and top edge
+  - fixed size of 130x40
   - border width of `MENU_OPTION_BORDER_WIDTH`
   - label: "< Back"
   - rect top-left: (24,24)
 - Label:
-  - fixed size of 100x50
+  - fixed size of 210x110
+  - horizontally centered on the screen: rect left edge is
+    `(DESIGN_W - 210) // 2`
+  - top edge 12px from the top of the screen: rect top-left y is 12
   - left-aligned (not centered) text
   - text: "Options"
   - border width of 0
   - not opaque
-  - rect top-left: (128,24)
+  - selected: the Label's `selected` flag is set, so its text renders in
+    the theme's selected-state colors, visually distinct from the controls
+    (spec 04: Selecting widgets; cosmetic-only for Labels per spec 10)
 
 Clicking the button transitions from the Options screen back to the
 Title screen. Any music that is playing stops as part of this screen
@@ -79,11 +84,14 @@ plus a 32px margin between controls. Controls are laid out in a single
 column.
 
 - Section title label:
-  - fixed size of 480x48
+  - fixed size of 600x80
   - left-aligned (not centered) text
   - border width of 0
   - label: "Audio options"
   - not opaque
+  - selected: the Label's `selected` flag is set, so its text renders in
+    the theme's selected-state colors (spec 04: Selecting widgets;
+    cosmetic-only for Labels per spec 10)
 - Audio options:
   - each audio type (game sfx, ui sfx, speech, and music) has
     a pair of controls (stacked vertically, not side-by-side: a Checkbox
@@ -102,7 +110,12 @@ column.
     the game sfx Slider is initially disabled. Each Checkbox
     has a callback that updates its Slider's enabled status
     as the Checkbox is checked or unchecked. All Checkboxes and Sliders
-    have the same fixed dimensions: 480x36.
+    have the same fixed dimensions: 600x64.
+    *Note*: the Slider's tab control keeps its fixed design-space size
+    (`SLIDER_TAB_WIDTH`/`SLIDER_TAB_HEIGHT`, spec 12); at the previous
+    36px control height the 48px-tall tab overhung and clipped against
+    the control rect. At 64px it fits entirely - an intentional,
+    approved cosmetic change, not a regression.
 
 ### UI controls - group 2
 
@@ -114,15 +127,18 @@ horizontally aligned. The 32px margin between controls applies to
 group 2, just as with group 1.
 
 - Section title label:
-  - fixed size of 480x48
+  - fixed size of 600x80
   - left-aligned (not centered) text
   - border width of 0
   - label: "UI options"
   - not opaque
+  - selected: the Label's `selected` flag is set, so its text renders in
+    the theme's selected-state colors (spec 04: Selecting widgets;
+    cosmetic-only for Labels per spec 10)
 - ChoiceLists:
   - the font ChoiceList formerly on the Title screen appears here.
   - the theme ChoiceList formerly on the Title screen appears here.
-  - each ChoiceList has a border width of `MENU_OPTION_BORDER_WIDTH` and a fixed size of 320x36.
+  - each ChoiceList has a border width of `MENU_OPTION_BORDER_WIDTH` and a fixed size of 600x64.
 
 ## New constants
 
@@ -183,6 +199,12 @@ The tests use the `mixer_ready` + `init_audio_manager` pattern to process audio 
   back to Title screen.
 - The "< Back" button's rect is exactly as specified in "Exit control and title".
 - The "Options" label renders at the correct location as described in "Exit control and title".
+- The "Options" title Label and both section title Labels have their
+  `selected` flag set; no other widget on the screen is selected.
+- Every Checkbox, Slider, and ChoiceList on the screen is fixed 600x64;
+  both section title Labels are fixed 600x80; the title Label is fixed
+  210x110, horizontally centered at the top of the screen with its top
+  edge 12px from the screen top.
 - Screen transitions in both directions stop any music that was playing.
 - If a resource with id matching any of `OPTIONS_SCREEN_BACKGROUND_IMAGE_IDS` exists:
   - it is displayed in the background of the Options Screen.
@@ -240,6 +262,8 @@ The tests use the `mixer_ready` + `init_audio_manager` pattern to process audio 
 - If Options screen music is present, does it play on the Options screen?
 - Does playing music terminate during a screen transition?
 - Are both control groups present? Are the section labels horizontally aligned?
+- Are the "Options" title and the section labels rendered in the selected
+  color, visually distinct from the controls?
 - Are changes persisted to the game config file immediately?
 - Do changes take effect in-memory immediately?
 - Do audio type checkboxes drive the enabled status of their associated slider?
@@ -336,4 +360,37 @@ The tests use the `mixer_ready` + `init_audio_manager` pattern to process audio 
     docstrings (past-tense attributions to other specs' completed dev
     plans left as historical record); normative prose converted to
     present tense; doc flipped to `active`.
+7. Cosmetic amendment (2026-10-15): enlarge every Options screen control
+   for legibility at the downscaled resolutions - the auto-scaled label
+   text was measuring ~12 physical px at 1280x720. Checkboxes and
+   Sliders: 480x36 -> 600x64. ChoiceLists: 320x36 -> 600x64. Section
+   title Labels: 480x48 -> 600x80. "Options" title Label: 100x50 ->
+   180x80 (rect top-left stays (128,24)). No font-size code: every
+   affected widget auto-scales its text to the inner rect
+   (specs 10/11/12), so the rect growth carries the text growth. The
+   title Label and both section Labels get `selected = True` so their
+   text renders in the theme's selected-state colors, visually distinct
+   from the controls (cosmetic-only for Labels, spec 10). Side effect,
+   approved: the fixed 48 design px slider tab (spec 12) now fits
+   entirely inside the 64px-tall Slider instead of overhanging and
+   clipping against the 36px-tall one.
+   **Completed 2026-10-15**: the module-private size constants in
+   `dtd/screens/options.py` carry the new literals (they stay put there -
+   deliberately not promoted to `game_constants.py`); the title Label
+   and both section Labels set `selected = True` in their builders, and
+   a new test pins that exactly those three widgets (and no others)
+   carry the flag. Full suite: 1011 passed.
+8. Cosmetic follow-up (2026-10-15): widen the "< Back" button by 50
+   design px - 80x40 -> 130x40, rect top-left stays (24,24). Reposition
+   and grow the "Options" title Label: no longer beside the button, it
+   is now horizontally centered on the screen with its top edge 12px
+   from the screen top, and its fixed size grows 30px in each dimension
+   - 180x80 -> 210x110. The label's auto-scaled text is width-bound,
+   so it fills the centered box and reads as screen-centered despite the
+   left-aligned text rule.
+   **Completed 2026-10-15**: `_BACK_BUTTON_RECT` is now 130x40; the
+   title Label's rect is computed from `DESIGN_W` (centering intent
+   survives future size tweaks) at (855, 12) over 210x110, and a new
+   test assertion pins the equal left/right margins. Full suite:
+   1011 passed.
 
