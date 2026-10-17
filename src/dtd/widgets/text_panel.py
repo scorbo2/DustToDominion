@@ -2,9 +2,10 @@
 
 A read-only multi-line text panel with word-boundary line wrap, an
 optional icon, and an optional border, rendered entirely with
-``pygame`` (spec 06: Additional dependencies). TextPanels never respond
-to keyboard or mouse events - they are static display panels that can be
-added to or removed from a UIManager via plain list manipulation.
+``pygame`` (spec 06: Additional dependencies). TextPanels respond to no
+keyboard or mouse events beyond the optional ``on_click`` callback
+(spec 06, amended 2026-10-16) - they are static display panels that can
+be added to or removed from a UIManager via plain list manipulation.
 
 Rendering contract (spec 06):
 
@@ -36,10 +37,22 @@ Animation contract (spec 06: Animation options):
 - Typing reveals ``speed`` characters per second (60 frames) and runs
   concurrently with the other animations; during a disappearance it
   continues only while the panel is still visible.
+
+Click contract (spec 06, amended 2026-10-16):
+
+- A click is a left-mouse press *and* release both inside the panel's
+  *current* rect (``current_rect()``, not the constructor rect, so a
+  mid-slide-in click lands where the panel is actually drawn).
+- Clicks carry no audio of their own; callers may play their own inside
+  the callback.
+- No click reporting before the first ``update()`` (the panel is not on
+  screen yet) and none once ``disappear()`` is invoked - a panel on its
+  way to oblivion stops reporting clicks immediately, and permanently.
 """
 from __future__ import annotations
 
 import re
+from collections.abc import Callable
 
 import pygame
 
@@ -167,6 +180,9 @@ class TextPanel(Widget):
     immutable after construction by convention (spec 06: TextPanel
     options); only the audio ids and the animation options have setters,
     and the animation options lock at the first ``update()``.
+    ``on_click`` is mutable by plain assignment - reassign it, or set it
+    to ``None`` to switch click reporting off (spec 06, amended
+    2026-10-16).
     """
 
     def __init__(
@@ -178,14 +194,19 @@ class TextPanel(Widget):
         border_width: int = 0,
         audio_on_appear: str | None = None,
         audio_on_disappear: str | None = None,
+        on_click: Callable[[], None] | None = None,
     ) -> None:
         super().__init__(rect)
         self.text = text
         self.font_size = font_size
         self.icon = icon
         self.border_width = border_width
+        self.on_click = on_click
         self._audio_on_appear = audio_on_appear
         self._audio_on_disappear = audio_on_disappear
+        # Left button pressed inside the current rect? Press-to-release
+        # latch for click detection (spec 06, amended 2026-10-16).
+        self._pressed = False
         # Visibility and animation state machine. Before the first
         # update() the panel is invisible; the first update() starts
         # the appearance at t=0 (spec 06: Animation options).
@@ -216,14 +237,14 @@ class TextPanel(Widget):
 
     # -- input (spec 04: Widgets) ------------------------------------------
     def update(self, events: list[pygame.event.Event]) -> None:
-        """Advance the animation state machine by exactly one frame.
+        """Advance the animation state machine by exactly one frame and
+        run click detection for the frame's event batch.
 
-        TextPanels never respond to input events (spec 06), but the
-        UIManager calls ``update()`` once per frame on enabled widgets -
-        that tick is what starts and paces the appearance. The
+        The UIManager calls ``update()`` once per frame on enabled
+        widgets - that tick is what starts and paces the appearance. The
         UIManager never calls disabled widgets, which is exactly what
-        freezes animation (spec 06); the guard here keeps direct calls
-        equally honest.
+        freezes animation and swallows their clicks (spec 04: Disabling
+        widgets); the guard here keeps direct calls equally honest.
         """
         if not self.enabled:
             return
@@ -235,6 +256,50 @@ class TextPanel(Widget):
         else:
             self._advance_appearance()
         self._advance_typing()
+        self._detect_click(events)
+
+    def _detect_click(self, events: list[pygame.event.Event]) -> None:
+        """Fire ``on_click`` for a left press *and* release both inside
+        the current rect (spec 06 click contract, as amended 2026-10-16;
+        same press-to-release latch as Button, spec 09).
+
+        Deliberately *not* the inherited :meth:`Widget.hit`: that tests
+        the constructor rect, and a mid-slide-in panel is drawn at
+        ``current_rect()`` - clicks must land where the panel actually
+        is, not where it hopes to end up. The base ``hit()`` stays
+        untouched because the UIManager uses it for hover bookkeeping,
+        and TextPanels do not hover.
+        """
+        if not self._click_reporting_active():
+            self._pressed = False
+            return
+        scale = current_scale()
+        for event in events:
+            if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                self._pressed = self.current_rect().collidepoint(
+                    scale.mouse(event.pos)
+                )
+            elif event.type == pygame.MOUSEBUTTONUP and event.button == 1:
+                clicked = self._pressed and self.current_rect().collidepoint(
+                    scale.mouse(event.pos)
+                )
+                self._pressed = False
+                if clicked and self.on_click is not None:
+                    # No audio here: a TextPanel click is silent by
+                    # contract; callers play their own sounds inside
+                    # the callback if they want them (spec 06).
+                    self.on_click()
+
+    def _click_reporting_active(self) -> bool:
+        """Whether click detection may run this frame (spec 06).
+
+        Off before the first ``update()`` - the panel is not on screen
+        yet, and phantom clicks on an invisible rect are nobody's
+        business - and off from the moment ``disappear()`` is invoked:
+        a panel on its way to oblivion stops reporting clicks right
+        away, not when the fade finishes.
+        """
+        return self._has_appeared and not self._is_dismissed
 
     def disappear(self) -> None:
         """Dismiss the panel, animating if disappearance options exist.
@@ -245,7 +310,9 @@ class TextPanel(Widget):
         options, or with an explicitly non-positive fade-out duration,
         the panel becomes fully transparent at once (spec 06: frames
         <= 0 means instant disappear). Once dismissed, the panel can
-        never be made visible again.
+        never be made visible again, and click reporting stops from
+        this moment on - not when the fade finishes (spec 06, amended
+        2026-10-16).
 
         Gotcha: interrupting a fade-in with no fade-out configured
         freezes alpha at its partial value - the panel stays

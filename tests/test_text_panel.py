@@ -3,7 +3,8 @@
 Covers rendering and layout (chrome, icon scaling, fixed margins),
 word-boundary line wrap including the pure ``wrap_text`` helper, the
 appearance/disappearance state machine with slide/fade/typing
-animation, and appearance/disappearance audio through the global
+animation, the optional ``on_click`` callback (spec 06, amended
+2026-10-16), and appearance/disappearance audio through the global
 AudioManager singleton. Pixel assertions read the display surface after
 ``ui.draw`` at the design resolution (scale 1), following the Button
 test patterns.
@@ -23,6 +24,7 @@ from dtd import audio, game_constants, resource_loader
 from dtd.game_config import AudioConfig, ResourcesConfig
 from dtd.resource_loader import ResourceLoader
 from dtd.ui import Theme, UIManager
+from dtd.widgets.button import Button
 from dtd.widgets.text_panel import TextPanel, wrap_text
 from helpers_theme_override import assert_theme_override_honored
 
@@ -196,6 +198,14 @@ def _run_frames(ui: UIManager, count: int) -> None:
     measured in update() calls, never in clock units)."""
     for _ in range(count):
         ui.update([])
+
+
+def _down(pos: tuple[int, int], button: int = 1) -> pygame.event.Event:
+    return pygame.event.Event(pygame.MOUSEBUTTONDOWN, button=button, pos=pos)
+
+
+def _up(pos: tuple[int, int], button: int = 1) -> pygame.event.Event:
+    return pygame.event.Event(pygame.MOUSEBUTTONUP, button=button, pos=pos)
 
 
 def _clear_and_draw(ui: UIManager) -> pygame.Surface:
@@ -922,6 +932,251 @@ class TestUIManagerIntegration:
         # back panel (back-to-front list order, spec 04):
         assert _pixel(screen, 250, 180) == SELECTED_BG
         assert _pixel(screen, 110, 110) == NORMAL_BG
+
+
+class TestPanelClick:
+    """Optional ``on_click`` click reporting (spec 06, amended
+    2026-10-16). The panel must have appeared (one ``update()``) and
+    must not have been dismissed; clicks are left-button press *and*
+    release both inside the *current* rect."""
+
+    def _panel_ui(
+        self,
+        rect: pygame.Rect,
+        on_click=None,
+        audio_on_appear: str | None = None,
+    ) -> tuple[TextPanel, UIManager, list]:
+        """A single appeared panel plus a ``clicks`` recorder.
+
+        The display is set to the design resolution so synthesized
+        pixel positions equal design positions (scale 1); the click
+        math itself runs through ``current_scale().mouse`` like every
+        other widget (spec 04: Widget coordinates).
+        """
+        pygame.display.set_mode((game_constants.DESIGN_W, game_constants.DESIGN_H))
+        clicks: list[None] = []
+        panel = TextPanel(
+            rect,
+            on_click=on_click or (lambda: clicks.append(None)),
+            audio_on_appear=audio_on_appear,
+        )
+        ui = _register(panel, _theme(TEST_THEME_JSON))
+        ui.update([])  # the panel's first frame: it has now appeared
+        return panel, ui, clicks
+
+    def test_press_and_release_inside_should_fire_on_click_once(self) -> None:
+        # GIVEN an appeared panel with an on_click callback:
+        _, ui, clicks = self._panel_ui(pygame.Rect(100, 100, 200, 120))
+
+        # WHEN the left button is pressed and released inside the rect:
+        ui.update([_down((150, 150)), _up((150, 150))])
+
+        # THEN on_click fires exactly once (spec 06: click contract):
+        assert len(clicks) == 1
+
+    def test_release_outside_after_inside_press_should_not_fire(self) -> None:
+        # GIVEN an appeared panel and a press inside the rect:
+        _, ui, clicks = self._panel_ui(pygame.Rect(100, 100, 200, 120))
+        ui.update([_down((150, 150))])
+
+        # WHEN the release happens outside (drag-off):
+        ui.update([_up((700, 400))])
+
+        # THEN no click fires (spec 06: Testing):
+        assert clicks == []
+
+    def test_press_outside_release_inside_should_not_fire(self) -> None:
+        # GIVEN an appeared panel and a press outside the rect:
+        _, ui, clicks = self._panel_ui(pygame.Rect(100, 100, 200, 120))
+        ui.update([_down((700, 400))])
+
+        # WHEN the release happens inside (drag-in):
+        ui.update([_up((150, 150))])
+
+        # THEN no click fires (press must also have been inside):
+        assert clicks == []
+
+    @pytest.mark.parametrize("button", [2, 3])
+    def test_non_left_mouse_button_should_not_fire_click(self, button: int) -> None:
+        # GIVEN an appeared panel and press+release squarely inside it:
+        _, ui, clicks = self._panel_ui(pygame.Rect(100, 100, 200, 120))
+
+        # WHEN a middle (2) or right (3) button click occurs:
+        ui.update([_down((150, 150), button=button), _up((150, 150), button=button)])
+
+        # THEN no click fires - only the left button counts (spec 06):
+        assert clicks == []
+
+    def test_disabled_panel_should_ignore_click_events(self) -> None:
+        # GIVEN an appeared panel that the client then disables:
+        panel, ui, clicks = self._panel_ui(pygame.Rect(100, 100, 200, 120))
+        panel.enabled = False
+
+        # WHEN press+release happen inside the rect:
+        ui.update([_down((150, 150)), _up((150, 150))])
+
+        # THEN no click fires (spec 06: disabled TextPanels do not fire
+        # on_click; the UIManager already withholds their events):
+        assert clicks == []
+
+    def test_click_during_slide_in_should_use_the_current_rendered_rect(self) -> None:
+        # GIVEN a panel mid-slide-in (5 of 10 frames done): the current
+        # rendered rect sits at x=300 while the constructor rect waits
+        # at x=100 (see test_set_slide_in_options... for the easing):
+        pygame.display.set_mode((game_constants.DESIGN_W, game_constants.DESIGN_H))
+        clicks: list[None] = []
+        panel = TextPanel(
+            pygame.Rect(100, 0, 50, 50), on_click=lambda: clicks.append(None)
+        )
+        panel.set_slide_in_options(pygame.Rect(900, 0, 50, 50), frames=10)
+        ui = _register(panel, _theme(TEST_THEME_JSON))
+        _run_frames(ui, 6)
+        assert panel.current_rect().x == 300
+
+        # WHEN press+release land at x=250: inside the current rect and
+        # outside the constructor rect. update() advances the slide
+        # before processing the batch, so the click is tested against
+        # the frame-6 rect at x=228 - the position the panel is drawn
+        # at this very frame (x=250 is inside it, and outside the
+        # constructor rect at x=100 either way):
+        ui.update([_down((250, 25)), _up((250, 25))])
+        assert panel.current_rect().x == 228
+
+        # THEN the click fires against where the panel is actually
+        # drawn, not where it hopes to end up (spec 06, amended
+        # 2026-10-16):
+        assert len(clicks) == 1
+
+    def test_click_inside_constructor_rect_only_during_slide_in_should_not_fire(
+        self,
+    ) -> None:
+        # GIVEN the same panel mid-slide-in at x=300:
+        pygame.display.set_mode((game_constants.DESIGN_W, game_constants.DESIGN_H))
+        clicks: list[None] = []
+        panel = TextPanel(
+            pygame.Rect(100, 0, 50, 50), on_click=lambda: clicks.append(None)
+        )
+        panel.set_slide_in_options(pygame.Rect(900, 0, 50, 50), frames=10)
+        ui = _register(panel, _theme(TEST_THEME_JSON))
+        _run_frames(ui, 6)
+        assert panel.current_rect().x == 300
+
+        # WHEN press+release land inside the constructor rect but
+        # outside the current rendered rect:
+        ui.update([_down((125, 25)), _up((125, 25))])
+
+        # THEN no click fires - the empty destination is not clickable:
+        assert clicks == []
+
+    def test_successful_click_should_not_play_any_audio(
+        self,
+        audio_manager: audio.AudioManager,
+        record_play_ui_sfx,
+        font_ready: None,
+    ) -> None:
+        # GIVEN an appeared panel whose appearance audio id is set, and
+        # an on_click callback:
+        played = record_play_ui_sfx(audio_manager)
+        panel, ui, clicks = self._panel_ui(
+            pygame.Rect(100, 100, 200, 120), audio_on_appear=SFX_PING
+        )
+        assert played == [SFX_PING]  # the appearance already made its noise
+
+        # WHEN a successful click occurs:
+        ui.update([_down((150, 150)), _up((150, 150))])
+
+        # THEN the click fired...
+        assert len(clicks) == 1
+
+        # ...but added no audio of its own (spec 06: TextPanel clicks
+        # have no associated audio):
+        assert played == [SFX_PING]
+
+    def test_overlapping_widgets_should_each_fire_their_own_callback(
+        self, silent_audio_manager: audio.AudioManager, font_ready: None
+    ) -> None:
+        # GIVEN a Button added on top of a clickable TextPanel, both
+        # with their own callbacks (the Button's click audio reaches
+        # the silent singleton - spec 09):
+        pygame.display.set_mode((game_constants.DESIGN_W, game_constants.DESIGN_H))
+        panel_clicks: list[None] = []
+        button_clicks: list[None] = []
+        panel = TextPanel(
+            pygame.Rect(100, 100, 200, 120),
+            on_click=lambda: panel_clicks.append(None),
+        )
+        button = Button(
+            pygame.Rect(150, 130, 200, 120),
+            on_click=lambda: button_clicks.append(None),
+        )
+        ui = UIManager(_theme(TEST_THEME_JSON))
+        ui.widgets.extend([panel, button])
+        ui.update([])  # both widgets' first frame
+
+        # WHEN one left click lands inside the overlapping region:
+        ui.update([_down((170, 150)), _up((170, 150))])
+
+        # THEN both fire their own on_click - the UIManager broadcasts
+        # to every enabled widget, no click stealing (spec 06 Testing:
+        # this is UI framework behavior):
+        assert len(panel_clicks) == 1
+        assert len(button_clicks) == 1
+
+    def test_after_disappear_invoked_no_click_event_should_fire(self) -> None:
+        # GIVEN an appeared panel with a slide-out disappearance, so it
+        # stays visible for frames after dismiss...
+        panel, ui, clicks = self._panel_ui(pygame.Rect(100, 100, 200, 120))
+        panel.set_slide_out_options(pygame.Rect(-300, 100, 200, 120), frames=10)
+
+        # ...and a press that began while the panel was still alive:
+        ui.update([_down((150, 150))])
+
+        # WHEN disappear() is invoked, then the release lands inside:
+        panel.disappear()
+        ui.update([_up((150, 150))])
+
+        # THEN no click fires: dismiss stops click reporting at
+        # invocation, not at animation completion (spec 06, amended
+        # 2026-10-16), and the pending press latch is dropped:
+        assert clicks == []
+
+    def test_click_before_first_update_should_not_fire(self) -> None:
+        # GIVEN a panel that has not yet had its first update():
+        pygame.display.set_mode((game_constants.DESIGN_W, game_constants.DESIGN_H))
+        clicks: list[None] = []
+        panel = TextPanel(
+            pygame.Rect(100, 100, 200, 120), on_click=lambda: clicks.append(None)
+        )
+        ui = _register(panel, _theme(TEST_THEME_JSON))
+
+        # WHEN press+release land squarely inside its rect:
+        ui.update([_down((150, 150)), _up((150, 150))])
+
+        # THEN no click fires - the panel is not on screen yet (spec 06:
+        # Testing)...
+        assert clicks == []
+
+        # ...and once it has appeared, clicks do fire:
+        ui.update([])
+        ui.update([_down((150, 150)), _up((150, 150))])
+        assert len(clicks) == 1
+
+    def test_reassigning_on_click_should_change_reporting(self) -> None:
+        # GIVEN an appeared panel with one callback wired up:
+        panel, ui, first_clicks = self._panel_ui(pygame.Rect(100, 100, 200, 120))
+
+        # WHEN on_click is reassigned to None by the client:
+        panel.on_click = None
+        ui.update([_down((150, 150)), _up((150, 150))])
+
+        # THEN click reporting is off (spec 06: mutable by assignment)...
+        assert first_clicks == []
+
+        # ...and a fresh callback takes over from there:
+        second_clicks: list[None] = []
+        panel.on_click = lambda: second_clicks.append(None)
+        ui.update([_down((150, 150)), _up((150, 150))])
+        assert len(second_clicks) == 1
 
 
 class TestPanelAudio:
