@@ -1,5 +1,5 @@
 ---
-description: Describes a new UI widget for the game: TextPanel
+description: Describes the TextPanel widget: rendering, animation, audio, and optional click handling.
 status: active
 ---
 
@@ -9,9 +9,9 @@ This document describes the `dtd/widgets/text_panel.py` module containing a
 UI widget for the game: `TextPanel`. This is a simple read-only multi-line text panel
 with line wrap at word boundaries. It extends the existing `Widget` base class.
 
-TextPanels do not respond to keyboard or mouse events - they are simply static
-display panels. They can be added to or removed from UIManager via plain list
-manipulation on `UIManager.widgets`.
+TextPanels do not respond to keyboard or mouse events (except for the optional `on_click`
+callback described below) - they are simply static display panels. TextPanels can be
+added to or removed from UIManager via plain list manipulation on `UIManager.widgets`.
 
 ```python
 class TextPanel(Widget):
@@ -30,11 +30,13 @@ class TextPanel(Widget):
         border_width: int = 0, # immutable after construction
         audio_on_appear: str | None = None,
         audio_on_disappear: str | None = None,
+        on_click: Callable[[], None] | None = None,
     ) -> None:
         super().__init__(rect)
         self.text = text
         self.icon = icon
         self.border_width = border_width
+        self.on_click = on_click
         # etc.
 
     # -- input (spec 04: Widgets) ------------------------------------------
@@ -123,8 +125,15 @@ mutability from that class.
 - Disabling the TextPanel changes text and border to foregroundDisabled, and background to backgroundDisabled. No change to icon.
 - Selecting the TextPanel (can only be done programmatically) changes text and border to foregroundSelected, and
   background to backgroundSelected. No change to icon.
+- Optional `on_click` callback invoked when the mouse is clicked anywhere inside the TextPanel's rect.
+  A "click" means that both the mouse press and release events happened while the pointer is inside our rect.
+  Only the left mouse button counts for click detection. Disabled TextPanels do not fire `on_click` events.
+  Clicks that occur during a slide-in animation should be checked against the current rendered rect, not the constructor rect.
+  TextPanel clicks have no associated audio. Callers can play their own audio in the callback if they wish.
+  The `on_click` callback is mutable by assignment after construction - callers can reassign it, or set it to None
+  to disable click reporting. Invoking `disappear()` disables click reporting, and it cannot be re-enabled at that point.
 
-Note that TextPanel does not respond to mouse or keyboard events, including mouse hover. The `*Hover` colors
+Other than `on_click`, TextPanel does not respond to mouse or keyboard events, including mouse hover. The `*Hover` colors
 from the current theme are therefore never used here.
 
 ## Animation options
@@ -323,6 +332,19 @@ This document introduces no new configuration keys.
   and uses the override instead.
 - Invoking `set_theme_override(None)` causes a TextPanel with a theme override to stop overriding the theme and once again
   use the Theme instance supplied to its `draw()` method.
+- If `on_click` is supplied to the constructor, a callback is received for every left button mouse click that occurs inside the TextPanel's rect.
+  - If mouse press happens inside the rect, but mouse release happens outside the rect, a callback does not occur.
+  - If mouse press happens outside the rect, but mouse release happens inside the rect, a callback does not occur.
+  - A middle-button click inside the TextPanel's rect does not cause a callback to occur.
+  - A right-button click inside the TextPanel's rect does not cause a callback to occur.
+  - A disabled TextPanel does not fire `on_click` events.
+  - Clicks that occur during a TextPanel slide-in are detected using the current rendered rect, not the constructor rect.
+  - Clicks that occur inside the constructor rect and NOT inside the current rendered rect during a slide-in do not fire a click event.
+  - A successful TextPanel click does not play any audio.
+  - Overlapping widgets (for example, a Button rendered on top of a TextPanel) both fire a click event when a mouse click happens
+    inside the overlapping rect. (This is UIManager broadcast behavior).
+  - After `disappear()` is invoked, TextPanel fires no further click events.
+  - A click on a panel that has not yet appeared does not fire `on_click`.
 
 ## Acceptance criteria
 
@@ -335,6 +357,7 @@ This document introduces no new configuration keys.
 - Can TextPanels be selected programmatically? Does it affect their appearance? Can they be unselected again?
 - Can TextPanels be disabled programmatically? Does it affect their appearance? Can they be enabled again?
 - Can a TextPanel be given a Theme override for custom cosmetics? Can that theme override be removed?
+- Can a TextPanel be given an `on_click` callback to report mouse clicks inside the panel?
 
 ## Dev plan
 
@@ -371,4 +394,6 @@ The spec was too large to implement in one pass. The following staged dev plan w
    of writing its own copy (see spec 12 dev plan stage 8). Flip this document
    back to `active` status on successful completion.
    **Completed 2026-10-15** (full suite green at 996 tests)
-
+ 7. Amendment 2026-10-16: implement optional `on_click` constructor argument and tests.
+    If all tests pass, flip this document back to `active` state.
+    **Completed 2026-10-16** (full suite green at 1024 tests)
