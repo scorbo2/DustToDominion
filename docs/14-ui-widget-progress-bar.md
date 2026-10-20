@@ -34,12 +34,17 @@ similar layout, so there is an opportunity to re-use this code instead of duplic
 - The third/tenth/margin layout pass should be extracted.
 - The starvation predicate should be extracted.
 - The label/value blit methods should be extracted.
-- (blit helpers should take text/surface as arguments; no widget state crosses the boundary.)
+- Effective label size and effective value size should be extracted.
+- Any required constants should be extracted.
+- (blit helpers and effective size helpers should take text/surface as arguments; no widget state crosses the boundary.)
 
 Small validators (`_validated_int`, `_validated_border_width`, `_round_half_up`, `_clamp_to_range`)
-can be duplicated per the existing cross-module precedent.
+can be duplicated.
 
 Slider's existing tests will serve as an indication of successful extraction with no negative side effects.
+
+The new `dtd/widgets/value_layout.py` module should follow the example of the existing `text_layout.py`
+module: each function answers one question. Slider keeps its track/tab fields in its own `_Layout` wrapper.
 
 ## Additional dependencies
 
@@ -76,13 +81,13 @@ The ProgressBar class should offer the following constructor arguments:
   the range of `min_value`, `max_value`. Non-int values (including bool) are ignored with a log warning:
   use default value. A default value of 0 is specified for this constructor argument. Passing a value
   for this argument does NOT trigger an `on_change` callback.
-- `bar_background_color`: the `pygame.Color` to use for the progress bar's background fill - this represents the
+- `bar_background_color`: the `pygame.Color` (or RGB/RGBA tuple) to use for the progress bar's background fill - this represents the
   portion of the bar that is NOT reached by the current value. If not specified, `backgroundNormal` from the
-  current theme is used as a default. Invalid values (not a `pygame.Color`) are ignored with a log warning,
+  current theme is used as a default. Invalid values (not a `pygame.Color` or RGB/RGBA tuple) are ignored with a log warning,
   but `None` is allowed as an explicit request to use the default.
-- `bar_foreground_color`: the `pygame.Color` to use for the progress bar's foreground fill - this represents the
+- `bar_foreground_color`: the `pygame.Color` (or RGB/RGBA tuple) to use for the progress bar's foreground fill - this represents the
   portion of the bar up to and including the current value. If not specified, `foregroundSelected` from the
-  current theme is used as a default. Invalid values (not a `pygame.Color`) are ignored with a log warning,
+  current theme is used as a default. Invalid values (not a `pygame.Color` or RGB/RGBA tuple) are ignored with a log warning,
   but `None` is allowed as an explicit request to use the default.
 - `on_change: Callable[[int], None] | None` - invoked when a change occurs on a non-disabled ProgressBar, if
    the new value is different from the previous value. (A callback reading `get_value()` sees the new value,
@@ -114,6 +119,10 @@ The following mutator methods are provided:
   are rejected with a log warning (no change to range). This applies if EITHER of the given values are invalid.
 - `set_show_value_label(self, show_value_label: bool)` - enables or disables the value label display.
   By default, value label is shown, but callers can disable/re-enable it with this method.
+- `set_bar_foreground(self, bar_foreground: pygame.Color | None)` - allows setting the bar's desired foreground
+  color with the same validation rules as with `bar_foreground_color` in the constructor. None is a valid option.
+- `set_bar_background(self, bar_background: pygame.Color | None)` - allows setting the bar's desired background
+  color with the same validation rules as with `bar_background_color` in the constructor. None is a valid option.
 
 Additionally, a `get_value()` convenience method returns the current value of the ProgressBar.
 A `get_min_value()` and `get_max_value()` allow callers to inspect the current range.
@@ -123,6 +132,14 @@ the border width on each edge. For example, a 100x100 ProgressBar with a border 
 of size 80x80. All text scaling described in this document uses the inner rect dimensions unless
 otherwise stated. If the inner rect has a zero or negative size (for example, with unreasonably large
 border width), then no contents are drawn (neither progress bar nor labels).
+
+### Tuple validation
+
+Pygame itself accepts tuples in place of color values, so the parameters described in the parent section
+should do the same. A valid RGB tuple is a tuple of three ints in the 0-255 range. A valid RGBA tuple
+is a tuple of four ints in the 0-255 range. A tuple with fewer than three or more than four ints is invalid.
+A tuple with non-ints (floating-point values, strings, or any non-int type) is not valid. Bool components
+are not considered valid for this purpose.
 
 ## ProgressBar value model
 
@@ -172,16 +189,19 @@ margin on all sides (described in Margin section). If the remaining space in the
 zero or negative due to large margins and/or large border widths, the progress bar does not render.
 
 The rect is filled with the progress bar background color as specified in the constructor. The left
-edge of the rect represents `min_value` within the current range, and `bar_x + bar_width - 1`
+edge of the rect represents `min_value` within the current range, and `bar_left_edge + bar_width - 1`
 represents `max_value`. A rect of the same height is then drawn over this background rect - this new
 rect represents the current value, starting from the left edge of the background rect. If the current
-value is equal to `min_value`, no current value rect is drawn. If the current value is equal to
+value is equal to `min_value`, no current value rect is drawn, unless `min_value` and `max_value` are
+the same, in which case the current value rect completely covers the background rect, as described
+in the Special case section. If the current value is equal to
 `max_value`, the current value rect completely covers the background rect. For any other value,
-interpolate the right edge of the current value rect at `fill_right = bar_x + round_half_up(fraction × (bar_width - 1))`
+interpolate the right edge of the current value rect at 
+`fill_right = bar_left_edge + round_half_up(fraction × (bar_width - 1))`
 where `fraction = (value - min_value) / (max_value - min_value)`,
 and draw appropriately. For example, in a range of (0,100) and a current value of 50 with a progress bar
 rect that is 1000px wide, the current value rect should render from the left edge of the background
-rect up to and including `left_edge + 500`.
+rect up to and including `bar_left_edge + 500`.
 
 Very large ranges may result in no visible change for small changes in the current value.
 This is normal and acceptable.
@@ -200,6 +220,9 @@ in the parent Widget class. ProgressBar should resolve the theme to use via `the
 at the top of the `draw()` method, following the pattern in other Widget implementation classes.
 
 The progress bar ignores the theme's corner radius - the progress bar is always drawn with square corners.
+
+The progress bar ignores the "opaque" property - it always fills. The "opaque" property only affects
+the ProgressBar's containing rect.
 
 ### The value label
 
@@ -334,6 +357,12 @@ Tests to add for ProgressBar:
   instead of writing another copy).
 - Invoking `set_theme_override(None)` causes a ProgressBar with a theme override to stop overriding the theme and once again
   use the Theme instance supplied to its `draw()` method.
+- `set_bar_foreground()` can be invoked with a valid `pygame.Color` or RGB/RGBA tuple to change the bar's foreground color.
+- `set_bar_background()` can be invoked with a valid `pygame.Color` or RGB/RGBA tuple to change the bar's background color.
+- `set_bar_foreground()` can be invoked with `None` to revert to `foregroundSelected` for the bar's foreground color.
+- `set_bar_background()` can be invoked with `None` to revert to `backgroundNormal` for the bar's background color.
+- `set_bar_foreground()` or `set_bar_background()` with an invalid value (not a `pygame.Color` or an RGB/RGBA tuple) are ignored
+  with a log warning.
 - If `None` is given to `bar_foreground_color` in the constructor, then `foregroundSelected` from the effective theme
   is used for the progress bar's foreground rect.
 - If `None` is given to `bar_background_color` in the constructor, then `backgroundNormal` from the effective theme
@@ -341,7 +370,12 @@ Tests to add for ProgressBar:
 - `set_border_width()` with a value different from the current border width causes a re-layout of the ProgressBar.
 - `set_border_width()` with a value of 0 disables border rendering entirely on the ProgressBar.
 - `set_border_width()` with a negative number/non-int/bool disables border rendering with a log warning.
-- if the current value is negative, the value label renders with a "-" prefix.
+- If the current value is negative, the value label renders with a "-" prefix.
+- A margin-starved middle area prevents the progress bar from rendering.
+- A current value equal to `min_value` does not render a progress bar current value rect.
+- A current value equal to `max_value` renders a current value rect that entirely covers the bar's background rect.
+- A current value of 500 in a range of `(0,1000)` renders a current value rect that covers the left half of
+  the progress bar's background rect as shown in the worked example in The progress bar section.
 
 ## Acceptance criteria
 
@@ -360,7 +394,8 @@ Tests to add for ProgressBar:
 
 1. Amendments to previous spec docs come first! Append a new stage to the existing dev
    plan in that doc to carry out this amendment. Extract code as specified in the
-   Amendments to previous spec docs section of this document. Ensure all Slider tests still
+   Amendments to previous spec docs section of this document. Shape the helper against both
+   the existing Slider's needs and also this spec's layout needs. Ensure all Slider tests still
    pass after the extraction. Upon success, remove the Amendments to previous spec docs
    section from this document.
 2. Implement the basic layout of the widget: the optional display label in the left third
