@@ -9,6 +9,7 @@ import pytest
 from loguru import logger
 
 from dtd import audio
+from helpers_oracle import zero_margin
 from helpers_pixels import BLACK
 from helpers_slider import (
     CENTER_Y,
@@ -26,7 +27,6 @@ from helpers_slider import (
     tab_ink_at,
     value_at,
     warning_records,
-    zero_margin,
 )
 
 
@@ -566,7 +566,7 @@ class TestSliderDrag:
         slider.on_change = changes.append
         slider.set_font_point_size(200)
         draw_ui(ui)
-        margin = zero_margin(theme, 200)
+        margin = zero_margin(theme.get_font(200))
         tab_center = 100 + margin  # span<=0 fallback: track_x0
 
         # WHEN a full press/motion/release lands on the stranded tab,
@@ -829,7 +829,7 @@ class TestSliderDrag:
         slider.on_change = changes.append
         slider.set_font_point_size(8)
         draw_ui(ui)
-        margin = zero_margin(theme, 8)
+        margin = zero_margin(theme.get_font(8))
         track_x0 = 100 + margin
 
         # WHEN the press lands 10px left of the track start - inside
