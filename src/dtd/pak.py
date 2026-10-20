@@ -166,6 +166,19 @@ class ResourceStore:
         cache[resource_id] = value
         return overridden
 
+    def has(self, resource_id: str) -> bool:
+        """Whether any type cache holds ``resource_id`` (spec 03: Required
+        resources).
+
+        Derived from ``CACHE_FIELDS`` - the single source of truth for the
+        per-type caches - so a seventh resource type is covered by this
+        check the very day it lands, with no extra edit here.
+        """
+        return any(
+            resource_id in getattr(self, attribute)
+            for _, attribute in self.CACHE_FIELDS
+        )
+
     def items(self) -> Iterator[tuple[str, str, Any]]:
         """All stored resources as ``(type_name, resource_id, value)``
         triples, in fixed per-type order (the order of ``CACHE_FIELDS``).

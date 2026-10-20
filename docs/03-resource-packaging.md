@@ -51,9 +51,10 @@ We will use these extensions to determine validity (case-sensitive):
 
 ### New error types
 
-- `ResourceError` - base class.
+- `ResourceError` - base class: all errors below extend this class.
 - `NoResourcesFoundError` - on startup, if no resources could be found.
 - `ResourceLoadError` - generic exception to cover loading/parsing problems.
+- `MissingRequiredResourceError` - one or more required resources are not present.
 - `UnsupportedResourceVersionError` - the package's manifest is missing its
   `version` field, or declares a version this build of the game does not
   understand (see Manifest errors below).
@@ -210,6 +211,35 @@ It is not an error if a resource entry has unrecognized keys. For example:
 Just ignore the unrecognized key and proceed.
 
 If two entries in the same manifest have the same ID: `ResourceLoadError`.
+
+## Required resources
+
+The game has a list of resource IDs that must resolve to an actual resource at startup.
+These resources are known as the "required" resources. Their resolution path is unimportant
+(whether they are in the `resources/` subdirectory or whether they were supplied by a `.pak`
+file), but the ResourceLoader should raise `MissingRequiredResourceError` and cause the
+game to exit with an error message if they do not resolve. Note: the ResourceLoader should
+enumerate *all* missing required resource ids and include them in the error, rather than
+failing fast on the first one. If more than one required resource id is missing, the list
+should be sorted alphabetically before output.
+
+The required resource check comes after the `NoResourcesFoundError` check. No resources
+at all is a more serious error than missing required resources, for error reporting purposes.
+
+This document will maintain the master list of required resources. Future spec documents
+can modify this list via a spec doc amendment.
+
+Current list:
+- The value of `UI_DEFAULT_FONT` from `game_constants.py`: core game font; used throughout the UI
+
+The master list lives in `game_constants.py` as `REQUIRED_RESOURCE_IDS: frozenset[str]`,
+defaulting to a frozenset made up of all items in the list above. Tests can exercise the
+success path by assigning an empty set to that constant (plain assignment, per the suite's
+established pattern).
+
+**Implementation note:** The ResourceLoader must read `game_constants.REQUIRED_RESOURCE_IDS`
+at call time (module attribute access); a direct `from ... import` of the constant would break
+the test seam. (The loader would keep seeing the real default instead of the one supplied by tests).
 
 ## Identifying resources
 
@@ -461,6 +491,12 @@ Notes for font validation:
     (recursive), sorted by full id (casefold), with the sentinel first.
   - `get_font_resource_ids` returns all resources whose ids begin with `fonts/` and end in `.ttf`
     (recursive), sorted by full id (casefold), with the sentinel first.
+- A required resource is not present on startup: the game should NOT start up, and should exit with an error (`MissingRequiredResourceError`).
+- If no resources at all are present, `NoResourcesFoundError` is raised instead of `MissingRequiredResourceError`.
+- A required resource that is not present in `resources/` but which is present in a named `.pak` file does not cause an error.
+- A required resource that is present in both `resources/` and also in a named `.pak` file does not cause an error - the `.pak` version is used.
+- If more than one required resource is not present, the text of the raised error contains a listing of them in alphabetical order.
+- The shipped `REQUIRED_RESOURCE_IDS` constant equals the master list above (a pin test), so ad-hoc edits to the constant fail the suite. A further canary that every id in the shipped list actually ships as an asset (loose file or `.pak`) is deferred until required-resource packaging is finalized.
 
 ## Acceptance criteria
 
@@ -475,6 +511,7 @@ Notes for font validation:
 - Does the consumer API return None as expected for invalid IDs?
 - If the game is started with empty/missing `resources` config, is the game's `resources/` subdirectory still scanned?
 - Does `get_font_resource(id,size)` return a Font object, given a valid resource id?
+- Does the game refuse to start if at least one required resource is missing?
 
 ## Dev plan
 
@@ -507,4 +544,14 @@ The spec is too large to implement all at once. The following staged dev plan is
    files - the game is still very early in development, so breaking changes are acceptable.
    Users are responsible for migrating their config files to the new format.
    **Completed 2026-10-10** (all 619 tests pass; document flipped back to `active`)
+8. Amendment on 2026-10-19: implement the concept of "required" resources. There should be a
+   mechanism within the resource loader to verify that all required resources resolve to an actual resource,
+   and raise a `MissingRequiredResourceError` to abort game startup if not. Existing tests will fail,
+   because this amendment adds a new required resource (the UI default font) which existing test fixtures
+   do not have. Modify the tests to assign `game_constants.REQUIRED_RESOURCE_IDS = frozenset()` for tests that don't
+   care about required resources, or modify existing tests to supply a test resource with that id
+   if they need to check the required resource checking behavior. Update existing comments and docstrings
+   that still refer to all resources being optional. For example, the `game_constants.py` comment about
+   UI resources. If all tests (including any new ones) pass, flip this document back to `active` status.
+   **Completed 2026-10-19** (all 1032 tests pass; document flipped back to `active`)
 

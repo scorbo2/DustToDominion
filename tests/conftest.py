@@ -9,6 +9,9 @@ Guarantees required by spec 00:
   cannot leak initialized display/mixer state into one another
 - the dtd.audio module-level AudioManager singleton is unset before and after
   every test, so tests cannot leak a (possibly mutated) singleton into one another
+- the spec 03 required-resources gate (``game_constants.REQUIRED_RESOURCE_IDS``)
+  is neutralized around every test, so unrelated tests do not depend on the
+  shipped master list; tests that exercise the gate reassign the constant
 - seeded RNG and an injected (fake) clock available to tests
 - opt-in audio helpers for widget tests: ``silent_audio_manager`` (an
   initialized singleton over a nothing-resolves loader) and the
@@ -40,6 +43,7 @@ import pygame
 # pre-env-vars import above - same invariant, one hop removed (PR #31
 # review).
 from dtd import audio
+from dtd import game_constants
 from dtd.game_config import AudioConfig
 from dtd.resource_loader import ResourceLoader
 
@@ -89,6 +93,30 @@ def clean_audio_singleton() -> Iterator[None]:
     audio._audio_manager = None
     yield
     audio._audio_manager = None
+
+
+@pytest.fixture(autouse=True)
+def no_required_resources_by_default() -> Iterator[None]:
+    """Neutralize the spec 03 required-resources gate for tests that do
+    not exercise it (spec 03: Required resources, stage 8).
+
+    ``game_constants.REQUIRED_RESOURCE_IDS`` defaults to the shipped
+    master list (the UI default font), which hermetic fixture trees do
+    not carry - so every unrelated loader/``run()`` test would suddenly
+    fail the moment the gate lands. Tests that DO exercise the gate
+    reassign the constant in their own body; the original value is
+    restored afterwards either way.
+
+    Plain assignment, not ``monkeypatch.setattr``: consistency with the
+    suite's established pattern for swapping module-level state
+    (issue #23). Both mechanisms would work here - the loader reads the
+    constant as a module attribute at call time either way (spec 03:
+    implementation note) - but the suite standardizes on assignment.
+    """
+    original = game_constants.REQUIRED_RESOURCE_IDS
+    game_constants.REQUIRED_RESOURCE_IDS = frozenset()
+    yield
+    game_constants.REQUIRED_RESOURCE_IDS = original
 
 
 @pytest.fixture

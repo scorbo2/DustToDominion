@@ -19,7 +19,10 @@ resource, with a log warning (spec 03: Resource scanning) - this is the
 intended way for users to override shipped game resources, and config
 order decides the winner. If the scan completes without finding a single
 resource, ``NoResourcesFoundError`` is raised (fatal, exit code 1 at
-the caller).
+the caller). After a non-empty scan, every id in
+``game_constants.REQUIRED_RESOURCE_IDS`` must have resolved, or
+``MissingRequiredResourceError`` is raised listing all missing ids
+(spec 03: Required resources; fatal, exit code 1 at the caller).
 
 All resources - from directories and packages alike - decode through
 the shared ``pak.load_resource_from_bytes`` and cache in one shared
@@ -44,7 +47,11 @@ import pygame
 from loguru import logger
 
 from dtd import game_constants, pak
-from dtd.errors import NoResourcesFoundError, ResourceLoadError
+from dtd.errors import (
+    MissingRequiredResourceError,
+    NoResourcesFoundError,
+    ResourceLoadError,
+)
 from dtd.game_config import ResourcesConfig
 
 
@@ -98,6 +105,10 @@ class ResourceLoader:
         Raises:
             NoResourcesFoundError: the scan completed without finding a
                 single resource (spec 03; fatal, exit code 1 at the
+                caller).
+            MissingRequiredResourceError: one or more ids in
+                ``game_constants.REQUIRED_RESOURCE_IDS`` did not resolve
+                (spec 03: Required resources; fatal, exit code 1 at the
                 caller).
             ResourceLoadError: a ``location`` entry that does not exist,
                 cannot be read, or is a file without the ``.pak``
@@ -212,14 +223,17 @@ class ResourceLoader:
         then each ``location`` entry in config order (spec 03). Later
         resources override earlier ones by ID - with a log warning -
         which is why the walk order must never be reordered. A successful
-        scan ends with an informational summary: the net count of distinct
-        resources in memory and the override count within them (spec 03:
-        Resource scanning).
+        scan then passes the required-resources gate (spec 03: Required
+        resources) and ends with an informational summary: the net count
+        of distinct resources in memory and the override count within
+        them (spec 03: Resource scanning).
 
         Raises:
             NoResourcesFoundError: the scan completed without finding a
                 single resource (spec 03; fatal, exit code 1 at the
                 caller).
+            MissingRequiredResourceError: a required resource id did not
+                resolve (spec 03: Required resources).
             ResourceLoadError / UnsupportedResourceVersionError: as
                 documented on ``load``.
         """
@@ -236,6 +250,10 @@ class ResourceLoader:
             raise NoResourcesFoundError(
                 "no resources found in the resource search path"
             )
+        # Spec 03: Required resources - the check comes AFTER the
+        # NoResourcesFoundError check: no resources at all is the more
+        # serious error for reporting purposes.
+        self._check_required_resources()
         logger.info(
             "loaded {} resource(s) total (including {} override(s)) "
             "from the resource search path",
@@ -268,6 +286,28 @@ class ResourceLoader:
                 f"{game_constants.PAK_FILE_EXTENSION} extension"
             )
         return self._load_pak_file(location)
+
+    def _check_required_resources(self) -> None:
+        """Abort startup if any required resource id failed to resolve
+        (spec 03: Required resources).
+
+        Reads ``game_constants.REQUIRED_RESOURCE_IDS`` as a module
+        attribute at call time - a ``from ... import`` of the constant
+        would freeze the production default and silently break the test
+        seam (spec 03: implementation note). ALL missing ids are reported
+        in one error, sorted for a deterministic message, rather than
+        failing fast on the first (spec 03).
+        """
+        missing = sorted(
+            resource_id
+            for resource_id in game_constants.REQUIRED_RESOURCE_IDS
+            if not self._store.has(resource_id)
+        )
+        if missing:
+            raise MissingRequiredResourceError(
+                "required resource(s) not found in the resource search "
+                "path: " + ", ".join(missing)
+            )
 
     def _load_resource_directory(self, root: Path) -> tuple[int, int]:
         """Recursively scan one resource directory and load every candidate.

@@ -392,7 +392,8 @@ Other spec docs must reference these constants by name, never by raw resource id
 New core UI resources are added here first via an "Amendments to previous spec docs" section,
 or by directly amending this doc to add to the list.
 
-It is never an error if these resource IDs do not resolve. All UI resources are optional.
+It is never an error if these resource IDs do not resolve, except for those that appear in the
+'required resources' list in spec 03.
 
 ## Testing
 
