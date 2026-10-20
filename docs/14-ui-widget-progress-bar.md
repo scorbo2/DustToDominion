@@ -26,26 +26,6 @@ Note: all value rounding in this doc uses round-half-up;
 coordinate/point-size conversion remains floor-based per spec 04. Python's built-in
 `round()` uses banker's rounding, so implementers must use `floor(x + 0.5)` for this spec.
 
-## Amendments to previous spec docs
-
-This spec amends the `12-ui-widget-slider.md` spec to extract certain layout code into
-shared helpers in `dtd/widgets/value_layout.py`. This new ProgressBar widget has a very
-similar layout, so there is an opportunity to re-use this code instead of duplicating it:
-- The third/tenth/margin layout pass should be extracted.
-- The starvation predicate should be extracted.
-- The label/value blit methods should be extracted.
-- Effective label size and effective value size should be extracted.
-- Any required constants should be extracted.
-- (blit helpers and effective size helpers should take text/surface as arguments; no widget state crosses the boundary.)
-
-Small validators (`_validated_int`, `_validated_border_width`, `_round_half_up`, `_clamp_to_range`)
-can be duplicated.
-
-Slider's existing tests will serve as an indication of successful extraction with no negative side effects.
-
-The new `dtd/widgets/value_layout.py` module should follow the example of the existing `text_layout.py`
-module: each function answers one question. Slider keeps its track/tab fields in its own `_Layout` wrapper.
-
 ## Additional dependencies
 
 None! This widget relies entirely on the UI framework introduced by `04-ui-widgets.md`, which itself
@@ -397,7 +377,7 @@ Tests to add for ProgressBar:
    Amendments to previous spec docs section of this document. Shape the helper against both
    the existing Slider's needs and also this spec's layout needs. Ensure all Slider tests still
    pass after the extraction. Upon success, remove the Amendments to previous spec docs
-   section from this document.
+   section from this document. **Completed 2026-10-20**
 2. Implement the basic layout of the widget: the optional display label in the left third
    of the inner rect, the value label in the right tenth of the inner rect, and the horizontal
    progress bar in the remaining space. Play audio on hover.

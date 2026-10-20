@@ -31,12 +31,14 @@ Rendering contract (spec 12: Slider layout):
   uses (spec 07: "in addition to the pager control margin").
 - The margin is half the height of the ``0`` glyph at the effective
   display label font size - or at the value label's effective size
-  when no display label is present (spec 12: Margin). Auto-scale
-  searches run through the shared ``text_layout`` module so the margin
-  rule cannot drift (specs 07/10 precedent). When the label-derived
-  margin alone outgrows the value tenth, the value label falls back to
-  the smallest point size explicitly (spec 12: The value label note,
-  issue #63).
+  when no display label is present (spec 12: Margin). The shared
+  third/tenth layout pass, the effective label/value sizes, the margin,
+  the starvation fallback, and the label/value blits all run through
+  the shared ``value_layout`` module (spec 12, amended 2026-10-20 by
+  spec 14) so the rules cannot drift from the ProgressBar, which
+  shares them. When the label-derived margin alone outgrows the value
+  tenth, the value label falls back to the smallest point size
+  explicitly (spec 12: The value label note, issue #63).
 - The track is a 2-design-pixel horizontal line with a screen-pixel
   floor of 2 (spec 12: The slider track), vertically centered in the
   inner rect, drawn in the state's ``foreground*`` color. It is not
@@ -79,40 +81,13 @@ from loguru import logger
 from dtd import game_constants
 from dtd.audio import get_audio_manager
 from dtd.ui import Scale, Theme, Widget, current_scale, state_colors
-from dtd.widgets.text_layout import (
-    ZERO_GLYPH_MARGIN_FITS,
-    largest_fitting_size,
-    margin_fit_predicate,
-    zero_glyph_margin,
-)
+from dtd.widgets.value_layout import draw_label, draw_value, third_tenth_layout
 
 #: Track thickness in design pixels (spec 12: The slider track). The
 #: screen-pixel floor is 2, not 1 like the Widget border - a hairline
 #: track would read as a smudge at small scales (same reasoning as the
 #: Checkbox strokes, spec 11).
 _TRACK_DESIGN_PX = 2
-
-#: The point size the value label falls back to when margin starvation
-#: leaves no fitting size (spec 12: The value label note, issue #63).
-#: Matches ``largest_fitting_size``'s default fallback; named so the
-#: explicit branch and the search agree by construction, not by luck.
-_VALUE_SIZE_FALLBACK = 1
-
-
-def _margin_starves_value_area(value_area_width: int, fixed_margin: int) -> bool:
-    """Whether the shared margin alone outgrows the value label's tenth.
-
-    The margin rule (spec 12: Margin) charges ``fixed_margin`` on both
-    horizontal edges of the value area; when twice it equals or exceeds
-    the area's width, no point size can fit the value text and the
-    auto-scale search could only ever return its fallback (issue #63:
-    a narrow platform font let the auto-scaled display label grow the
-    shared margin until the value text budget collapsed to ~2px).
-    Named here so the spec note, the fallback branch in
-    ``_effective_value_size``, and the tests' corner premise all point
-    at one definition and cannot drift.
-    """
-    return 2 * fixed_margin >= value_area_width
 
 
 def _round_half_up(x: float) -> int:
@@ -156,9 +131,12 @@ class _Layout(NamedTuple):
     input handling so the fraction/margin math cannot drift between
     the two (spec 12: Slider layout).
 
-    All rects and sizes are screen pixels; the areas are inner-rect
-    relative, while ``origin`` locates the inner rect on the actual
-    display surface for hit-testing against raw event positions.
+    The label/value/middle areas, margin, and effective sizes come from
+    the shared ``value_layout`` pass (spec 12, amended by spec 14);
+    the track and tab fields are Slider's own. All rects and sizes are
+    screen pixels; the areas are inner-rect relative, while ``origin``
+    locates the inner rect on the actual display surface for
+    hit-testing against raw event positions.
     """
 
     inner: pygame.Rect
@@ -669,44 +647,45 @@ class Slider(Widget):
     ) -> _Layout | None:
         """Compute the complete layout in one pass (spec 12: Slider layout).
 
-        The track is sized last on purpose: its area is whatever the
+        The shared third/tenth/margin pass runs through
+        ``value_layout`` (spec 12, amended by spec 14): the middle area
+        is sized last on purpose, since its width is whatever the
         label and value areas leave, and the margin that insets it
         comes from the effective font sizes those searches pick
         (spec 12: "the track should therefore be the last internal
-        component to be sized"). Returns ``None`` when the inner rect
-        is zero or negative - no contents are drawn then.
+        component to be sized"). The track and tab fields stay local
+        (spec 12: The slider track, The tab control). Returns ``None``
+        when the inner rect is zero or negative - no contents are
+        drawn then.
         """
-        inner_w = rect.w - 2 * border_px
-        inner_h = rect.h - 2 * border_px
-        if inner_w <= 0 or inner_h <= 0:
-            return None
-        text = self._text_to_draw()
-        label_area = (
-            pygame.Rect(0, 0, inner_w // 3, inner_h) if text is not None else None
+        shared = third_tenth_layout(
+            theme,
+            scale,
+            rect.w - 2 * border_px,
+            rect.h - 2 * border_px,
+            self._text_to_draw(),
+            # The value label is sized for the *displayed* text - the
+            # drag preview mid-drag - so a preview with more digits
+            # than the committed value still fits (spec 12: the value
+            # label updates during click+drag).
+            str(self._display_value()),
+            self._font_point_size,
         )
-        value_w = inner_w // 10
-        value_area = pygame.Rect(inner_w - value_w, 0, value_w, inner_h)
-        track_left = label_area.right if label_area is not None else 0
-        track_area = pygame.Rect(track_left, 0, value_area.left - track_left, inner_h)
-        label_size = self._effective_label_size(theme, text, label_area, scale)
-        value_size = self._effective_value_size(theme, label_size, value_area)
-        # The margin comes from the display label's effective size, or
-        # the value label's when no display label is present
-        # (spec 12: Margin).
-        margin_source = label_size if label_size is not None else value_size
-        margin = zero_glyph_margin(theme.get_font(margin_source)) if margin_source else 0
+        if shared is None:
+            return None
+        middle = shared.middle_area
         return _Layout(
-            inner=pygame.Rect(0, 0, inner_w, inner_h),
-            label_area=label_area,
-            value_area=value_area,
-            track_area=track_area,
-            margin=margin,
-            label_size=label_size,
-            value_size=value_size,
-            track_x0=track_area.x + margin,
-            track_x1=track_area.right - 1 - margin,
+            inner=shared.inner,
+            label_area=shared.label_area,
+            value_area=shared.value_area,
+            track_area=middle,
+            margin=shared.margin,
+            label_size=shared.label_size,
+            value_size=shared.value_size,
+            track_x0=middle.x + shared.margin,
+            track_x1=middle.right - 1 - shared.margin,
             track_thickness=max(2, int(_TRACK_DESIGN_PX * scale.scale)),
-            center_y=inner_h // 2,
+            center_y=shared.inner.h // 2,
             tab_w=max(1, int(game_constants.SLIDER_TAB_WIDTH * scale.scale)),
             tab_h=max(1, int(game_constants.SLIDER_TAB_HEIGHT * scale.scale)),
             origin=(rect.x + border_px, rect.y + border_px),
@@ -722,16 +701,25 @@ class Slider(Widget):
         """Draw label, value label, track, then tab (spec 12).
 
         The tab draws last so it overdraws the labels it overhangs -
-        explicitly acceptable per spec 12: The tab control.
+        explicitly acceptable per spec 12: The tab control. The label
+        and value blits run through the shared ``value_layout`` module
+        (spec 12, amended by spec 14); the value text is the *displayed*
+        value - the drag preview mid-drag - while ``get_value()`` keeps
+        reporting the pre-drag value (spec 12: the value label updates
+        during click+drag).
         """
         text = self._text_to_draw()
         if layout.label_area is not None and layout.label_size is not None and text:
-            self._draw_label(
+            draw_label(
                 inner.subsurface(layout.label_area), theme, fg, text, layout.label_size
             )
         if layout.value_area.w > 0 and layout.value_size is not None:
-            self._draw_value(
-                inner.subsurface(layout.value_area), theme, fg, layout.value_size
+            draw_value(
+                inner.subsurface(layout.value_area),
+                theme,
+                fg,
+                str(self._display_value()),
+                layout.value_size,
             )
         self._draw_track(inner, fg, layout)
         self._draw_tab(inner, theme, layout)
@@ -739,120 +727,6 @@ class Slider(Widget):
     def _text_to_draw(self) -> str | None:
         text = (self.text or "").strip()
         return text or None
-
-    def _effective_label_size(
-        self,
-        theme: Theme,
-        text: str | None,
-        label_area: pygame.Rect | None,
-        scale: Scale,
-    ) -> int | None:
-        """The display label's effective pixel font size, or None.
-
-        None means "no display label is drawn" (hidden text, or an
-        area too degenerate to hold one) - the margin rule then falls
-        through to the value label's size (spec 12: Margin).
-        """
-        if text is None or label_area is None or label_area.w <= 0:
-            return None
-        if self._font_point_size is None:
-            return largest_fitting_size(
-                theme,
-                text,
-                label_area.w,
-                label_area.h,
-                fits=ZERO_GLYPH_MARGIN_FITS,
-            )
-        # Design-space point size -> pixels, floored (spec 12:
-        # set_font_point_size; same conversion as Label, spec 10).
-        return max(1, int(self._font_point_size * scale.scale))
-
-    def _effective_value_size(
-        self, theme: Theme, label_size: int | None, value_area: pygame.Rect
-    ) -> int | None:
-        """The value label's auto-scaled pixel size (spec 12: The value
-        label - it ignores any pinned point size).
-
-        With a display label present the margin is fixed at the label's
-        effective size; without one the margin is derived from the
-        value label's own candidate sizes (the shared
-        ``ZERO_GLYPH_MARGIN_FITS`` predicate re-derives it per size,
-        which resolves the size/margin circularity).
-
-        When the label-derived margin alone outgrows the tenth, the
-        smallest point size is chosen explicitly as the fallback
-        (spec 12: The value label note, issue #63) rather than letting
-        the search degrade silently to it - the label may be
-        effectively invisible at that size, an accepted consequence
-        mirroring the oversized pinned display label.
-
-        Sized for the *displayed* text - the drag preview mid-drag -
-        so a preview with more digits than the committed value (9 ->
-        100) still fits instead of clipping (spec 12: the value label
-        updates during click+drag).
-        """
-        value_text = str(self._display_value())
-        if value_area.w <= 0:
-            return None
-        if label_size is not None:
-            fixed_margin = zero_glyph_margin(theme.get_font(label_size))
-            if _margin_starves_value_area(value_area.w, fixed_margin):
-                # Margin starvation (spec 12: The value label note,
-                # issue #63): no point size fits, so choose the
-                # fallback up front instead of burning a doomed
-                # binary search to arrive at the same answer.
-                return _VALUE_SIZE_FALLBACK
-            fits = margin_fit_predicate(lambda font: fixed_margin)
-        else:
-            fits = ZERO_GLYPH_MARGIN_FITS
-        return largest_fitting_size(
-            theme,
-            value_text,
-            value_area.w,
-            value_area.h,
-            fits=fits,
-            fallback=_VALUE_SIZE_FALLBACK,
-        )
-
-    def _draw_label(
-        self,
-        area: pygame.Surface,
-        theme: Theme,
-        fg: pygame.Color,
-        text: str,
-        size: int,
-    ) -> None:
-        """Left-align the display label at the margin, vertically centered.
-
-        Blitting onto the label area's sub-surface clips oversized text
-        at the label display area's extent (spec 12: The display label).
-        """
-        font = theme.get_font(size)
-        surface = font.render(text, True, fg)
-        x = zero_glyph_margin(font)
-        y = (area.get_height() - surface.get_height()) // 2
-        area.blit(surface, (x, y))
-
-    def _draw_value(
-        self,
-        area: pygame.Surface,
-        theme: Theme,
-        fg: pygame.Color,
-        size: int,
-    ) -> None:
-        """Center the displayed value within the value area (spec 12).
-
-        Shows the drag preview mid-drag while ``get_value()`` keeps
-        reporting the pre-drag value (spec 12: the value label updates
-        during click+drag operations). Decimal places never appear
-        (the value is an int by contract); negatives carry their "-"
-        naturally. Text too large clips at the value area's bounds.
-        """
-        font = theme.get_font(size)
-        surface = font.render(str(self._display_value()), True, fg)
-        x = (area.get_width() - surface.get_width()) // 2
-        y = (area.get_height() - surface.get_height()) // 2
-        area.blit(surface, (x, y))
 
     def _draw_track(
         self,
