@@ -18,6 +18,7 @@ from dtd import audio, game_constants
 from dtd.resource_loader import ResourceLoader
 from dtd.ui import Theme, UIManager
 from dtd.widgets.button import Button
+from helpers_oracle import font_size_spy
 from helpers_pixels import ink_bbox, is_red_ink, is_white_ink
 from helpers_theme_override import assert_theme_override_honored
 
@@ -98,19 +99,6 @@ def _warning_records() -> tuple[list[str], int]:
     records: list[str] = []
     sink_id = logger.add(lambda message: records.append(str(message)), level="WARNING")
     return records, sink_id
-
-
-def _font_size_spy(theme: Theme) -> list[int]:
-    """Record every point size a draw requests from ``theme.get_font``."""
-    requested: list[int] = []
-    original = theme.get_font
-
-    def spy(size: int) -> pygame.font.Font:
-        requested.append(size)
-        return original(size)
-
-    theme.get_font = spy  # instance attribute shadows the bound method
-    return requested
 
 
 class TestButtonRendering:
@@ -444,7 +432,7 @@ class TestButtonIconAndTextLayout:
         icon.fill((255, 255, 255))
         pygame.display.set_mode((1920, 1080))
         theme = _theme(TEST_THEME_JSON)
-        requested_sizes = _font_size_spy(theme)
+        requested_sizes = font_size_spy(theme)
         button, ui, _ = _button_ui(
             pygame.Rect(0, 0, 100, 100), theme, text="OK", icon=icon, border_width=60
         )
@@ -562,7 +550,7 @@ class TestButtonIconAndTextLayout:
         # pinned to 20pt:
         pygame.display.set_mode((1920, 1080))
         theme = _theme(TEST_THEME_JSON)
-        requested_sizes = _font_size_spy(theme)
+        requested_sizes = font_size_spy(theme)
         button, ui, _ = _button_ui(pygame.Rect(0, 0, 400, 100), theme, text="OK")
         button.set_font_point_size(20)
 
@@ -581,7 +569,7 @@ class TestButtonIconAndTextLayout:
         # design-space points:
         pygame.display.set_mode((1280, 720))
         theme = _theme(TEST_THEME_JSON)
-        requested_sizes = _font_size_spy(theme)
+        requested_sizes = font_size_spy(theme)
         button, ui, _ = _button_ui(pygame.Rect(0, 0, 600, 150), theme, text="OK")
         button.set_font_point_size(25)
 
@@ -684,7 +672,7 @@ class TestButtonIconAndTextLayout:
         # auto-scaled text:
         pygame.display.set_mode((1920, 1080))
         theme = _theme(TEST_THEME_JSON)
-        requested_sizes = _font_size_spy(theme)
+        requested_sizes = font_size_spy(theme)
         button, ui, _ = _button_ui(pygame.Rect(0, 0, 400, 20), theme, text="OK")
 
         # WHEN the UI draws:
@@ -721,7 +709,7 @@ class TestButtonIconAndTextLayout:
             button.set_font_point_size(invalid_size)  # type: ignore[arg-type]
         finally:
             logger.remove(sink_id)
-        requested_sizes = _font_size_spy(theme)
+        requested_sizes = font_size_spy(theme)
         ui.draw(pygame.display.get_surface())
 
         # THEN a warning was logged and auto-scale is back in effect -
@@ -745,7 +733,7 @@ class TestButtonIconAndTextLayout:
             button.set_font_point_size(None)
         finally:
             logger.remove(sink_id)
-        requested_sizes = _font_size_spy(theme)
+        requested_sizes = font_size_spy(theme)
         ui.draw(pygame.display.get_surface())
 
         # THEN no warning is logged (None is valid) and auto-scale is

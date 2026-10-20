@@ -27,6 +27,7 @@ from dtd.screens.title import TitleScreen
 from dtd.ui import Theme, UIManager, Widget
 from dtd.widgets.button import Button
 from dtd.widgets.label import Label
+from helpers_oracle import font_size_spy
 from helpers_pixels import BLACK, ink_bbox
 
 
@@ -331,14 +332,7 @@ class TestTitleScreenTitle:
         # GIVEN the screen and a spy on every font size any drawing
         # requests,
         theme = _default_theme()
-        requested_sizes: list[int] = []
-        original_get_font = theme.get_font
-
-        def spy(size: int) -> pygame.font.Font:
-            requested_sizes.append(size)
-            return original_get_font(size)
-
-        theme.get_font = spy
+        requested_sizes = font_size_spy(theme)
         screen = TitleScreen(theme, _StubImageLoader({}), rng=random.Random(1))
         screen._background.stars = []
 

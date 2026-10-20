@@ -120,6 +120,11 @@ class TestZeroGlyphMargin:
         # half the rendered height of "0" at that size, floored:
         for size in (1, 8, 20, 80):
             font = theme.get_font(size)
+            # The right-hand side deliberately re-types the raw spec
+            # sentence instead of importing helpers_oracle.zero_margin:
+            # this is the pin that binds src to the spec, so it must
+            # not depend on the very helper the rest of the suite
+            # shares (issue #71).
             assert zero_glyph_margin(font) == font.size("0")[1] // 2
 
 

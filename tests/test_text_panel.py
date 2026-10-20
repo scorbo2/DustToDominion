@@ -26,6 +26,7 @@ from dtd.resource_loader import ResourceLoader
 from dtd.ui import Theme, UIManager
 from dtd.widgets.button import Button
 from dtd.widgets.text_panel import TextPanel, wrap_text
+from helpers_oracle import zero_margin
 from helpers_theme_override import assert_theme_override_honored
 
 # Distinguishable custom theme: red/green in the normal state, blue/
@@ -100,7 +101,7 @@ def _appear_and_draw(panel: TextPanel, theme: Theme) -> pygame.Surface:
 def _font_metrics(theme: Theme, font_size: int) -> tuple[pygame.font.Font, int, int]:
     """(font, fixed text margin, line height) as spec 06 defines them."""
     font = theme.get_font(font_size)
-    return font, font.size("0")[1] // 2, font.get_height()
+    return font, zero_margin(font), font.get_height()
 
 
 def _solid_icon(width: int, height: int) -> pygame.Surface:

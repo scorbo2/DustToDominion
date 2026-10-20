@@ -7,6 +7,7 @@ from __future__ import annotations
 import pygame
 import pytest
 from loguru import logger
+from helpers_oracle import font_size_spy, zero_margin
 from helpers_pixels import any_pixel_differs, ink_bbox, is_red_ink
 from helpers_slider import (
     CENTER_Y,
@@ -18,14 +19,12 @@ from helpers_slider import (
     VALUE_AREA_LEFT,
     chosen_size,
     draw_ui,
-    font_size_spy,
     has_red_ink,
     make_theme,
     margin_rule,
     slider_ui,
     track_ink_at,
     warning_records,
-    zero_margin,
 )
 
 
@@ -48,7 +47,7 @@ class TestSliderLayout:
         # display label):
         assert has_red_ink(screen, 0, LABEL_AREA_RIGHT)
         label_size = chosen_size(theme, requested, margin_rule, "Volume", 100, 100)
-        margin = zero_margin(theme, label_size)
+        margin = zero_margin(theme.get_font(label_size))
         assert not has_red_ink(screen, LABEL_AREA_RIGHT, margin)
 
     def test_value_label_should_render_within_the_right_tenth(
@@ -89,7 +88,7 @@ class TestSliderLayout:
         # THEN the label's effective size is the margin rule's pick for
         # the left third (premise pinned in test_text_layout.py),
         label_size = chosen_size(theme, requested, margin_rule, "Vol", 100, 100)
-        margin = zero_margin(theme, label_size)
+        margin = zero_margin(theme.get_font(label_size))
 
         # ...the track line starts exactly one margin past the label
         # area and ends exactly one margin before the value area
@@ -115,7 +114,7 @@ class TestSliderLayout:
         # from the inner rect's left edge - the label's third is gone
         # (spec 12: The display label):
         value_size = chosen_size(theme, requested, margin_rule, "50", 30, 100)
-        margin = zero_margin(theme, value_size)
+        margin = zero_margin(theme.get_font(value_size))
         assert margin > 0
         assert track_ink_at(screen, margin, NORMAL_FG)
         assert not track_ink_at(screen, 0, NORMAL_FG)
@@ -161,7 +160,7 @@ class TestSliderLayout:
         label_size = chosen_size(
             theme, requested, margin_rule, "Widely exceeding the label area", 100, 100
         )
-        margin = zero_margin(theme, label_size)
+        margin = zero_margin(theme.get_font(label_size))
         assert not has_red_ink(screen, LABEL_AREA_RIGHT, margin)
 
     def test_negative_value_should_render_with_a_minus_prefix(
@@ -299,7 +298,7 @@ class TestSliderFontOptions:
         # space (spec 12: The display label - "clip at the extent of
         # the label display area"):
         assert has_red_ink(screen, 0, LABEL_AREA_RIGHT)
-        margin = zero_margin(theme, 60)
+        margin = zero_margin(theme.get_font(60))
         assert not has_red_ink(screen, LABEL_AREA_RIGHT, margin)
 
         # ...and the starved value label explicitly chose the smallest
@@ -377,7 +376,7 @@ class TestSliderFontOptions:
         assert screen.get_at((19, CENTER_Y)) == NORMAL_FG  # border ring
         assert screen.get_at((20, CENTER_Y)) == NORMAL_BG  # inner rect edge
         label_size = chosen_size(theme, requested, margin_rule, "Vol", 260 // 3, 60)
-        margin = zero_margin(theme, label_size)
+        margin = zero_margin(theme.get_font(label_size))
         track_start = 20 + 260 // 3 + margin
         assert track_ink_at(screen, track_start, NORMAL_FG)
 

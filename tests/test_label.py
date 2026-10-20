@@ -34,6 +34,7 @@ from loguru import logger
 from dtd.resource_loader import ResourceLoader
 from dtd.ui import Theme, UIManager
 from dtd.widgets.label import Label
+from helpers_oracle import font_size_spy, zero_margin
 from helpers_pixels import BLACK, any_pixel_differs, ink_bbox, is_red_ink
 from helpers_theme_override import assert_theme_override_honored
 
@@ -128,24 +129,11 @@ def _left_bearing(font: pygame.font.Font, text: str) -> int:
     return 0
 
 
-def _font_size_spy(theme: Theme) -> list[int]:
-    """Record every point size a draw requests from ``theme.get_font``."""
-    requested: list[int] = []
-    original = theme.get_font
-
-    def spy(size: int) -> pygame.font.Font:
-        requested.append(size)
-        return original(size)
-
-    theme.get_font = spy  # instance attribute shadows the bound method
-    return requested
-
-
 def _margin_rule(theme: Theme, text: str, size: int, width: int, height: int) -> bool:
     """Label's fit rule, re-implemented for test premises (spec 10:
     Margin): rendered extent plus twice the `0`-height margin."""
     font = theme.get_font(size)
-    margin = font.size("0")[1] // 2
+    margin = zero_margin(font)
     text_w, text_h = font.size(text)
     return text_w + 2 * margin <= width and text_h + 2 * margin <= height
 
@@ -481,7 +469,7 @@ class TestLabelTextRendering:
     ) -> None:
         # GIVEN a 400x100 Label with short text and default settings:
         theme = _theme(TEST_THEME_JSON)
-        requested_sizes = _font_size_spy(theme)
+        requested_sizes = font_size_spy(theme)
         _, ui = _label_ui(pygame.Rect(0, 0, 400, 100), theme, text="OK")
 
         # WHEN the UI draws,
@@ -500,7 +488,7 @@ class TestLabelTextRendering:
         # (spec 10: Label layout):
         font = theme.get_font(chosen)
         text_w, text_h = font.size("OK")
-        margin = font.size("0")[1] // 2
+        margin = zero_margin(font)
         expected_x = margin
         expected_y = (100 - text_h) // 2
         bbox = ink_bbox(screen, (0, 0, 400, 100), is_red_ink)
@@ -516,7 +504,7 @@ class TestLabelTextRendering:
     def test_auto_scale_should_apply_the_zero_glyph_margin(self, font_ready: None) -> None:
         # GIVEN a 400x100 Label with short text (spec 10: Margin):
         theme = _theme(TEST_THEME_JSON)
-        requested_sizes = _font_size_spy(theme)
+        requested_sizes = font_size_spy(theme)
         _, ui = _label_ui(pygame.Rect(0, 0, 400, 100), theme, text="OK")
 
         # WHEN the UI draws,
@@ -528,7 +516,7 @@ class TestLabelTextRendering:
             size for size in set(requested_sizes) if _margin_rule(theme, "OK", size, 400, 100)
         )
         font = theme.get_font(chosen)
-        margin = font.size("0")[1] // 2
+        margin = zero_margin(font)
         assert margin >= 1  # premise: the margin rule is active here
         text_w, text_h = font.size("OK")
         assert text_w + 2 * margin <= 400
@@ -570,7 +558,7 @@ class TestLabelTextRendering:
         # GIVEN a 400x100 Label that has drawn once at the design
         # resolution:
         theme = _theme(TEST_THEME_JSON)
-        requested_sizes = _font_size_spy(theme)
+        requested_sizes = font_size_spy(theme)
         label, ui = _label_ui(pygame.Rect(0, 0, 400, 100), theme, text="OK")
         _draw(ui)
         first_draw_size = len(requested_sizes)
@@ -597,7 +585,7 @@ class TestLabelInnerRect:
         # GIVEN a 100x100 Label whose 60px border leaves a negative
         # inner rect, with text:
         theme = _theme(TEST_THEME_JSON)
-        requested_sizes = _font_size_spy(theme)
+        requested_sizes = font_size_spy(theme)
         _, ui = _label_ui(pygame.Rect(0, 0, 100, 100), theme, text="OK", border_width=60)
 
         # WHEN the UI draws,
@@ -653,7 +641,7 @@ class TestLabelFixedPointSize:
         # GIVEN a 400x100 Label whose text is pinned to 20pt at the
         # design resolution (scale 1):
         theme = _theme(TEST_THEME_JSON)
-        requested_sizes = _font_size_spy(theme)
+        requested_sizes = font_size_spy(theme)
         label, ui = _label_ui(pygame.Rect(0, 0, 400, 100), theme, text="OK")
         label.set_font_point_size(20)
 
@@ -669,7 +657,7 @@ class TestLabelFixedPointSize:
         # applies at the *effective* size):
         font = theme.get_font(20)
         text_w, text_h = font.size("OK")
-        margin = font.size("0")[1] // 2
+        margin = zero_margin(font)
         expected_x = margin
         expected_y = (100 - text_h) // 2
         bbox = ink_bbox(screen, (0, 0, 400, 100), is_red_ink)
@@ -686,7 +674,7 @@ class TestLabelFixedPointSize:
         # design-space points:
         pygame.display.set_mode((1280, 720))
         theme = _theme(TEST_THEME_JSON)
-        requested_sizes = _font_size_spy(theme)
+        requested_sizes = font_size_spy(theme)
         label, ui = _label_ui(pygame.Rect(0, 0, 600, 150), theme, text="OK")
         label.set_font_point_size(25)
 
@@ -734,7 +722,7 @@ class TestLabelFixedPointSize:
             label.set_font_point_size(None)
         finally:
             logger.remove(sink_id)
-        requested_sizes = _font_size_spy(theme)
+        requested_sizes = font_size_spy(theme)
         _draw(ui)
 
         # THEN no warning was logged and the auto-scale search is back -
@@ -758,7 +746,7 @@ class TestLabelFixedPointSize:
             label.set_font_point_size(invalid_size)  # type: ignore[arg-type]
         finally:
             logger.remove(sink_id)
-        requested_sizes = _font_size_spy(theme)
+        requested_sizes = font_size_spy(theme)
         _draw(ui)
 
         # THEN a warning was logged and auto-scale is back in effect -
@@ -775,7 +763,7 @@ class TestLabelTextCentering:
         # GIVEN a 400x100 Label with short auto-scaled text, centering
         # requested (spec 10: set_text_centered):
         theme = _theme(TEST_THEME_JSON)
-        requested_sizes = _font_size_spy(theme)
+        requested_sizes = font_size_spy(theme)
         label, ui = _label_ui(pygame.Rect(0, 0, 400, 100), theme, text="OK")
         label.set_text_centered(True)
 
@@ -799,7 +787,7 @@ class TestLabelTextCentering:
 
         # Centering pin: the ink must NOT hug the left margin the way
         # the default left-alignment does.
-        left_aligned_limit = font.size("0")[1] // 2 + _left_bearing(font, "OK") + 2
+        left_aligned_limit = zero_margin(font) + _left_bearing(font, "OK") + 2
         assert bx > left_aligned_limit
 
     def test_set_text_centered_with_true_should_center_pinned_text(
@@ -861,7 +849,7 @@ class TestLabelTextCentering:
         # GIVEN a Label that was centered and then left-aligned again
         # (spec 10: Testing - can a Label's text be left-aligned again):
         theme = _theme(TEST_THEME_JSON)
-        requested_sizes = _font_size_spy(theme)
+        requested_sizes = font_size_spy(theme)
         label, ui = _label_ui(pygame.Rect(0, 0, 400, 100), theme, text="OK")
         label.set_text_centered(True)
         label.set_text_centered(False)
@@ -874,7 +862,7 @@ class TestLabelTextCentering:
             size for size in set(requested_sizes) if _margin_rule(theme, "OK", size, 400, 100)
         )
         font = theme.get_font(chosen)
-        margin = font.size("0")[1] // 2
+        margin = zero_margin(font)
         bbox = ink_bbox(screen, (0, 0, 400, 100), is_red_ink)
         assert bbox is not None
         assert bbox[0] >= margin
@@ -1079,7 +1067,7 @@ class TestLabelBorderWidthMutation:
         # GIVEN a border-less 400x100 Label that has drawn its text at
         # the full inner rect:
         theme = _theme(TEST_THEME_JSON)
-        requested_sizes = _font_size_spy(theme)
+        requested_sizes = font_size_spy(theme)
         label, ui = _label_ui(pygame.Rect(0, 0, 400, 100), theme, text="OK")
         _draw(ui)
         first_draw_size = len(requested_sizes)
@@ -1108,7 +1096,7 @@ class TestLabelBorderWidthMutation:
     ) -> None:
         # GIVEN a 100x100 Label that drew its text with no border:
         theme = _theme(TEST_THEME_JSON)
-        requested_sizes = _font_size_spy(theme)
+        requested_sizes = font_size_spy(theme)
         label, ui = _label_ui(pygame.Rect(0, 0, 100, 100), theme, text="OK")
         _draw(ui)
         first_draw_size = len(requested_sizes)

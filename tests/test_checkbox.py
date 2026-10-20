@@ -43,6 +43,7 @@ from dtd import audio, game_constants
 from dtd.resource_loader import ResourceLoader
 from dtd.ui import Theme, UIManager
 from dtd.widgets.checkbox import Checkbox
+from helpers_oracle import font_size_spy, zero_margin
 from helpers_pixels import BLACK, any_pixel_differs, ink_bbox, is_red_ink
 from helpers_theme_override import assert_theme_override_honored
 
@@ -119,19 +120,6 @@ def _warning_records() -> tuple[list[str], int]:
     return records, sink_id
 
 
-def _font_size_spy(theme: Theme) -> list[int]:
-    """Record every point size a draw requests from ``theme.get_font``."""
-    requested: list[int] = []
-    original = theme.get_font
-
-    def spy(size: int) -> pygame.font.Font:
-        requested.append(size)
-        return original(size)
-
-    theme.get_font = spy  # instance attribute shadows the bound method
-    return requested
-
-
 def _box_aware_rule(theme: Theme, text: str, size: int, width: int, height: int) -> bool:
     """Checkbox's fit rule, re-implemented for test premises (spec 11:
     Checkbox layout): box side + half-box gap + text width, and the
@@ -150,7 +138,7 @@ def _text_only_rule(theme: Theme, text: str, size: int, width: int, height: int)
     """Label's text-only fit rule, as the "what the parent class would
     have picked" comparison premise (spec 10: Margin)."""
     font = theme.get_font(size)
-    margin = font.size("0")[1] // 2
+    margin = zero_margin(font)
     text_w, text_h = font.size(text)
     return text_w + 2 * margin <= width and text_h + 2 * margin <= height
 
@@ -200,7 +188,7 @@ class TestCheckboxStateColors:
     ) -> None:
         # GIVEN a programmatically selected Checkbox:
         theme = _theme(TEST_THEME_JSON)
-        requested = _font_size_spy(theme)
+        requested = font_size_spy(theme)
         checkbox, ui = _checkbox_ui(self.RECT, theme)
         checkbox.selected = True
 
@@ -223,7 +211,7 @@ class TestCheckboxStateColors:
         # fires the audio hook, so the singleton must exist - same
         # requirement the Button suite honors (spec 09).
         theme = _theme(TEST_THEME_JSON)
-        requested = _font_size_spy(theme)
+        requested = font_size_spy(theme)
         _, ui = _checkbox_ui(self.RECT, theme)
         ui.update([_motion((200, 50))])
 
@@ -411,7 +399,7 @@ class TestCheckboxBoxGeometry:
         # GIVEN a 400x100 Checkbox with label text (spec 11: the box
         # height equals font.size("0")[1] of the computed text size):
         theme = _theme(TEST_THEME_JSON)
-        requested = _font_size_spy(theme)
+        requested = font_size_spy(theme)
         _, ui = _checkbox_ui(pygame.Rect(0, 0, 400, 100), theme, text="OK")
 
         # WHEN the UI draws,
@@ -435,7 +423,7 @@ class TestCheckboxBoxGeometry:
         # GIVEN the same Checkbox (spec 11: "a margin equal to half
         # the computed height of the box" separates box and text):
         theme = _theme(TEST_THEME_JSON)
-        requested = _font_size_spy(theme)
+        requested = font_size_spy(theme)
         _, ui = _checkbox_ui(pygame.Rect(0, 0, 400, 100), theme, text="OK")
 
         # WHEN the UI draws,
@@ -457,7 +445,7 @@ class TestCheckboxBoxGeometry:
         # GIVEN a Checkbox with no label text (spec 11: empty
         # Checkbox - the `0` glyph is a math stand-in, never drawn):
         theme = _theme(TEST_THEME_JSON)
-        requested = _font_size_spy(theme)
+        requested = font_size_spy(theme)
         _, ui = _checkbox_ui(pygame.Rect(0, 0, 400, 100), theme, text=None)
 
         # WHEN the UI draws,
@@ -481,7 +469,7 @@ class TestCheckboxBoxGeometry:
         # (spec 11: the radius applies to Widget rects, never the box):
         theme_json = dict(TEST_THEME_JSON, cornerRadius=20)
         theme = _theme(theme_json)
-        requested = _font_size_spy(theme)
+        requested = font_size_spy(theme)
         _, ui = _checkbox_ui(
             pygame.Rect(0, 0, 100, 100), theme, border_width=5
         )
@@ -510,7 +498,7 @@ class TestCheckboxAutoScale:
         # (spec 11: "Text auto-scale calculations must include the
         # width of the box and the margin"):
         theme = _theme(TEST_THEME_JSON)
-        requested = _font_size_spy(theme)
+        requested = font_size_spy(theme)
         _, ui = _checkbox_ui(pygame.Rect(0, 0, 150, 100), theme, text="OK OK")
 
         # WHEN the UI draws,
@@ -556,7 +544,7 @@ class TestCheckboxAutoScale:
     ) -> None:
         # GIVEN a 400x100 Checkbox that has drawn once:
         theme = _theme(TEST_THEME_JSON)
-        requested = _font_size_spy(theme)
+        requested = font_size_spy(theme)
         checkbox, ui = _checkbox_ui(pygame.Rect(0, 0, 400, 100), theme, text="OK")
         _draw(ui)
         first_count = len(requested)
@@ -575,7 +563,7 @@ class TestCheckboxAutoScale:
     def test_border_width_change_should_relayout_contents(self, font_ready: None) -> None:
         # GIVEN a border-less 400x100 Checkbox that has drawn:
         theme = _theme(TEST_THEME_JSON)
-        requested = _font_size_spy(theme)
+        requested = font_size_spy(theme)
         checkbox, ui = _checkbox_ui(pygame.Rect(0, 0, 400, 100), theme, text="OK")
         _draw(ui)
         first_count = len(requested)
@@ -599,7 +587,7 @@ class TestCheckboxAutoScale:
         # inner rect (spec 11: "no contents are drawn, neither box
         # nor text"):
         theme = _theme(TEST_THEME_JSON)
-        requested = _font_size_spy(theme)
+        requested = font_size_spy(theme)
         _, ui = _checkbox_ui(
             pygame.Rect(0, 0, 100, 100), theme, text="OK", border_width=60
         )
@@ -621,7 +609,7 @@ class TestCheckboxFixedPointSize:
     ) -> None:
         # GIVEN a text-less Checkbox pinned to 20pt at scale 1:
         theme = _theme(TEST_THEME_JSON)
-        requested = _font_size_spy(theme)
+        requested = font_size_spy(theme)
         checkbox, ui = _checkbox_ui(pygame.Rect(0, 0, 400, 100), theme)
         checkbox.set_font_point_size(20)
 
@@ -643,7 +631,7 @@ class TestCheckboxFixedPointSize:
         # GIVEN a 1280x720 window (scale 2/3) and a pinned 25pt size:
         pygame.display.set_mode((1280, 720))
         theme = _theme(TEST_THEME_JSON)
-        requested = _font_size_spy(theme)
+        requested = font_size_spy(theme)
         checkbox, ui = _checkbox_ui(pygame.Rect(0, 0, 600, 150), theme, text="OK")
         checkbox.set_font_point_size(25)
 
@@ -689,7 +677,7 @@ class TestCheckboxFixedPointSize:
             checkbox.set_font_point_size(None)
         finally:
             logger.remove(sink_id)
-        requested = _font_size_spy(theme)
+        requested = font_size_spy(theme)
         _draw(ui)
 
         # THEN no warning was logged and the box-aware search is back
@@ -712,7 +700,7 @@ class TestCheckboxFixedPointSize:
             checkbox.set_font_point_size(invalid_size)  # type: ignore[arg-type]
         finally:
             logger.remove(sink_id)
-        requested = _font_size_spy(theme)
+        requested = font_size_spy(theme)
         _draw(ui)
 
         # THEN a warning was logged and auto-scale is back (spec 11:
@@ -728,7 +716,7 @@ class TestCheckboxCentering:
         # GIVEN a 400x100 Checkbox with text, centering requested
         # (spec 11: "the box does not stay left-aligned"):
         theme = _theme(TEST_THEME_JSON)
-        requested = _font_size_spy(theme)
+        requested = font_size_spy(theme)
         checkbox, ui = _checkbox_ui(pygame.Rect(0, 0, 400, 100), theme, text="OK")
         checkbox.set_text_centered(True)
 
@@ -751,7 +739,7 @@ class TestCheckboxCentering:
     ) -> None:
         # GIVEN a text-less Checkbox, centering requested:
         theme = _theme(TEST_THEME_JSON)
-        requested = _font_size_spy(theme)
+        requested = font_size_spy(theme)
         checkbox, ui = _checkbox_ui(pygame.Rect(0, 0, 400, 100), theme)
         checkbox.set_text_centered(True)
 
@@ -772,7 +760,7 @@ class TestCheckboxCentering:
         # GIVEN a Checkbox that was centered and then left-aligned
         # again:
         theme = _theme(TEST_THEME_JSON)
-        requested = _font_size_spy(theme)
+        requested = font_size_spy(theme)
         checkbox, ui = _checkbox_ui(pygame.Rect(0, 0, 400, 100), theme, text="OK")
         checkbox.set_text_centered(True)
         checkbox.set_text_centered(False)
@@ -1054,7 +1042,7 @@ class TestCheckboxClicks:
         # GIVEN an enabled Checkbox (clicks play audio, so the
         # singleton must exist - same as the Button suite):
         theme = _theme(TEST_THEME_JSON)
-        requested = _font_size_spy(theme)
+        requested = font_size_spy(theme)
         checkbox = Checkbox(pygame.Rect(0, 0, 400, 100))
         ui = UIManager(theme)
         ui.widgets.append(checkbox)

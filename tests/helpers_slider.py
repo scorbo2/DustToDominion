@@ -10,9 +10,10 @@ appearance, tab+drag, and mouse wheel - inherit one copy of:
   is 1.0: label area x 0..99, value area x 270..299, track area
   x 100..269, vertical center y=50),
 - synthesized mouse events (press/release/motion/wheel),
-- the font-size spy and the margin-aware auto-scale rule re-implemented
-  as a test premise (exactly as test_checkbox.py does; the searches
-  themselves are pinned in test_text_layout.py), and
+- the margin-aware auto-scale rule re-implemented as a test premise
+  (exactly as test_checkbox.py does; the searches themselves are
+  pinned in test_text_layout.py), reusing the shared font-size spy
+  and margin atom from ``helpers_oracle`` (issue #71), and
 - ``round_half_up``/``value_at``/``tab_center_for_value``, mirroring the
   widget's interpolation math ONCE instead of re-deriving it in every
   drag test.
@@ -29,6 +30,7 @@ from loguru import logger
 from dtd.resource_loader import ResourceLoader
 from dtd.ui import Theme, UIManager
 from dtd.widgets.slider import Slider
+from helpers_oracle import font_size_spy, zero_margin
 from helpers_pixels import ink_bbox, is_red_ink
 
 TEST_THEME_JSON = {
@@ -112,25 +114,12 @@ def warning_records() -> tuple[list[str], int]:
     return records, sink_id
 
 
-def font_size_spy(theme: Theme) -> list[int]:
-    """Record every point size a draw requests from ``theme.get_font``."""
-    requested: list[int] = []
-    original = theme.get_font
-
-    def spy(size: int) -> pygame.font.Font:
-        requested.append(size)
-        return original(size)
-
-    theme.get_font = spy  # instance attribute shadows the bound method
-    return requested
-
-
 def margin_rule(theme: Theme, text: str, size: int, width: int, height: int) -> bool:
     """The margin-aware fit rule (specs 07/10/12), re-implemented as a
     test premise: rendered extent plus twice the per-candidate
     zero-glyph margin must fit the box."""
     font = theme.get_font(size)
-    margin = font.size("0")[1] // 2
+    margin = zero_margin(font)
     text_w, text_h = font.size(text)
     return text_w + 2 * margin <= width and text_h + 2 * margin <= height
 
@@ -141,11 +130,6 @@ def chosen_size(
     """The largest probed size the given rule accepts - the search's
     pick (the search itself is pinned in test_text_layout.py)."""
     return max(size for size in set(requested) if rule(theme, text, size, w, h))
-
-
-def zero_margin(theme: Theme, size: int) -> int:
-    """The zero-glyph margin at ``size`` (the widget's margin rule)."""
-    return theme.get_font(size).size("0")[1] // 2
 
 
 def track_ink_at(screen: pygame.Surface, x: int, fg: tuple[int, int, int, int]) -> bool:
@@ -172,7 +156,7 @@ def labelless_geometry(
     requested = font_size_spy(theme)
     draw_ui(ui)
     value_size = chosen_size(theme, requested, margin_rule, value_text, 30, 100)
-    margin = zero_margin(theme, value_size)
+    margin = zero_margin(theme.get_font(value_size))
     return margin, VALUE_AREA_LEFT - 1 - margin
 
 
