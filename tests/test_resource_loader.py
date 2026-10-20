@@ -26,6 +26,7 @@ from loguru import logger
 
 from dtd import game_constants, resource_loader
 from dtd.errors import (
+    MissingRequiredResourceError,
     NoResourcesFoundError,
     ResourceLoadError,
     UnsupportedResourceVersionError,
@@ -959,3 +960,137 @@ class TestLoadFailures:
 
         # THEN nothing after it was loaded:
         assert loader.get_json_resource("data/02_fine.json") is None
+
+
+#: The shipped master list, captured at import time (collection runs
+#: before any fixture): the autouse ``no_required_resources_by_default``
+#: fixture empties the live constant for every test, so the pin test
+#: below must read the value from before the wipe.
+_SHIPPED_REQUIRED_RESOURCE_IDS = game_constants.REQUIRED_RESOURCE_IDS
+
+
+class TestRequiredResources:
+    """Required resource ids must resolve at startup (spec 03: Required
+    resources, stage 8).
+
+    The autouse conftest fixture empties ``game_constants.REQUIRED_RESOURCE_IDS``
+    around every test; these tests reassign the constant explicitly to
+    exercise the gate.
+    """
+
+    def test_shippedRequiredResourceIds_shouldMatchSpec03MasterList(self) -> None:
+        # Spec 03 owns the master list; this pins the code half of it
+        # (game_constants.REQUIRED_RESOURCE_IDS) so an ad-hoc edit to
+        # the constant - a typo, a deletion, a "temporary" emptying -
+        # fails the suite instead of silently disabling the startup
+        # gate. When a spec 03 amendment changes the master list,
+        # update this assertion in the same change, never the other
+        # way around. (Whether every shipped id actually SHIPS as an
+        # asset - loose file or .pak - is a separate canary, deferred
+        # until required-resource packaging is finalized.)
+        assert _SHIPPED_REQUIRED_RESOURCE_IDS == frozenset(
+            {game_constants.UI_DEFAULT_FONT}
+        )
+
+    def test_load_withRequiredIdMissingFromSearchPath_shouldRaiseMissingRequiredResourceError(
+        self, project: Path, mixer_ready: None, font_ready: None
+    ) -> None:
+        # GIVEN the shipped master list (the UI default font) and the
+        # standard tree - which carries fonts/ui_font.ttf but NOT
+        # fonts/Audiowide-Regular.ttf:
+        game_constants.REQUIRED_RESOURCE_IDS = frozenset(
+            {game_constants.UI_DEFAULT_FONT}
+        )
+        _standard_tree(project / "resources")
+
+        # WHEN the loader runs,
+        # THEN startup is refused, naming the missing id:
+        with pytest.raises(
+            MissingRequiredResourceError, match="fonts/Audiowide-Regular\\.ttf"
+        ):
+            ResourceLoader().load(None)
+
+    def test_load_withRequiredIdPresentInResourcesDir_shouldSucceed(
+        self, project: Path, mixer_ready: None, font_ready: None
+    ) -> None:
+        # GIVEN a required id the implicit resources/ tree does carry:
+        game_constants.REQUIRED_RESOURCE_IDS = frozenset({"fonts/ui_font.ttf"})
+        _standard_tree(project / "resources")
+
+        # WHEN the loader runs,
+        # THEN the gate passes silently:
+        ResourceLoader().load(None)
+
+    def test_load_withNoResourcesAtAllAndRequiredIds_shouldRaiseNoResourcesFoundNotMissing(
+        self, project: Path
+    ) -> None:
+        # Spec 03: the required check comes AFTER the NoResourcesFoundError
+        # check - no resources at all is the more serious error. (The
+        # implicit resources/ dir exists but holds nothing.)
+        game_constants.REQUIRED_RESOURCE_IDS = frozenset({"fonts/whatever.ttf"})
+        (project / "resources").mkdir()
+
+        with pytest.raises(NoResourcesFoundError):
+            ResourceLoader().load(None)
+
+    def test_load_withRequiredIdPresentOnlyInPakLocation_shouldSucceed(
+        self, project: Path
+    ) -> None:
+        # Spec 03: the resolution path is unimportant - a pak satisfies
+        # the requirement just as well as resources/.
+        game_constants.REQUIRED_RESOURCE_IDS = frozenset({"graphics/pak_only.png"})
+        _write_png(project / "resources/graphics/other.png")
+        tree = project / "pak_source"
+        _write_png(tree / "graphics/pak_only.png")
+        _make_pak(tree, project / "extras.pak")
+
+        loader = ResourceLoader()
+        loader.load(ResourcesConfig(location=[str(project / "extras.pak")]))
+
+        assert isinstance(
+            loader.get_image_resource("graphics/pak_only.png"), pygame.Surface
+        )
+
+    def test_load_withRequiredIdInBothDirAndPak_shouldSucceedAndKeepPakVersion(
+        self, project: Path
+    ) -> None:
+        # Spec 03: an id present in BOTH sources is not an error - the
+        # override rules decide the winner (later location wins), and the
+        # gate only cares that the id resolves at all.
+        game_constants.REQUIRED_RESOURCE_IDS = frozenset({"graphics/test.png"})
+        _write_png(project / "resources/graphics/test.png", color=(1, 2, 3))
+        tree = project / "pak_source"
+        _write_png(tree / "graphics/test.png", color=(200, 201, 202))
+        _make_pak(tree, project / "override.pak")
+
+        loader = ResourceLoader()
+        loader.load(ResourcesConfig(location=[str(project / "override.pak")]))
+
+        surface = loader.get_image_resource("graphics/test.png")
+        assert _png_color(surface) == pygame.Color(200, 201, 202, 255)
+
+    def test_load_withMissingRequiredIds_shouldListAllInAlphabeticalOrder(
+        self, project: Path
+    ) -> None:
+        # GIVEN three missing required ids written in scrambled order
+        # (spec 03: enumerate ALL missing ids, sorted alphabetically by
+        # full id - not fail-fast on the first). Note the sort is on the
+        # FULL id string: "fonts/..." precedes "graphics/..." because
+        # 'f' < 'g', regardless of the filenames' own alphabetical order.
+        game_constants.REQUIRED_RESOURCE_IDS = frozenset(
+            {"graphics/zebra.png", "fonts/mid.ttf", "graphics/alpha.png"}
+        )
+        data = project / "resources/data"
+        data.mkdir(parents=True)
+        (data / "present.txt").write_text("one valid resource", encoding="utf-8")
+
+        with pytest.raises(MissingRequiredResourceError) as excinfo:
+            ResourceLoader().load(None)
+
+        # THEN all three are listed, in full-id alphabetical order:
+        message = str(excinfo.value)
+        assert (
+            message.index("fonts/mid.ttf")
+            < message.index("graphics/alpha.png")
+            < message.index("graphics/zebra.png")
+        )

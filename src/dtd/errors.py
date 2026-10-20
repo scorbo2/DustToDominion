@@ -51,3 +51,14 @@ class UnsupportedResourceVersionError(ResourceError):
     Fatal like every ``ResourceError`` (exit code 1): we refuse to interpret
     a package format we do not support, rather than silently misreading it.
     """
+
+
+class MissingRequiredResourceError(ResourceError):
+    """One or more required resource ids did not resolve at startup
+    (spec 03: Required resources).
+
+    Fatal like every ``ResourceError`` (exit code 1). The message enumerates
+    *all* missing ids, sorted alphabetically, rather than failing fast on
+    the first one: a modder with three typos fixes them in one pass, not
+    three startup round trips.
+    """

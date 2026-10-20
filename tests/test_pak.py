@@ -309,6 +309,32 @@ class TestResourceStore:
         assert ("json", "data.json", {"hull": 100}) in triples
         assert ("font", "fonts/ui.ttf", b"\x00\x01\x00\x00font bytes") in triples
 
+    @pytest.mark.parametrize(
+        "type_name, _attribute", ResourceStore.CACHE_FIELDS
+    )
+    def test_has_with_id_present_in_a_per_type_cache_should_return_true(
+        self, type_name: str, _attribute: str
+    ) -> None:
+        # Spec 03: Required resources - has() must see an id in EVERY
+        # per-type cache, not just some. Parametrized over CACHE_FIELDS
+        # itself, so a seventh resource type inherits its test case the
+        # very day it lands (the same future-proofing has()'s docstring
+        # claims). The value payload is irrelevant: has() inspects keys
+        # only.
+        store = ResourceStore()
+        store.store(type_name, "probe/id", "membership is all has() checks")
+
+        assert store.has("probe/id") is True
+
+    def test_has_with_id_in_no_cache_should_return_false(self) -> None:
+        # The False half of the contract: an id nobody stored is absent -
+        # both from an empty store and from a populated one.
+        store = ResourceStore()
+        assert store.has("nothing/here") is False
+
+        store.store("text", "note.txt", "hello")
+        assert store.has("notes/other.txt") is False
+
 
 # ------------------------------------------------------------------ #
 # create_pak

@@ -64,8 +64,11 @@ DESIGN_W = 1920
 DESIGN_H = 1080
 #: Core UI resource ids (spec 04: Core UI Resources). This is the code
 #: half of the canonical table in spec 04; other spec docs reference
-#: these constants by name, never by raw resource id string. Any of
-#: them not resolving is never an error - all UI resources are optional.
+#: these constants by name, never by raw resource id string. An
+#: individual id failing to resolve is not an error by itself - but
+#: see REQUIRED_RESOURCE_IDS below (spec 03: Required resources): the
+#: UI default font is one of the entries the game refuses to start
+#: without.
 #: Step 2 of the spec 04 Font determination chain: the font used by all
 #: widgets unless a valid font is explicitly configured.
 UI_DEFAULT_FONT = "fonts/Audiowide-Regular.ttf"
@@ -238,6 +241,14 @@ THEME_RESOURCE_ID_PREFIX = "themes/"
 #: starts with this prefix is offered by ``get_font_resource_ids`` as an
 #: available font.
 FONT_RESOURCE_ID_PREFIX = "fonts/"
+#: The master list of resource ids that must resolve at startup
+#: (spec 03: Required resources). Spec 03 owns this list; future spec docs
+#: amend it via spec doc amendment, never by editing this constant ad hoc.
+#: The UI default font is the first entry: the entire spec 04 font
+#: determination chain bottoms out here, so a build without it ships
+#: broken. The resource loader reads this constant as a module attribute
+#: at call time so tests can swap it (spec 03: implementation note).
+REQUIRED_RESOURCE_IDS: frozenset[str] = frozenset({UI_DEFAULT_FONT})
 #: TrueType magic number: the first 4 bytes of every ``.ttf`` file (spec 03:
 #: Notes for font validation). A font that does not begin with these bytes
 #: is rejected. This header check is the ENTIRE font validation - pygame's

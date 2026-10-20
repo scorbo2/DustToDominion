@@ -14,6 +14,7 @@ from dtd import game_constants
 from dtd import main as app_main
 from dtd import resource_loader
 from dtd.errors import (
+    MissingRequiredResourceError,
     NoResourcesFoundError,
     ResourceError,
     ResourceLoadError,
@@ -846,12 +847,41 @@ class TestStartupFailures:
         assert exit_code == 1
         assert not window_opened
 
+    def test_when_required_resource_missing_should_exit_1_without_opening_window(
+        self,
+        bootstrapped_persistence: Path,
+        synthesized_project: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        # Spec 03 (stage 8): a required resource id that does not resolve
+        # aborts startup with MissingRequiredResourceError (exit code 1).
+        # The synthesized tree carries a text file and a theme but no
+        # font, so the shipped master list (the UI default font) cannot
+        # resolve - with the REAL loader, no load() stubbing.
+        game_constants.REQUIRED_RESOURCE_IDS = frozenset(
+            {game_constants.UI_DEFAULT_FONT}
+        )
+        window_opened: list[object] = []
+        monkeypatch.setattr(
+            app_main.MainWindow,
+            "open",
+            lambda self, config=None: window_opened.append(config),
+        )
+
+        # WHEN run() is invoked:
+        exit_code = app_main.run()
+
+        # THEN startup aborts with exit code 1 and the window never opens:
+        assert exit_code == 1
+        assert not window_opened
+
     @pytest.mark.parametrize(
         "resource_error",
         [
             NoResourcesFoundError,
             ResourceLoadError,
             UnsupportedResourceVersionError,
+            MissingRequiredResourceError,
         ],
     )
     def test_when_resource_loader_raises_resource_error_should_exit_1_without_opening_window(
