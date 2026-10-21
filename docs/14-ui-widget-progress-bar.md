@@ -381,9 +381,20 @@ Tests to add for ProgressBar:
  2. Implement the basic layout of the widget: the optional display label in the left third
     of the inner rect, the value label in the right tenth of the inner rect, and the horizontal
     progress bar in the remaining space. Play audio on hover. **Completed 2026-10-20**
-3. Implement `set_value()`/`set_range()` and wire up `on_change` events.
-4. Implement `set_show_value_label()` for displaying or hiding the value label text.
-5. Final verification pass. Do the tests all pass? Are acceptance criteria all met?
-   Edit this document to change all "proposes" prose to "describes" as needed.
-   If all is well, flip this document to `active` status.
+ 3. Lift the shared test premises `margin_rule`, `chosen_size`, and
+    `round_half_up` out of `tests/helpers_slider.py` into
+    `tests/helpers_oracle.py` (the shared home for `font_size_spy` and
+    `zero_margin`), and repoint the ProgressBar helper module to import
+    them from the oracle instead of `helpers_slider`. The margin-aware
+    fit predicate is shared (not per-suite like Checkbox's box-aware or
+    Label's text-only variants) because Slider and ProgressBar restate the
+    same zero-glyph-margin rule (spec 12 / spec 14). This decouples the two
+    widget suites so `helpers_progress_bar` no longer depends on
+    `helpers_slider`. No widget code or behavior changes; all Slider and
+    ProgressBar tests must still pass. **Completed 2026-10-20**
+ 4. Implement `set_value()`/`set_range()` and wire up `on_change` events.
+ 5. Implement `set_show_value_label()` for displaying or hiding the value label text.
+ 6. Final verification pass. Do the tests all pass? Are acceptance criteria all met?
+    Edit this document to change all "proposes" prose to "describes" as needed.
+    If all is well, flip this document to `active` status.
 

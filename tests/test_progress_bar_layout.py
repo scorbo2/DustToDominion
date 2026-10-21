@@ -8,9 +8,8 @@ from __future__ import annotations
 import pygame
 import pytest
 from loguru import logger
-from helpers_oracle import font_size_spy, zero_margin
+from helpers_oracle import font_size_spy, zero_margin, margin_rule, chosen_size
 from helpers_pixels import any_pixel_differs, ink_bbox, is_red_ink
-from helpers_slider import margin_rule, chosen_size
 from helpers_progress_bar import (
     BAR_BG,
     BAR_FG,

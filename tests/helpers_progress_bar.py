@@ -12,8 +12,9 @@ appearance - inherit one copy of:
   the bar's background and fill rects can be probed as exact pixels
   (unlike glyph ink, axis-aligned rects rasterize with no anti-aliasing),
 - the shared third/tenth/margin layout re-implemented as a test premise,
-  reusing the shared font-size spy, margin atom, and fit-rule helpers from
-  ``helpers_oracle`` / ``helpers_slider`` (issues #71/#63), and
+  reusing the shared font-size spy, margin atom, margin-aware fit rule,
+  chosen-size pick, and round-half-up helper from ``helpers_oracle``
+  (issues #71/#63), and
 - the round-half-up fill interpolation, mirrored ONCE instead of
   re-deriving it in every fill test (spec 14: The progress bar).
 
@@ -27,8 +28,13 @@ from loguru import logger
 from dtd.resource_loader import ResourceLoader
 from dtd.ui import Theme, UIManager
 from dtd.widgets.progress_bar import ProgressBar
-from helpers_oracle import font_size_spy, zero_margin
-from helpers_slider import margin_rule, chosen_size, round_half_up
+from helpers_oracle import (
+    font_size_spy,
+    zero_margin,
+    margin_rule,
+    chosen_size,
+    round_half_up,
+)
 from helpers_pixels import is_red_ink  # re-exported for the label/value ink
 
 TEST_THEME_JSON = {

@@ -10,19 +10,16 @@ appearance, tab+drag, and mouse wheel - inherit one copy of:
   is 1.0: label area x 0..99, value area x 270..299, track area
   x 100..269, vertical center y=50),
 - synthesized mouse events (press/release/motion/wheel),
-- the margin-aware auto-scale rule re-implemented as a test premise
-  (exactly as test_checkbox.py does; the searches themselves are
-  pinned in test_text_layout.py), reusing the shared font-size spy
-  and margin atom from ``helpers_oracle`` (issue #71), and
-- ``round_half_up``/``value_at``/``tab_center_for_value``, mirroring the
-  widget's interpolation math ONCE instead of re-deriving it in every
-  drag test.
+- the shared font-size spy, margin atom, margin-aware fit rule,
+  chosen-size pick, and round-half-up helper reused from
+  ``helpers_oracle`` (issue #71) - the Slider no longer re-implements
+  the margin-aware rule or the round-half-up helper locally, and
+- ``value_at``/``tab_center_for_value``, mirroring the widget's
+  interpolation math ONCE instead of re-deriving it in every drag test.
 
 Pixel-ink predicates live in ``helpers_pixels`` (issues #34/#37).
 """
 from __future__ import annotations
-
-import math
 
 import pygame
 from loguru import logger
@@ -30,7 +27,13 @@ from loguru import logger
 from dtd.resource_loader import ResourceLoader
 from dtd.ui import Theme, UIManager
 from dtd.widgets.slider import Slider
-from helpers_oracle import font_size_spy, zero_margin
+from helpers_oracle import (
+    font_size_spy,
+    zero_margin,
+    margin_rule,
+    chosen_size,
+    round_half_up,
+)
 from helpers_pixels import ink_bbox, is_red_ink
 
 TEST_THEME_JSON = {
@@ -114,24 +117,6 @@ def warning_records() -> tuple[list[str], int]:
     return records, sink_id
 
 
-def margin_rule(theme: Theme, text: str, size: int, width: int, height: int) -> bool:
-    """The margin-aware fit rule (specs 07/10/12), re-implemented as a
-    test premise: rendered extent plus twice the per-candidate
-    zero-glyph margin must fit the box."""
-    font = theme.get_font(size)
-    margin = zero_margin(font)
-    text_w, text_h = font.size(text)
-    return text_w + 2 * margin <= width and text_h + 2 * margin <= height
-
-
-def chosen_size(
-    theme: Theme, requested: list[int], rule, text: str, w: int, h: int
-) -> int:
-    """The largest probed size the given rule accepts - the search's
-    pick (the search itself is pinned in test_text_layout.py)."""
-    return max(size for size in set(requested) if rule(theme, text, size, w, h))
-
-
 def track_ink_at(screen: pygame.Surface, x: int, fg: tuple[int, int, int, int]) -> bool:
     """Whether the solid track line has ink at column ``x`` (the line
     is 2px thick around the vertical center, so probe a small band)."""
@@ -163,12 +148,6 @@ def labelless_geometry(
 def tab_ink_at(screen: pygame.Surface, x: int, y: int) -> bool:
     """Whether the solid tab fill has ink at exactly ``(x, y)``."""
     return screen.get_at((x, y)) == SELECTED_FG
-
-
-def round_half_up(x: float) -> int:
-    """Round to nearest, halves up (spec 12: "floor(x + 0.5)", never
-    Python's banker's ``round()``) - mirrors the widget's helper."""
-    return math.floor(x + 0.5)
 
 
 def value_at(
