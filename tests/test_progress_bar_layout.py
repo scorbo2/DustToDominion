@@ -234,6 +234,82 @@ class TestProgressBarLayout:
         assert requested == []
 
 
+class TestProgressBarShowValueLabel:
+    def test_default_should_show_the_value_label(self, font_ready: None) -> None:
+        # GIVEN a ProgressBar at a two-digit value:
+        bar, ui = progress_bar_ui(
+            RECT, make_theme(TEST_THEME_JSON), text="Volume", initial_value=50
+        )
+
+        # WHEN the UI draws,
+        screen = draw_ui(ui)
+
+        # THEN the value label is shown by default - red ink in the right
+        # tenth (spec 14: set_show_value_label - "By default, value label is
+        # shown"):
+        assert ink_bbox(
+            screen, (VALUE_AREA_LEFT, 0, RECT.w - VALUE_AREA_LEFT, RECT.h), is_red_ink
+        ) is not None
+
+    def test_set_show_value_label_with_false_should_hide_the_label_and_not_change_the_bar_layout(
+        self, font_ready: None
+    ) -> None:
+        # GIVEN a ProgressBar with a display label, a two-digit value, and
+        # explicit bar colors, with the value label shown:
+        theme = make_theme(TEST_THEME_JSON)
+        bar, ui = progress_bar_ui(
+            RECT,
+            theme,
+            text="Vol",
+            initial_value=50,
+            bar_background_color=BAR_BG,
+            bar_foreground_color=BAR_FG,
+        )
+
+        # WHEN the UI draws once with the label shown, then again after
+        # hiding it,
+        requested_shown = font_size_spy(theme)
+        draw_ui(ui)
+        bar_rect_shown = compute_bar(theme, "Vol", "50", requested_shown)
+        bar.set_show_value_label(False)
+        requested_hidden = font_size_spy(theme)
+        screen_hidden = draw_ui(ui)
+        bar_rect_hidden = compute_bar(theme, "Vol", "50", requested_hidden)
+
+        # THEN the bar renders in exactly the same place (the value area
+        # stays reserved, so the layout is unchanged) and the value label
+        # is gone (spec 14: set_show_value_label - "ProgressBar layout does
+        # not change"):
+        assert bar_rect_hidden == bar_rect_shown
+        assert has_bar_ink(
+            screen_hidden, (bar_rect_hidden.x, CENTER_Y, bar_rect_hidden.w, 1)
+        )
+        assert ink_bbox(
+            screen_hidden,
+            (VALUE_AREA_LEFT, 0, RECT.w - VALUE_AREA_LEFT, RECT.h),
+            is_red_ink,
+        ) is None
+
+    def test_set_show_value_label_with_true_should_show_the_label_again(
+        self, font_ready: None
+    ) -> None:
+        # GIVEN a ProgressBar whose value label is hidden:
+        bar, ui = progress_bar_ui(
+            RECT, make_theme(TEST_THEME_JSON), text="Volume", initial_value=50
+        )
+        bar.set_show_value_label(False)
+
+        # WHEN it is re-shown and the UI draws,
+        bar.set_show_value_label(True)
+        screen = draw_ui(ui)
+
+        # THEN the value label is visible again (spec 14: set_show_value
+        # label - "callers can disable/re-enable it"):
+        assert ink_bbox(
+            screen, (VALUE_AREA_LEFT, 0, RECT.w - VALUE_AREA_LEFT, RECT.h), is_red_ink
+        ) is not None
+
+
 class TestProgressBarFill:
     def test_value_at_min_should_render_no_fill_rect(
         self, font_ready: None

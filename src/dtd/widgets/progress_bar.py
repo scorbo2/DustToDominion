@@ -267,6 +267,10 @@ class ProgressBar(Widget):
         # default) or stay transparent (spec 14: set_opaque). The bar
         # itself always fills regardless.
         self._opaque = True
+        # The value label is shown by default; set_show_value_label() hides
+        # or re-shows the text without changing the layout (spec 14:
+        # set_show_value_label).
+        self._show_value_label = True
 
     # -- value model (spec 14: ProgressBar value model) -------------------
 
@@ -378,6 +382,17 @@ class ProgressBar(Widget):
         opaque property and always fills).
         """
         self._opaque = bool(is_opaque)
+
+    def set_show_value_label(self, show_value_label: bool) -> None:
+        """Show or hide the value label text.
+
+        ``True`` (the default) shows the current value in the right tenth;
+        ``False`` hides it. The layout does not change either way - the
+        value area stays reserved and the display label and the bar are
+        unaffected (spec 14: set_show_value_label - "ProgressBar layout
+        does not change").
+        """
+        self._show_value_label = bool(show_value_label)
 
     def set_border_width(self, width: int) -> None:
         """Change the border width after construction.
@@ -576,7 +591,11 @@ class ProgressBar(Widget):
             draw_label(
                 inner.subsurface(layout.label_area), theme, fg, text, layout.label_size
             )
-        if layout.value_area.w > 0 and layout.value_size is not None:
+        if (
+            self._show_value_label
+            and layout.value_area.w > 0
+            and layout.value_size is not None
+        ):
             draw_value(
                 inner.subsurface(layout.value_area),
                 theme,
