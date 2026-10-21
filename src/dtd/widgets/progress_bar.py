@@ -15,7 +15,6 @@ colors (theme ``backgroundNormal``/``foregroundSelected`` when
 labels follow the state's theme colors. ``on_hover_enter()`` plays
 ``UI_SFX_HOVER`` (spec 14: Audio events).
 
-``set_show_value_label`` arrives with stage 4 of the spec 14 Dev plan.
 """
 from __future__ import annotations
 
@@ -169,6 +168,12 @@ class ProgressBar(Widget):
         # default) or stay transparent (spec 14: set_opaque). The bar
         # itself always fills - opacity never reaches it.
         self._opaque = True
+        # Show the value label (True, the default); set_show_value_label
+        # can hide the text. The value's tenth stays reserved and the
+        # value size stays computed (it feeds the shared margin when no
+        # display label is present) either way (spec 14: The value
+        # label).
+        self._show_value_label = True
         self._bar_background = _validated_bar_color(
             bar_background_color, "__init__", "bar_background_color"
         )
@@ -286,6 +291,16 @@ class ProgressBar(Widget):
         happens at draw time, so no extra invalidation is needed.
         """
         self.border_width = _validated_border_width(width, "set_border_width")
+
+    def set_show_value_label(self, show_value_label: bool) -> None:
+        """Show or hide the value label text (spec 14:
+        set_show_value_label).
+
+        Hiding only stops the text rendering: the value's tenth stays
+        reserved and the value size stays computed (for margin
+        derivation), so the layout does not change.
+        """
+        self._show_value_label = bool(show_value_label)
 
     def set_bar_foreground(self, bar_foreground: pygame.Color | None) -> None:
         """Change the bar's foreground fill color (spec 14:
@@ -426,7 +441,15 @@ class ProgressBar(Widget):
             draw_label(
                 inner.subsurface(layout.label_area), theme, fg, text, layout.label_size
             )
-        if layout.value_area.w > 0 and layout.value_size is not None:
+        # Hiding the value label skips the blit only - the layout pass
+        # above already computed the value size, so the shared margin
+        # (and therefore the bar's extent) is unaffected (spec 14: The
+        # value label).
+        if (
+            self._show_value_label
+            and layout.value_area.w > 0
+            and layout.value_size is not None
+        ):
             draw_value_label(
                 inner.subsurface(layout.value_area),
                 theme,

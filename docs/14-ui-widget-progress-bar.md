@@ -382,7 +382,7 @@ Tests to add for ProgressBar:
    of the inner rect, the value label in the right tenth of the inner rect, and the horizontal
    progress bar in the remaining space. Play audio on hover. **Completed 2026-10-20**
 3. Implement `set_value()`/`set_range()` and wire up `on_change` events. **Completed 2026-10-20**
-4. Implement `set_show_value_label()` for displaying or hiding the value label text.
+4. Implement `set_show_value_label()` for displaying or hiding the value label text. **Completed 2026-10-20**
 5. Final verification pass. Do the tests all pass? Are acceptance criteria all met?
    Edit this document to change all "proposes" prose to "describes" as needed.
    If all is well, flip this document to `active` status.

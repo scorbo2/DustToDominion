@@ -26,6 +26,7 @@ from helpers_progress_bar import (
     fill_width,
     has_red_ink,
     make_theme,
+    margin_for,
     margin_rule,
     progress_bar_ui,
     warning_records,
@@ -600,6 +601,101 @@ class TestProgressBarFontAndBorder:
         # (spec 14: set_border_width - "a value of 0 disables border
         # display"):
         assert screen.get_at((1, CENTER_Y)) == NORMAL_BG
+
+
+class TestProgressBarValueLabelVisibility:
+    """set_show_value_label (spec 14 stage 4): the text can be hidden,
+    but the layout - the reserved tenth and the shared margin - does
+    not change.
+    """
+
+    def test_set_show_value_label_with_false_should_hide_the_text_without_changing_the_layout(
+        self, font_ready: None
+    ) -> None:
+        # GIVEN a ProgressBar with a display label at a two-digit value:
+        theme = make_theme(TEST_THEME_JSON)
+        bar, ui = progress_bar_ui(
+            RECT,
+            theme,
+            text="Vol",
+            initial_value=50,
+            bar_background_color=BAR_BG,
+            bar_foreground_color=BAR_FG,
+        )
+        requested = font_size_spy(theme)
+        screen = draw_ui(ui)
+        bar_left, bar_right = bar_extent(margin_for(theme, requested, "Vol"))
+        assert ink_bbox(screen, (VALUE_AREA_LEFT, 0, 30, 100), is_red_ink) is not None
+        assert screen.get_at((bar_left, CENTER_Y)) == BAR_FG
+        assert screen.get_at((bar_right, CENTER_Y)) == BAR_BG
+
+        # WHEN the value label is hidden and the UI redraws,
+        bar.set_show_value_label(False)
+        screen = draw_ui(ui)
+
+        # THEN the text is gone from its tenth, but the layout is
+        # untouched: the bar's edges are exactly where they were
+        # (spec 14: set_show_value_label - "ProgressBar layout does
+        # not change"; The value label - "This space is always
+        # reserved"):
+        assert ink_bbox(screen, (VALUE_AREA_LEFT, 0, 30, 100), is_red_ink) is None
+        assert screen.get_at((bar_left, CENTER_Y)) == BAR_FG
+        assert screen.get_at((bar_right, CENTER_Y)) == BAR_BG
+        assert screen.get_at((bar_left - 1, CENTER_Y)) == NORMAL_BG
+        assert screen.get_at((bar_right + 1, CENTER_Y)) == NORMAL_BG
+
+    def test_set_show_value_label_with_true_should_show_the_text_again(
+        self, font_ready: None
+    ) -> None:
+        # GIVEN a ProgressBar with its value label hidden:
+        bar, ui = progress_bar_ui(
+            RECT, make_theme(TEST_THEME_JSON), text="Vol", initial_value=50
+        )
+        bar.set_show_value_label(False)
+        screen = draw_ui(ui)
+        assert ink_bbox(screen, (VALUE_AREA_LEFT, 0, 30, 100), is_red_ink) is None
+
+        # WHEN the label is re-shown and the UI redraws,
+        bar.set_show_value_label(True)
+        screen = draw_ui(ui)
+
+        # THEN the value text is back:
+        assert ink_bbox(screen, (VALUE_AREA_LEFT, 0, 30, 100), is_red_ink) is not None
+
+    def test_hiding_the_value_label_should_not_change_the_margin_when_no_display_label(
+        self, font_ready: None
+    ) -> None:
+        # GIVEN a ProgressBar with no display label - the shared margin
+        # is derived from the value label's own size (spec 14: Margin):
+        theme = make_theme(TEST_THEME_JSON)
+        bar, ui = progress_bar_ui(
+            RECT,
+            theme,
+            text=None,
+            initial_value=50,
+            bar_background_color=BAR_BG,
+            bar_foreground_color=BAR_FG,
+        )
+        requested = font_size_spy(theme)
+        screen = draw_ui(ui)
+        value_size = chosen_size(theme, requested, margin_rule, "50", 30, 100)
+        margin = zero_margin(theme.get_font(value_size))
+        _, bar_right = bar_extent(margin)
+        assert screen.get_at((margin, CENTER_Y)) == BAR_FG
+        assert screen.get_at((bar_right, CENTER_Y)) == BAR_BG
+
+        # WHEN the value label is hidden (spec 14: The value label -
+        # "The value label's size is always computed (for margin
+        # derivation purposes) even if the label is explicitly
+        # hidden"),
+        bar.set_show_value_label(False)
+        screen = draw_ui(ui)
+
+        # THEN the text is gone but the margin - and with it the bar's
+        # extent - is unchanged:
+        assert ink_bbox(screen, (VALUE_AREA_LEFT, 0, 30, 100), is_red_ink) is None
+        assert screen.get_at((margin, CENTER_Y)) == BAR_FG
+        assert screen.get_at((bar_right, CENTER_Y)) == BAR_BG
 
 
 class TestProgressBarCorners:
