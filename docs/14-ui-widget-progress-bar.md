@@ -1,11 +1,11 @@
 ---
-description: Proposes a new UI widget for the game: ProgressBar
-status: proposed
+description: Describes a new UI widget for the game: ProgressBar
+status: active
 ---
 
 # ProgressBar
 
-This document proposes a new `dtd/widgets/progress_bar.py` module containing a
+This document describes a new `dtd/widgets/progress_bar.py` module containing a
 UI widget for the game: `ProgressBar`. This is a non-interactive UI component that
 shows a partially-filled horizontal bar indicating a current value being tracked
 within a min/max range of values. Vertically-oriented progress bars are not supported.
@@ -391,5 +391,5 @@ Tests to add for ProgressBar:
    widget code changes; the full suite must stay green. **Completed 2026-10-20**
 6. Final verification pass. Do the tests all pass? Are acceptance criteria all met?
    Edit this document to change all "proposes" prose to "describes" as needed.
-   If all is well, flip this document to `active` status.
+   If all is well, flip this document to `active` status. **Completed 2026-10-20**
 
