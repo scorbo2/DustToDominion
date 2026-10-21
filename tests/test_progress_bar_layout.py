@@ -391,6 +391,73 @@ class TestProgressBarFill:
         assert 2 * margin >= MIDDLE_WIDTH  # premise: the middle is starved
         assert not has_bar_ink(screen, (0, 0, RECT.w, RECT.h))
 
+    def test_set_value_should_update_the_fill_on_the_next_draw(
+        self, font_ready: None
+    ) -> None:
+        # GIVEN a ProgressBar at its minimum with explicit bar colors:
+        theme = make_theme(TEST_THEME_JSON)
+        bar, ui = progress_bar_ui(
+            RECT,
+            theme,
+            text="Vol",
+            min_value=0,
+            max_value=100,
+            initial_value=0,
+            bar_background_color=BAR_BG,
+            bar_foreground_color=BAR_FG,
+        )
+
+        # WHEN the value is raised to 50 and the UI draws,
+        bar.set_value(50)
+        requested = font_size_spy(theme)
+        screen = draw_ui(ui)
+
+        # THEN the fill now covers the left half - the draw reflects the
+        # new value (spec 14: set_value - "updates the progress bar's fill
+        # accordingly"):
+        bar_rect = compute_bar(theme, "Vol", "50", requested)
+        width = fill_width(0, 100, 50, bar_rect.w)
+        assert width > 0
+        assert width < bar_rect.w  # not a full fill
+        assert bar_ink_at(screen, bar_rect.x, CENTER_Y, BAR_FG)  # first fill
+        assert bar_ink_at(screen, bar_rect.x + width - 1, CENTER_Y, BAR_FG)  # last fill
+        assert bar_ink_at(screen, bar_rect.x + width, CENTER_Y, BAR_BG)  # first bg
+
+    def test_set_range_should_update_the_fill_on_the_next_draw(
+        self, font_ready: None
+    ) -> None:
+        # GIVEN a ProgressBar at 80 in a 0-100 range with explicit bar colors:
+        theme = make_theme(TEST_THEME_JSON)
+        bar, ui = progress_bar_ui(
+            RECT,
+            theme,
+            text="Vol",
+            min_value=0,
+            max_value=100,
+            initial_value=80,
+            bar_background_color=BAR_BG,
+            bar_foreground_color=BAR_FG,
+        )
+
+        # WHEN the range is shrunk so the value clamps to the new max, and
+        # the UI draws,
+        bar.set_range(0, 50)
+        requested = font_size_spy(theme)
+        screen = draw_ui(ui)
+
+        # THEN the value clamped to 50 and the fill now covers the whole
+        # background rect - the draw reflects the clamped value (spec 14:
+        # set_range - "updates the progress bar's fill if the current value
+        # must change (clamping to the new range)"):
+        assert bar.get_value() == 50
+        bar_rect = compute_bar(theme, "Vol", "50", requested)
+        assert fill_width(0, 50, 50, bar_rect.w) == bar_rect.w  # premise
+        assert bar_ink_at(screen, bar_rect.x, CENTER_Y, BAR_FG)
+        assert bar_ink_at(screen, bar_rect.right - 1, CENTER_Y, BAR_FG)
+        assert not any(
+            screen.get_at((x, CENTER_Y)) == BAR_BG for x in range(bar_rect.x, bar_rect.right)
+        )
+
 
 class TestProgressBarFontOptions:
     def test_set_font_point_size_with_positive_int_should_pin_exact_pixels(

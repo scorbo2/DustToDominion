@@ -392,7 +392,8 @@ Tests to add for ProgressBar:
     widget suites so `helpers_progress_bar` no longer depends on
     `helpers_slider`. No widget code or behavior changes; all Slider and
     ProgressBar tests must still pass. **Completed 2026-10-20**
- 4. Implement `set_value()`/`set_range()` and wire up `on_change` events.
+  4. Implement `set_value()`/`set_range()` and wire up `on_change` events.
+    **Completed 2026-10-20**
  5. Implement `set_show_value_label()` for displaying or hiding the value label text.
  6. Final verification pass. Do the tests all pass? Are acceptance criteria all met?
     Edit this document to change all "proposes" prose to "describes" as needed.

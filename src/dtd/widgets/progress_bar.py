@@ -219,8 +219,10 @@ class ProgressBar(Widget):
     its space to the bar. ``min_value``/``max_value`` swap silently when
     inverted; ``initial_value`` clamps silently to the range. Invalid
     range/value arguments fall back to their defaults with a log warning
-    (spec 14: ProgressBar structure). ``on_change`` fires when a change
-    occurs on a non-disabled ProgressBar (wired in dev plan stage 3).
+    (spec 14: ProgressBar structure). ``on_change`` fires when
+    ``set_value()`` changes a non-disabled ProgressBar's value (wired in
+    dev plan stage 4); ``set_range()`` never fires it, and neither does
+    construction.
     """
 
     def __init__(
@@ -246,8 +248,8 @@ class ProgressBar(Widget):
             self._min_value, self._max_value = self._max_value, self._min_value
         initial = _validated_int(initial_value, "__init__", "initial_value", 0)
         self._value = _clamp_to_range(initial, self._min_value, self._max_value)
-        # Stored, but not invoked in this stage: dev plan stage 3 wires
-        # the change events (spec 14: on_change).
+        # Fired by set_value() on an enabled ProgressBar (dev plan
+        # stage 4, spec 14: on_change); set_range() never fires it.
         self.on_change = on_change
         # The bar's own colors, or None for "resolve from the effective
         # theme at draw time" (spec 14: The progress bar).
@@ -279,6 +281,67 @@ class ProgressBar(Widget):
     def get_max_value(self) -> int:
         """The current range maximum (spec 14: get_max_value)."""
         return self._max_value
+
+    # -- value mutators (spec 14: set_value / set_range) ---------------------
+
+    def set_value(self, value: int) -> None:
+        """Set the current value, clamped silently to the range.
+
+        Non-int arguments (bool included) are rejected with a log
+        warning and change nothing (spec 14: set_value). A value that
+        clamps to the current value is a no-op. Otherwise the new value
+        is stored and, when the ProgressBar is enabled, ``on_change``
+        fires with it - a disabled ProgressBar still stores the new
+        value but never fires the callback (spec 14: Acceptance
+        criteria - ``set_value()`` "triggers a value change callback
+        unless the ProgressBar is disabled"). Layout happens at draw
+        time, so no invalidation is needed.
+        """
+        if isinstance(value, bool) or not isinstance(value, int):
+            # Brace formatting required; loguru's %-style args are silently dropped
+            logger.warning("progress_bar.set_value: invalid value {!r}; ignoring", value)
+            return
+        new_value = _clamp_to_range(value, self._min_value, self._max_value)
+        if new_value == self._value:
+            # No-op: the value did not actually change (spec 14:
+            # "with the current value as an argument is a no-op").
+            return
+        self._value = new_value
+        # Stored before the callback so a callback that reads get_value()
+        # sees the new value (spec 14: on_change).
+        if self.enabled and self.on_change is not None:
+            self.on_change(new_value)
+
+    def set_range(self, min_value: int, max_value: int) -> None:
+        """Replace the range; the current value clamps silently to it.
+
+        Same validation as the constructor: if EITHER argument is a
+        non-int (bool included) the old range survives with a log
+        warning; an inverted pair swaps silently (spec 14: set_range).
+        Never fires ``on_change``, even when clamping moved the value,
+        and works while disabled. Layout happens at draw time.
+        """
+        if (
+            isinstance(min_value, bool)
+            or not isinstance(min_value, int)
+            or isinstance(max_value, bool)
+            or not isinstance(max_value, int)
+        ):
+            # Brace formatting required; loguru's %-style args are silently dropped
+            logger.warning(
+                "progress_bar.set_range: invalid range ({!r}, {!r}); keeping the current range",
+                min_value,
+                max_value,
+            )
+            return
+        if min_value > max_value:
+            # Silent swap (spec 14: set_range) - an inverted pair is a
+            # caller mistake, not a reason to keep a broken range.
+            min_value, max_value = max_value, min_value
+        self._min_value, self._max_value = min_value, max_value
+        self._value = _clamp_to_range(self._value, self._min_value, self._max_value)
+        # on_change deliberately never fires from set_range (spec 14:
+        # set_range) - even when the clamp moved the value.
 
     # -- cosmetics (spec 14: ProgressBar structure) ------------------------
 
