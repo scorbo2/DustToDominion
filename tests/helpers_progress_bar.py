@@ -145,6 +145,26 @@ def bar_extent(margin: int) -> tuple[int, int]:
     return MIDDLE_AREA_LEFT + margin, VALUE_AREA_LEFT - 1 - margin
 
 
+def assert_bar_edges(
+    screen: pygame.Surface,
+    bar_left: int,
+    bar_right: int,
+    bar_background: tuple[int, int, int, int] = BAR_BG,
+    bar_foreground: tuple[int, int, int, int] = BAR_FG,
+    surroundings: tuple[int, int, int, int] = NORMAL_BG,
+) -> None:
+    """Assert the bar's exact horizontal extent at the vertical center
+    (spec 14: The progress bar - the margin-inset extent): the left
+    edge pixel is the bar foreground, the right edge pixel the bar
+    background, and the pixel immediately outside each edge is the
+    widget fill (the margin gaps are clean). ``surroundings`` is the
+    widget fill for the widget's current state."""
+    assert screen.get_at((bar_left, CENTER_Y)) == bar_foreground
+    assert screen.get_at((bar_left - 1, CENTER_Y)) == surroundings
+    assert screen.get_at((bar_right, CENTER_Y)) == bar_background
+    assert screen.get_at((bar_right + 1, CENTER_Y)) == surroundings
+
+
 def fill_width(value: int, min_value: int, max_value: int, bar_width: int) -> int:
     """Mirror of the ProgressBar's fill-width math as a test premise
     (spec 14: The progress bar): the pixel width of the current value

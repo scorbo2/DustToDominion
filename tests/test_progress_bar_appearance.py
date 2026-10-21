@@ -33,6 +33,7 @@ from helpers_progress_bar import (
     SELECTED_BG,
     SELECTED_FG,
     TEST_THEME_JSON,
+    assert_bar_edges,
     bar_extent,
     draw_ui,
     make_theme,
@@ -78,8 +79,7 @@ class TestProgressBarStateColors:
         assert screen.get_at((150, 10)) == NORMAL_BG
         assert ink_bbox(screen, (0, 0, LABEL_AREA_RIGHT, 100), is_red_ink) is not None
         bar_left, bar_right = bar_extent(margin_for(theme, requested, "Vol"))
-        assert screen.get_at((bar_left, CENTER_Y)) == BAR_FG
-        assert screen.get_at((bar_right, CENTER_Y)) == BAR_BG
+        assert_bar_edges(screen, bar_left, bar_right)
 
     def test_hover_should_switch_fill_and_label_to_hover_colors(
         self, font_ready: None, silent_audio_manager: audio.AudioManager
@@ -107,8 +107,7 @@ class TestProgressBarStateColors:
         assert screen.get_at((150, 10)) == HOVER_BG
         assert ink_bbox(screen, (0, 0, LABEL_AREA_RIGHT, 100), is_magenta_ink) is not None
         bar_left, bar_right = bar_extent(margin_for(theme, requested, "Vol"))
-        assert screen.get_at((bar_left, CENTER_Y)) == BAR_FG
-        assert screen.get_at((bar_right, CENTER_Y)) == BAR_BG
+        assert_bar_edges(screen, bar_left, bar_right, surroundings=HOVER_BG)
 
     def test_selected_should_switch_fill_and_label_to_selected_colors(
         self, font_ready: None
@@ -134,8 +133,7 @@ class TestProgressBarStateColors:
         assert screen.get_at((150, 10)) == SELECTED_BG
         assert ink_bbox(screen, (0, 0, LABEL_AREA_RIGHT, 100), is_blue_ink) is not None
         bar_left, bar_right = bar_extent(margin_for(theme, requested, "Vol"))
-        assert screen.get_at((bar_left, CENTER_Y)) == BAR_FG
-        assert screen.get_at((bar_right, CENTER_Y)) == BAR_BG
+        assert_bar_edges(screen, bar_left, bar_right, surroundings=SELECTED_BG)
 
     def test_disabled_should_switch_fill_and_label_to_disabled_colors(
         self, font_ready: None
@@ -164,8 +162,7 @@ class TestProgressBarStateColors:
         assert screen.get_at((150, 10)) == DISABLED_BG
         assert any_pixel_differs(screen, pygame.Rect(0, 0, 100, 100), DISABLED_BG)
         bar_left, bar_right = bar_extent(margin_for(theme, requested, "Vol"))
-        assert screen.get_at((bar_left, CENTER_Y)) == BAR_FG
-        assert screen.get_at((bar_right, CENTER_Y)) == BAR_BG
+        assert_bar_edges(screen, bar_left, bar_right, surroundings=DISABLED_BG)
 
     def test_selected_and_disabled_should_render_as_disabled(
         self, font_ready: None

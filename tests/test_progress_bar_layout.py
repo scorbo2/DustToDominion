@@ -20,6 +20,7 @@ from helpers_progress_bar import (
     RECT,
     TEST_THEME_JSON,
     VALUE_AREA_LEFT,
+    assert_bar_edges,
     bar_extent,
     chosen_size,
     draw_ui,
@@ -117,10 +118,7 @@ class TestProgressBarLayout:
         # vertically inset by the same margin (spec 14: Margin / The
         # progress bar). At value 50 the fill covers the left half, so
         # the left edge is foreground and the right edge background:
-        assert screen.get_at((bar_left, CENTER_Y)) == BAR_FG
-        assert screen.get_at((bar_left - 1, CENTER_Y)) == NORMAL_BG
-        assert screen.get_at((bar_right, CENTER_Y)) == BAR_BG
-        assert screen.get_at((bar_right + 1, CENTER_Y)) == NORMAL_BG
+        assert_bar_edges(screen, bar_left, bar_right)
         assert screen.get_at((bar_left, margin)) == BAR_FG
         assert screen.get_at((bar_left, margin - 1)) == NORMAL_BG
 
@@ -639,10 +637,7 @@ class TestProgressBarValueLabelVisibility:
         # not change"; The value label - "This space is always
         # reserved"):
         assert ink_bbox(screen, (VALUE_AREA_LEFT, 0, 30, 100), is_red_ink) is None
-        assert screen.get_at((bar_left, CENTER_Y)) == BAR_FG
-        assert screen.get_at((bar_right, CENTER_Y)) == BAR_BG
-        assert screen.get_at((bar_left - 1, CENTER_Y)) == NORMAL_BG
-        assert screen.get_at((bar_right + 1, CENTER_Y)) == NORMAL_BG
+        assert_bar_edges(screen, bar_left, bar_right)
 
     def test_set_show_value_label_with_true_should_show_the_text_again(
         self, font_ready: None

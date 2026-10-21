@@ -383,7 +383,13 @@ Tests to add for ProgressBar:
    progress bar in the remaining space. Play audio on hover. **Completed 2026-10-20**
 3. Implement `set_value()`/`set_range()` and wire up `on_change` events. **Completed 2026-10-20**
 4. Implement `set_show_value_label()` for displaying or hiding the value label text. **Completed 2026-10-20**
-5. Final verification pass. Do the tests all pass? Are acceptance criteria all met?
+5. Test scaffolding refactor: extract the repeated bar-edge pixel probes
+   (left edge foreground, right edge background, clean margin gaps
+   outside both edges) from the ProgressBar test suites into a shared
+   `assert_bar_edges` helper in `tests/helpers_progress_bar.py`, and
+   convert the existing edge-regression tests to single calls. No
+   widget code changes; the full suite must stay green. **Completed 2026-10-20**
+6. Final verification pass. Do the tests all pass? Are acceptance criteria all met?
    Edit this document to change all "proposes" prose to "describes" as needed.
    If all is well, flip this document to `active` status.
 
