@@ -508,6 +508,17 @@ The tests need to use the `mixer_ready` + `init_audio_manager` pattern to proces
    into the existing `assert_theme_override_honored(widget_factory)` helper in
    `tests/helpers_theme_override.py` instead of writing a sixth copy. Flip this
    document back to `active` status on successful completion.
-   **Completed 2026-10-15** (full suite green at 1009 tests; the appearance suite
-   wired into the shared pin as planned, plus a fill+track pixel proof that the
-   override's colors land on the font-layout-dependent track chrome)
+    **Completed 2026-10-15** (full suite green at 1009 tests; the appearance suite
+    wired into the shared pin as planned, plus a fill+track pixel proof that
+    the override's colors land on the font-layout-dependent track chrome)
+ 9. Amendment 2026-10-20 (per spec 14: ProgressBar): extract the shared
+    label/value layout code into a new `dtd/widgets/value_layout.py` module.
+    The third/tenth/middle layout pass, the margin-starvation predicate, the
+    effective label/value size helpers, and the label/value blit helpers move
+    there - each function answers one question, the blit and effective-size
+    helpers take text/surface arguments, and no widget state crosses the
+    boundary. The shared constants (the third/tenth divisors and the
+    value-size fallback) move with them; Slider's small validators
+    (`_validated_int`, `_validated_border_width`, `_round_half_up`,
+    `_clamp_to_range`) and its track/tab fields in `_Layout` stay put. The
+    existing Slider suites are the regression gate: all must pass unchanged.
