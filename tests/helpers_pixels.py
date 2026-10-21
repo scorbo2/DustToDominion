@@ -29,6 +29,24 @@ def is_red_ink(pixel: tuple[int, int, int, int]) -> bool:
     return pixel[0] > 150 and pixel[1] < 100 and pixel[2] < 100
 
 
+def is_magenta_ink(pixel: tuple[int, int, int, int]) -> bool:
+    """Magenta-dominant thresholds: magenta text (the test theme's
+    hover foreground) over cyan/green/black surroundings."""
+    return pixel[0] > 150 and pixel[2] > 150 and pixel[1] < 100
+
+
+def is_blue_ink(pixel: tuple[int, int, int, int]) -> bool:
+    """Blue-dominant thresholds: blue text (the test theme's selected
+    foreground) over yellow/green/black surroundings."""
+    return pixel[2] > 150 and pixel[0] < 100 and pixel[1] < 100
+
+
+def is_yellow_ink(pixel: tuple[int, int, int, int]) -> bool:
+    """Yellow-dominant thresholds: yellow text (the theme-override
+    foreground) over magenta/blue/black surroundings."""
+    return pixel[0] > 150 and pixel[1] > 150 and pixel[2] < 100
+
+
 def any_pixel_differs(
     surface: pygame.Surface, area: pygame.Rect, background: tuple[int, int, int, int]
 ) -> bool:
