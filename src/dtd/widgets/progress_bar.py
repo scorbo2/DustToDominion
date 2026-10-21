@@ -15,8 +15,7 @@ colors (theme ``backgroundNormal``/``foregroundSelected`` when
 labels follow the state's theme colors. ``on_hover_enter()`` plays
 ``UI_SFX_HOVER`` (spec 14: Audio events).
 
-``set_value``/``set_range`` with ``on_change`` wiring arrive with
-stage 3; ``set_show_value_label`` with stage 4.
+``set_show_value_label`` arrives with stage 4 of the spec 14 Dev plan.
 """
 from __future__ import annotations
 
@@ -37,16 +36,21 @@ from dtd.widgets.value_layout import (
 )
 
 
+def _is_valid_int(value: object) -> bool:
+    """True only for real ints (spec 14: ProgressBar value model):
+    bools are an int subclass but never meaningful values, and floats
+    and strings are out of contract."""
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
 def _validated_int(value: object, source: str, name: str, default: int) -> int:
     """Range/value validation (spec 14: ProgressBar value model).
 
-    Only real ints pass: bools (an int subclass, but never a meaningful
-    value - same rejection as Slider's and Label's), floats, strings,
-    and everything else fall back to the documented default with a log
-    warning. Deliberately duplicated from Slider (spec 14: the small
-    validators may be duplicated).
+    Only real ints pass; everything else falls back to the documented
+    default with a log warning. Deliberately duplicated from Slider
+    (spec 14: the small validators may be duplicated).
     """
-    if isinstance(value, bool) or not isinstance(value, int):
+    if not _is_valid_int(value):
         # Brace formatting required; loguru's %-style args are silently dropped
         logger.warning(
             "progressbar.{}: invalid {} {!r}; using the default value {}",
@@ -185,6 +189,56 @@ class ProgressBar(Widget):
     def get_max_value(self) -> int:
         """The current range maximum (spec 14: get_max_value)."""
         return self._max_value
+
+    # -- value setters (spec 14: set_value / set_range) -------------------------
+
+    def set_value(self, value: int) -> None:
+        """Change the current value (spec 14: set_value).
+
+        Silently clamped to the current range. Non-ints (bools
+        included) are rejected with a log warning and no change. The
+        ``on_change`` callback (if any) fires with the new value only
+        when the clamped value differs from the current one and the
+        bar is enabled - after the value is stored, so a callback
+        reading ``get_value()`` sees the new value. A callback that
+        raises is allowed to propagate (spec 14: on_change). The fill
+        and value label pick the new value up on the next draw -
+        layout happens at draw time, so no invalidation is needed.
+        """
+        if not _is_valid_int(value):
+            logger.warning("progressbar.set_value: invalid value {!r}; ignoring", value)
+            return
+        new_value = _clamp_to_range(value, self._min_value, self._max_value)
+        if new_value == self._value:
+            return
+        self._value = new_value
+        if self.enabled and self.on_change is not None:
+            self.on_change(new_value)
+
+    def set_range(self, min_value: int, max_value: int) -> None:
+        """Change the value range (spec 14: set_range).
+
+        Inverted arguments swap silently; the current value is
+        silently clamped to the new range. Non-int arguments (bools
+        included) are rejected with a log warning - if EITHER argument
+        is invalid the whole call is a no-op. Never triggers
+        ``on_change``, even when clamping moves the current value.
+        """
+        if not _is_valid_int(min_value) or not _is_valid_int(max_value):
+            logger.warning(
+                "progressbar.set_range: invalid min_value {!r} and/or max_value "
+                "{!r}; ignoring",
+                min_value,
+                max_value,
+            )
+            return
+        if min_value > max_value:
+            # Silent swap (spec 14: min_value/max_value) - same rule as
+            # the constructor.
+            min_value, max_value = max_value, min_value
+        self._min_value = min_value
+        self._max_value = max_value
+        self._value = _clamp_to_range(self._value, min_value, max_value)
 
     # -- cosmetics (spec 14: ProgressBar structure) ----------------------------
 
