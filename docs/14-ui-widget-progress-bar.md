@@ -378,9 +378,9 @@ Tests to add for ProgressBar:
    the existing Slider's needs and also this spec's layout needs. Ensure all Slider tests still
    pass after the extraction. Upon success, remove the Amendments to previous spec docs
    section from this document. **Completed 2026-10-20**
-2. Implement the basic layout of the widget: the optional display label in the left third
-   of the inner rect, the value label in the right tenth of the inner rect, and the horizontal
-   progress bar in the remaining space. Play audio on hover.
+ 2. Implement the basic layout of the widget: the optional display label in the left third
+    of the inner rect, the value label in the right tenth of the inner rect, and the horizontal
+    progress bar in the remaining space. Play audio on hover. **Completed 2026-10-20**
 3. Implement `set_value()`/`set_range()` and wire up `on_change` events.
 4. Implement `set_show_value_label()` for displaying or hiding the value label text.
 5. Final verification pass. Do the tests all pass? Are acceptance criteria all met?
