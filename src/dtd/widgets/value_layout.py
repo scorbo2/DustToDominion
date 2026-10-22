@@ -39,6 +39,14 @@ from dtd.widgets.text_layout import (
     zero_glyph_margin,
 )
 
+#: The fraction of the inner rect width reserved for the display label
+#: (its third includes its margin). Shared by specs 12 and 14.
+LABEL_AREA_DIVISOR = 3
+
+#: The fraction of the inner rect width reserved for the value label
+#: (its tenth includes its margin). Shared by specs 12 and 14.
+VALUE_AREA_DIVISOR = 10
+
 #: The point size the value label falls back to when margin starvation
 #: leaves no fitting size (spec 12: The value label note, issue #63).
 #: Matches ``largest_fitting_size``'s default fallback; named so the
@@ -197,9 +205,11 @@ def third_tenth_layout(
     if inner_w <= 0 or inner_h <= 0:
         return None
     label_area = (
-        pygame.Rect(0, 0, inner_w // 3, inner_h) if label_text is not None else None
+        pygame.Rect(0, 0, inner_w // LABEL_AREA_DIVISOR, inner_h)
+        if label_text is not None
+        else None
     )
-    value_w = inner_w // 10
+    value_w = inner_w // VALUE_AREA_DIVISOR
     value_area = pygame.Rect(inner_w - value_w, 0, value_w, inner_h)
     middle_left = label_area.right if label_area is not None else 0
     middle_area = pygame.Rect(middle_left, 0, value_area.left - middle_left, inner_h)

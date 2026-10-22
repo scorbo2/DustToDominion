@@ -1,9 +1,8 @@
 """The ``Slider`` widget (spec 12: Slider structure / layout).
 
-Stage 3 of the spec 12 Dev plan: the complete widget. The optional
-display label occupies the left third of the inner rect, the
-always-visible value label the right tenth, and the horizontal track
-the remaining space. A fixed-size tab control rides the track at the
+An interactive integer value control: the optional display label
+occupies the left third of the inner rect, the always-visible value
+label the right tenth, and the horizontal track the remaining space. A fixed-size tab control rides the track at the
 interpolated position of the current value; a left-press inside the
 tab's rect begins a drag (the tab center snaps to the pointer - no
 grab offset), motion previews the new value, and release finalizes it

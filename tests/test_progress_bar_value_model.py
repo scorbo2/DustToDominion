@@ -338,6 +338,22 @@ class TestProgressBarSetValue:
         assert observed_arg == [75]
         assert observed_get_value == [75]
 
+    def test_set_value_callback_exception_should_propagate(self) -> None:
+        # GIVEN a bar whose callback raises (spec 14: on_change - "if
+        # the callback raises, ProgressBar will let it propagate - we
+        # don't try to handle it"):
+        def explode(value: int) -> None:
+            raise ValueError("callback boom")
+
+        bar, _ = progress_bar_ui(RECT, make_theme(None), on_change=explode)
+
+        # WHEN the value changes, the exception propagates...
+        with pytest.raises(ValueError, match="callback boom"):
+            bar.set_value(50)
+
+        # ...and the value was stored before the callback fired:
+        assert bar.get_value() == 50
+
     def test_set_value_with_no_callback_should_change_the_value_silently(self) -> None:
         # GIVEN a ProgressBar with no change callback wired:
         bar, _ = progress_bar_ui(RECT, make_theme(None), initial_value=10)

@@ -1,13 +1,18 @@
 """The ``ProgressBar`` widget (spec 14: ProgressBar structure / layout).
 
-Stage 2 of the spec 14 Dev plan: the basic layout. The optional display
-label occupies the left third of the inner rect, the auto-scaled value
-label the right tenth, and the horizontal progress bar the remaining
-space, inset by the shared margin. The bar's background rect represents
-the full ``min_value``-to-``max_value`` range; a foreground rect drawn
-over it from the left edge represents the current value, interpolated
-with round-half-up. There is no keyboard or mouse interaction beyond
-the hover the framework tracks via the widget's rect.
+A read-only value display: the optional display label occupies the
+left third of the inner rect, the auto-scaled value label the right
+tenth, and the horizontal progress bar the remaining space, inset by
+the shared margin. The bar's background rect represents the full
+``min_value``-to-``max_value`` range; a foreground rect drawn over it
+from the left edge represents the current value, interpolated with
+round-half-up. The value model lives on this class - ``set_value()``
+and ``set_range()`` clamp (and swap an inverted range) silently, and
+only ``set_value()`` fires the optional ``on_change`` callback - while
+the shared third/tenth layout is delegated to ``value_layout`` and
+recomputed at draw time, so no setter ever needs to invalidate a
+cache. There is no keyboard or mouse interaction beyond the hover the
+framework tracks via the widget's rect.
 
 Rendering contract (spec 14: ProgressBar layout / events):
 
@@ -233,8 +238,8 @@ class ProgressBar(Widget):
         max_value: int = 100,
         initial_value: int = 0,
         border_width: int = 0,
-        bar_background_color: pygame.Color | None = None,
-        bar_foreground_color: pygame.Color | None = None,
+        bar_background_color: pygame.Color | tuple[int, ...] | None = None,
+        bar_foreground_color: pygame.Color | tuple[int, ...] | None = None,
         on_change: Callable[[int], None] | None = None,
     ) -> None:
         super().__init__(rect)
@@ -405,7 +410,9 @@ class ProgressBar(Widget):
         """
         self.border_width = _validated_border_width(width, "set_border_width")
 
-    def set_bar_foreground(self, bar_foreground: pygame.Color | None) -> None:
+    def set_bar_foreground(
+        self, bar_foreground: pygame.Color | tuple[int, ...] | None
+    ) -> None:
         """Set the bar's foreground (current value) color.
 
         A valid ``pygame.Color`` or RGB/RGBA tuple replaces the stored
@@ -417,7 +424,9 @@ class ProgressBar(Widget):
             "set_bar_foreground", self._bar_foreground, bar_foreground
         )
 
-    def set_bar_background(self, bar_background: pygame.Color | None) -> None:
+    def set_bar_background(
+        self, bar_background: pygame.Color | tuple[int, ...] | None
+    ) -> None:
         """Set the bar's background color.
 
         A valid ``pygame.Color`` or RGB/RGBA tuple replaces the stored
