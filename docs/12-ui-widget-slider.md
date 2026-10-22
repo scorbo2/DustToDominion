@@ -111,7 +111,14 @@ value of `-50` is valid).
 ## Slider layout
 
 (Note: Slider should make use of the existing `dtd/widgets/text_layout.py` helper module's margin-aware
-facility for text auto-scaling).
+facility for text auto-scaling. As amended 2026-10-20 per spec 14, the shared third/tenth/margin
+layout pass, the effective label/value sizes, the shared margin, the margin-starvation predicate,
+the label/value blit methods, and the value size fallback constant live in the
+`dtd/widgets/value_layout.py` module, shared with the ProgressBar; the blit and effective-size
+helpers take text/surface arguments and no widget state crosses the boundary. Slider keeps its
+track/tab fields in its own layout wrapper, and the small int/range validators
+(`_validated_int`, `_validated_border_width`, `_round_half_up`, `_clamp_to_range`) are
+deliberately duplicated per widget rather than shared).
 
 ### Margin
 
@@ -509,5 +516,20 @@ The tests need to use the `mixer_ready` + `init_audio_manager` pattern to proces
    `tests/helpers_theme_override.py` instead of writing a sixth copy. Flip this
    document back to `active` status on successful completion.
    **Completed 2026-10-15** (full suite green at 1009 tests; the appearance suite
-   wired into the shared pin as planned, plus a fill+track pixel proof that the
-   override's colors land on the font-layout-dependent track chrome)
+   wired into the shared pin as planned, plus a fill+track pixel proof that
+   the override's colors land on the font-layout-dependent track chrome)
+9. Amendment 2026-10-20 (per spec 14: ProgressBar): extract the shared
+   third/tenth/margin layout pass, the effective label/value sizes, the
+   shared margin, the margin-starvation predicate, the label/value blit
+   methods, and the value size fallback constant from `slider.py` into
+   the new `dtd/widgets/value_layout.py` module, shaped against both
+   Slider's and the incoming ProgressBar's layout needs (spec 14:
+   Amendments to previous spec docs). The blit and effective-size helpers
+   take text/surface arguments - no widget state crosses the boundary -
+   and Slider keeps its track/tab fields in its own layout wrapper; the
+   small validators are deliberately duplicated per widget. The existing
+   Slider test suite - plus new direct pins in `tests/test_value_layout.py`
+   - must stay green as the proof of no negative side effects.
+   **Completed 2026-10-20** (full suite green at 1072 tests; all 123
+   Slider suite tests passed unchanged, and 32 direct pins added for the
+   shared module)
