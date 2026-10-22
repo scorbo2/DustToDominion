@@ -27,7 +27,7 @@ from dtd.widgets.value_layout import (
     shared_margin,
     third_tenth_layout,
 )
-from helpers_oracle import font_size_spy, zero_margin
+from helpers_oracle import font_size_spy, margin_rule, zero_margin
 from helpers_pixels import any_pixel_differs, ink_bbox, is_red_ink
 
 RED = pygame.Color(255, 0, 0)
@@ -46,16 +46,6 @@ def _theme() -> Theme:
 #: Identity scale: the 1920x1080 design resolution at a 1920x1080 display
 #: (the same scale the Slider suites' geometry pins assume).
 SCALE = Scale(1920, 1080)
-
-
-def _margin_rule(theme: Theme, text: str, size: int, width: int, height: int) -> bool:
-    """The margin-aware fit rule (specs 07/10/12/14), re-implemented as a
-    test premise: rendered extent plus twice the per-candidate
-    zero-glyph margin must fit the box."""
-    font = theme.get_font(size)
-    margin = zero_margin(font)
-    text_w, text_h = font.size(text)
-    return text_w + 2 * margin <= width and text_h + 2 * margin <= height
 
 
 def _fixed_margin_rule(
@@ -218,7 +208,7 @@ class TestThirdTenthLayout:
         chosen = max(
             size
             for size in set(requested)
-            if _margin_rule(theme, "OK", size, 100, 100)
+            if margin_rule(theme, "OK", size, 100, 100)
         )
         assert layout.label_size == chosen
 
@@ -269,7 +259,7 @@ class TestEffectiveLabelSize:
         assert size is not None
         assert size >= 30  # premise guard (same reasoning as the pass test)
         chosen = max(
-            s for s in set(requested) if _margin_rule(theme, "OK", s, 100, 100)
+            s for s in set(requested) if margin_rule(theme, "OK", s, 100, 100)
         )
         assert size == chosen
 
@@ -330,7 +320,7 @@ class TestEffectiveValueSize:
         # accepts in the tenth:
         assert size is not None
         chosen = max(
-            s for s in set(requested) if _margin_rule(theme, "0", s, 30, 100)
+            s for s in set(requested) if margin_rule(theme, "0", s, 30, 100)
         )
         assert size == chosen
 
@@ -377,7 +367,7 @@ class TestEffectiveValueSize:
         # GIVEN a 1x1 value box for three-digit text - nothing fits at
         # any size (even a size-1 rendering is 3px wide or more):
         theme = _theme()
-        assert not _margin_rule(theme, "100", 1, 1, 1)  # premise of the test
+        assert not margin_rule(theme, "100", 1, 1, 1)  # premise of the test
 
         # WHEN the effective value size is requested, THEN the fallback
         # is returned so the caller can clip at its own boundary:
