@@ -8,7 +8,13 @@ from __future__ import annotations
 import pygame
 import pytest
 from loguru import logger
-from helpers_oracle import font_size_spy, zero_margin, margin_rule, chosen_size
+from helpers_oracle import (
+    font_size_spy,
+    zero_margin,
+    margin_rule,
+    chosen_size,
+    SAFE_VALUE_INK_LABEL,
+)
 from helpers_pixels import any_pixel_differs, ink_bbox, is_red_ink
 from helpers_progress_bar import (
     BAR_BG,
@@ -60,14 +66,12 @@ class TestProgressBarLayout:
     ) -> None:
         # GIVEN a ProgressBar at a two-digit value, with a display label
         # long enough that the auto-scaled label margin cannot starve the
-        # value tenth on any plausible platform font (spec 14 Testing -
-        # the issue #63 corner: a short label over a narrow font lets the
-        # auto-scaler grow the shared margin until the value text budget
-        # collapses):
+        # value tenth on any plausible platform font (SAFE_VALUE_INK_LABEL
+        # - the issue #63 corner, documented at the constant):
         bar, ui = progress_bar_ui(
             RECT,
             make_theme(TEST_THEME_JSON),
-            text="Volume Control",
+            text=SAFE_VALUE_INK_LABEL,
             initial_value=50,
         )
 
@@ -237,15 +241,11 @@ class TestProgressBarLayout:
 class TestProgressBarShowValueLabel:
     def test_default_should_show_the_value_label(self, font_ready: None) -> None:
         # GIVEN a ProgressBar at a two-digit value, with a display label
-        # long enough that the auto-scaled label margin cannot starve the
-        # value tenth on any plausible platform font (spec 14 Testing -
-        # the issue #63/#81 corner: a short label over a narrow platform
-        # font lets the auto-scaler grow the shared margin until the
-        # value text budget collapses to a couple of pixels - on Windows
-        # metrics "Volume" grows the margin to 14px, the budget to 2px,
-        # and the search picks a size that rasterizes to zero ink):
+        # long enough to keep the value tenth legible on any plausible
+        # platform font (SAFE_VALUE_INK_LABEL - the issue #63/#81 corner,
+        # documented at the constant):
         bar, ui = progress_bar_ui(
-            RECT, make_theme(TEST_THEME_JSON), text="Volume Control", initial_value=50
+            RECT, make_theme(TEST_THEME_JSON), text=SAFE_VALUE_INK_LABEL, initial_value=50
         )
 
         # WHEN the UI draws,
@@ -301,10 +301,10 @@ class TestProgressBarShowValueLabel:
         self, font_ready: None
     ) -> None:
         # GIVEN a ProgressBar whose value label is hidden (long label per
-        # the issue #63/#81 corner documented in the test above - this
-        # test asserts value ink, so a short label is off-limits):
+        # SAFE_VALUE_INK_LABEL - this test asserts value ink, so a short
+        # label is off-limits):
         bar, ui = progress_bar_ui(
-            RECT, make_theme(TEST_THEME_JSON), text="Volume Control", initial_value=50
+            RECT, make_theme(TEST_THEME_JSON), text=SAFE_VALUE_INK_LABEL, initial_value=50
         )
         bar.set_show_value_label(False)
 

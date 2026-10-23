@@ -26,6 +26,12 @@ suites instead of derived from one definition:
 - ``round_half_up``: the round-half-up helper (specs 12/14: "floor(x +
   0.5)", never Python's banker's ``round()``), mirrored once instead of
   re-derived in every interpolation test.
+- ``SAFE_VALUE_INK_LABEL``: the display label value-label ink tests
+  under auto-scaling must use - a short label lets the auto-scaler
+  grow the shared margin until the value text starves down to an
+  invisible couple of pixels on some platforms (issues #63/#81). One
+  named constant so the hazard is documented once and no test should
+  roll its own short label.
 
 The box-aware (test_checkbox) and text-only (test_label) fit-rule
 predicates deliberately stay per-suite: each restates a different spec
@@ -40,6 +46,29 @@ import math
 import pygame
 
 from dtd.ui import Theme
+
+#: A display label long enough that its auto-scaled zero-glyph margin
+#: cannot starve the value label's tenth into invisibility on any
+#: plausible platform font (specs 12/14 Testing; issues #63 and #81).
+#:
+#: The hazard, documented once here so no test has to re-derive it:
+#: at the 300px geometry pin the value tenth is 30px wide, and the
+#: margin rule charges the display label's zero-glyph margin on both
+#: of its edges. A short display label auto-scales large, and over a
+#: narrow platform font the margin can grow until the value text
+#: budget collapses to a couple of pixels - the auto-scale search then
+#: picks a size whose *metrics* fit the budget while the platform's
+#: rasterizer renders those glyphs to zero ink (measured on Windows:
+#: "Volume" auto-fit 26pt, margin 14px, budget 2px, value invisible).
+#:
+#: The rule, scoped to that hazard: any test asserting value-label
+#: ink under an auto-scaled display label must use this label or a
+#: longer one. Short labels stay safe where the hazard cannot bite:
+#: no display label (the margin falls back to the value's own size),
+#: a pinned point size (the margin never auto-inflates), negative ink
+#: assertions (a starved label passes those too), or font-size-spy
+#: pinning (never depends on rendered glyph ink).
+SAFE_VALUE_INK_LABEL = "Volume Control"
 
 
 def font_size_spy(theme: Theme) -> list[int]:
