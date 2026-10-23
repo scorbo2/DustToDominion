@@ -188,8 +188,17 @@ class TestSliderLayout:
     def test_value_label_should_update_after_set_value(
         self, font_ready: None
     ) -> None:
-        # GIVEN a Slider at 50,
-        slider, ui = slider_ui(RECT, make_theme(TEST_THEME_JSON), text="Vol", initial_value=50)
+        # GIVEN a Slider at 50, with a display label long enough that the
+        # auto-scaled label margin cannot starve the value tenth on any
+        # plausible platform font (spec 12 Testing - the issue #63/#81
+        # corner: a short label over a narrow platform font lets the
+        # auto-scaler grow the shared margin until the value text budget
+        # collapses and the value rasterizes to zero ink on Windows -
+        # "Vol" auto-fits even larger than "Volume" did, so it is the
+        # more fragile spelling of all):
+        slider, ui = slider_ui(
+            RECT, make_theme(TEST_THEME_JSON), text="Volume Control", initial_value=50
+        )
         draw_ui(ui)
 
         # WHEN the value changes programmatically and the UI redraws,
@@ -205,9 +214,13 @@ class TestSliderLayout:
     def test_value_label_should_update_after_set_range_clamps_the_value(
         self, font_ready: None
     ) -> None:
-        # GIVEN a Slider at value 42, with its value area captured:
+        # GIVEN a Slider at value 42 (long label per the issue #63/#81
+        # corner in the test above - this test compares value-area ink
+        # before and after, so an invisible value label would make
+        # "before" and "after" identically blank), with its value area
+        # captured:
         slider, ui = slider_ui(
-            RECT, make_theme(TEST_THEME_JSON), text="Vol", initial_value=42
+            RECT, make_theme(TEST_THEME_JSON), text="Volume Control", initial_value=42
         )
         before = draw_ui(ui).subsurface(
             (VALUE_AREA_LEFT, 0, 300 - VALUE_AREA_LEFT, 100)
