@@ -413,6 +413,7 @@ drivable from tests without entering the 60FPS loop.
   than one or fewer than one argument is supplied. Add file/image validation
   at this stage: the input file must exist, must be readable, and must be a valid
   image. No Json validation at this stage. Write "All good" to stdout and exit with code 0.
+  **Completed 2026-10-25**
 2. Implement Json parsing for existing sidecars. Populate the in-memory port list.
   Modify startup message to "All good, and the Json is also good" if a sidecar is present and valid.
 3. Remove the temporary startup success message. Implement the ship display area,
