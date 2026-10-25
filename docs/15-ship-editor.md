@@ -415,7 +415,8 @@ drivable from tests without entering the 60FPS loop.
   image. No Json validation at this stage. Write "All good" to stdout and exit with code 0.
   **Completed 2026-10-25**
 2. Implement Json parsing for existing sidecars. Populate the in-memory port list.
-  Modify startup message to "All good, and the Json is also good" if a sidecar is present and valid.
+   Modify startup message to "All good, and the Json is also good" if a sidecar is present and valid.
+   **Completed 2026-10-25**
 3. Remove the temporary startup success message. Implement the ship display area,
   and render the ship image in this area. Reserve space for the control panel
   but do not render it. Right-clicking in the
