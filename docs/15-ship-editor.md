@@ -41,6 +41,9 @@ to set a port location. Left-clicking on an already-established port
 location clears that port from the list. The results are saved to
 the sidecar Json file in the format described in the "Json format" section.
 
+The script will exit with code 0 to indicate normal termination, except as
+indicated in this document when handling various errors.
+
 ## Additional dependencies
 
 None. This script takes advantage of facilities offered by the game's code:
@@ -115,7 +118,7 @@ height of the window. The control panel has a fixed margin of 32px on all
 edges. The control panel has a solid background of dark gray (64,64,64).
 The widgets in the control panel all use a fixed theme which is driven
 from the default theme values listed in the `04-ui-widgets.md` spec doc,
-in the "Theme configuration" section. Every widget listed in this section
+in the "Theme Configuration" section. Every widget listed in this section
 has a rect size of (256,40) and a fixed font point size of 18pt.
 
 Several widgets are presented here (see the `09-ui-widget-button.md` spec doc
@@ -160,12 +163,15 @@ uncheck and unselect the other two Edit mode checkboxes. This gives the user a v
 indication of which mode is active.
 
 Left-clicking anywhere in the ship display area adds or removes a port
-of the type described by the active edit mode. This draws a single pixel,
+of the type described by the active edit mode. This draws a single pixel (in image space) marker,
 scaled to match the image's current scale, at the clicked location, in
 a color to represent the current edit mode:
 - Gun ports: RGB (255,1,1)
 - Thruster ports: RGB (1,255,1)
 - Collection ports: RGB (1,1,255)
+
+The drawn marker is at least 3 screen pixels (square) regardless of image scale;
+port hit-testing always uses image-space coordinates.
 
 This establishes a new port of the given type at that location, if the
 clicked location matches no in-memory port assignment.
@@ -196,6 +202,8 @@ in the margin) are no-ops.
 The image in the ship display area is scaled to fit that area. Left-clicks
 must therefore translate the click location from window space to image
 space, rounding to the nearest whole number if a fractional location is calculated.
+Mapping goes through actual pixel geometry of the scaled image rect, not
+design space, to honor the "pixel-accurate port mapping" promise of this tool.
 
 ## Reset
 
@@ -208,6 +216,7 @@ Note that the sidecar Json file can be modified by another process (or by the
 user) while the tool is running. Clicking "Reset" may therefore trigger
 a load/validation failure with a hard error and a loss of in-memory changes
 if the file was corrupted. This is an acceptable known limitation of this tool.
+(Error handling is the same as the startup rules described in "Load on startup").
 
 ## Clear
 
@@ -231,6 +240,25 @@ in the same directory, and its top-level `name` key should have a value
 of `my_ship`. If the file cannot be written, the tool should exit with code 1
 and stderr message "Can't write Json file {file}" with the full path and name of the sidecar file.
 
+When creating a new Json file, all three port sections are created, even if their
+port list is empty. For example, saving the sidecar Json with an empty in-memory
+port assignment list should result in the following Json:
+
+```json
+{
+  "name": "ship_name",
+  "mass": 0,
+  "gun_ports": [
+  ],
+  "thruster_ports": [
+  ],
+  "collection_ports": [
+  ]
+}
+```
+
+Always pretty-print the Json output to make hand-editing easier.
+
 ### Merge behavior
 
 If the sidecar Json file already exists, the current port configuration in
@@ -239,6 +267,10 @@ be preserved. Any listed port that also exists in memory should preserve
 its "level" value. Any listed port that does not exist in memory should be
 removed. Any port in memory that is not listed in the file should be added
 to the file with a level of 0.
+
+All three ports lists should be present in the resulting merged Json file,
+even if there are no port assignments of that type in-memory, and even if
+the existing file was missing the ports list of that type.
 
 ## Json format
 
@@ -275,6 +307,7 @@ tool should be merged into it. This means NOT overwriting any existing value for
 ### Json validation
 
 The sidecar Json file should be validated on load, and also before a merge operation.
+The "Load on startup" section describes error handling, messages, and exit codes.
 
 - Ports of different types cannot overlap! If a port with the same x and y
   is listed in more than one section, exit code 2 with message: "Invalid Json:
@@ -292,7 +325,7 @@ The sidecar Json file should be validated on load, and also before a merge opera
 
 Examples of "invalid" Json (exits with code 2 and the "Invalid Json:" message):
 - a port list that is anything other than an array
-- a port list entry that does not contains both "x" and "y" keys
+- a port list entry that does not contain both "x" and "y" keys
 - a port list entry that contains an "x" or "y" value that is out-of-bounds for the input image
 - a port list entry whose "x" or "y" keys contain non-integer values
 - top-level is not an object at all (example: file contents are `[1,2,3]` or `"hello"`).
@@ -309,7 +342,7 @@ The entry point should be a thin executable shim `tools/ship_editor` which
 imports as needed from `tools/ship_editor_lib`. All logic should live
 in `ship_editor_lib` to make unit testing much easier.
 
-`ship_editor_lib` should expose an injectable loder to avoid loading actual
+`ship_editor_lib` should expose an injectable loader to avoid loading actual
 resources from the user's `resources/` directory. A `run(argv) -> int` entry
 should also be provided so that argument/exit-code tests run in-process instead of
 via slow subprocess calls of the non-importable `tools/ship_editor` shim.
@@ -318,11 +351,17 @@ The autouse conftest fixtures `clean_audio_singleton`, `no_required_resources_by
 and dummy SDL drivers already exist to make hermetic testing easier.
 
 The tool's tests should live in `tests/test_ship_editor*.py` alongside the game's tests.
-Add `tools/` to `pytest.ini`'s `pythonpath`.
+Add `tools/` to `pytest.ini`'s `pythonpath`. The script will need the packager-style
+`sys.path.insert(0, .../src)` bootstrap (see the existing `packager` tool for an example).
+
+All display-area click handling and port bookkeeping
+should live in a testable ShipEditorApp-style object with methods like `handle_left_click(pos)`,
+drivable from tests without entering the 60FPS loop.
 
 ## Testing
 
-- More than one or fewer than one argument on startup should exit with an error and code 2.
+- More than one or fewer than one argument on startup should exit with an error and code 2, with the exception
+  of argparse's built-in `--help` argument, which should print help and exit 0.
 - Supplying a file that does not exist, cannot be read, or which is not a valid image should exit with an error and code 1.
 - Supplying a valid image file that has no Json sidecar file should load and display the ship with no ports.
 - Supplying a valid image file that has a malformed or unreadable Json sidecar file should exit with an error "Can't read Json file {file}" and code 1.
