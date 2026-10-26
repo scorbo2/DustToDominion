@@ -279,6 +279,30 @@ class ShipPorts:
         return list(self._by_section[section])
 
 
+def apply_click_edit(ports: ShipPorts, section: str, x: int, y: int) -> bool:
+    """Apply one Edit-mode click at image location (x, y) to ``ports``
+    (spec 15: Edit mode), reporting whether the list changed.
+
+    The collision policy - add on a free cell, toggle-clear on a port of
+    the current mode, reassign (level intact) on a port of another mode
+    - lives here as a pure function over the deliberately dumb
+    ``ShipPorts`` store: no pygame, no pixel colors, unit-testable on
+    its own. This is what keeps the spec's "don't rely on the color of
+    the clicked pixel" promise structural, not just aspirational.
+    """
+    existing = ports.find_at(x, y)
+    if existing is None:
+        ports.add(section, x, y)
+        return True
+    found_section, port = existing
+    ports.remove(found_section, x, y)
+    if found_section != section:
+        # The tool never edits levels (spec 15: Open questions #1), and
+        # reclassifying a port is not an edit to its power level.
+        ports.add(section, x, y, level=port.level)
+    return True
+
+
 def _is_int(value: object) -> bool:
     """True for real integers only.
 
@@ -470,8 +494,9 @@ class ShipEditorApp:
     checkboxes act as a radio group: exactly one is checked, matching
     ``edit_mode`` (spec 15: Edit mode, amended 2026-10-25 - the checked
     state alone carries the mode; the checkboxes are never selected).
-    The Buttons are deliberately unwired until dev plan stages six
-    through eight give them something to do.
+    "Reset" and "Clear" are wired (dev plan stage seven); "Save" and
+    "Exit" stay inert until stages eight and nine give them something
+    to do.
     """
 
     def __init__(
@@ -480,6 +505,7 @@ class ShipEditorApp:
         ports: ShipPorts,
         theme: Theme,
         layout: ToolLayout,
+        sidecar_path: Path | None = None,
     ) -> None:
         for name, rect in (
             ("display_area", layout.display_area),
@@ -494,6 +520,8 @@ class ShipEditorApp:
         self._sprite_surface = sprite_surface
         self._ports = ports
         self._layout = layout
+        self._sidecar_path = sidecar_path
+        self._exit_request: tuple[int, str | None] | None = None
         self._background_color = BACKGROUND_BLACK
         self._scaled_surface: pygame.Surface
         self._ship_rect: pygame.Rect
@@ -506,6 +534,7 @@ class ShipEditorApp:
 
         self._edit_mode = DEFAULT_EDIT_MODE
         self._edit_checkboxes: dict[str, Checkbox] = {}
+        self._option_buttons: dict[str, Button] = {}
         self.ui = UIManager(theme)
         self._build_panel_widgets()
 
@@ -530,6 +559,11 @@ class ShipEditorApp:
         """The Edit mode Checkbox for ``section`` (test seam and the
         stage-five mirror of ``edit_mode``)."""
         return self._edit_checkboxes[section]
+
+    def option_button(self, label: str) -> Button:
+        """The option Button with ``label`` (test seam, the Button twin
+        of ``edit_mode_checkbox``)."""
+        return self._option_buttons[label]
 
     @property
     def background_color(self) -> tuple[int, int, int]:
@@ -608,17 +642,12 @@ class ShipEditorApp:
         """Apply the Edit mode click rules to ``position`` (spec 15:
         Edit mode).
 
-        Inside the display area the click maps to the nearest image cell
-        (spec 15: Pixel mapping); clicks that map outside the image
-        (margins) are no-ops. A free cell gains a port of the current
-        edit mode at level 0; a cell holding a port of the current mode
-        loses it (repeated clicks toggle); a cell holding a port of
-        another mode has that port reassigned - its level travels with
-        it, because the tool never edits levels (spec 15: Open
-        questions #1), and reclassifying a port is not an edit to its
-        power level.
-
-        Returns ``True`` when the in-memory port list changed.
+        The mapping half: inside the display area the click maps to the
+        nearest image cell (spec 15: Pixel mapping), and clicks that map
+        outside the image (margins) are no-ops. The collision policy
+        proper (add / toggle-clear / reassign) lives in the pygame-free
+        ``apply_click_edit``. Returns ``True`` when the in-memory port
+        list changed.
         """
         if not self._layout.display_area.collidepoint(position):
             return False
@@ -626,17 +655,60 @@ class ShipEditorApp:
         image_width, image_height = self._source_size
         if not (0 <= image_x < image_width and 0 <= image_y < image_height):
             return False
-        existing = self._ports.find_at(image_x, image_y)
-        if existing is None:
-            self._ports.add(self._edit_mode, image_x, image_y)
-            return True
-        section, port = existing
-        if section == self._edit_mode:
-            self._ports.remove(section, image_x, image_y)
-        else:
-            self._ports.remove(section, image_x, image_y)
-            self._ports.add(self._edit_mode, image_x, image_y, level=port.level)
-        return True
+        return apply_click_edit(self._ports, self._edit_mode, image_x, image_y)
+
+    @property
+    def exit_request(self) -> tuple[int, str | None] | None:
+        """A pending ``(exit_code, stderr_message)`` pair, or ``None``.
+
+        Button handlers cannot ``sys.exit`` mid-event-batch (that would
+        abandon the pygame session and the loop's bookkeeping), so they
+        file their verdict here and the event loop ends the session
+        between frames.
+        """
+        return self._exit_request
+
+    def clear_ports(self) -> None:
+        """spec 15: Clear - remove every port, in-memory only. The
+        sidecar file on disk is deliberately never touched."""
+        self._ports.clear()
+
+    def reset_ports(self) -> None:
+        """spec 15: Reset - drop the in-memory list and reload the
+        sidecar from disk.
+
+        No sidecar (never existed, or deleted mid-session) makes Reset
+        equivalent to Clear, exactly as the spec prescribes. A file the
+        spec's startup rules would reject propagates the same
+        ``SidecarReadError``/``InvalidSidecarJsonError`` the CLI exits
+        on at startup; the button callback turns those into an
+        ``exit_request`` (spec 15: Reset accepts hard errors and lost
+        in-memory edits as a known limitation).
+        """
+        if self._sidecar_path is None or not self._sidecar_path.is_file():
+            self._ports.clear()
+            return
+        self._adopt_ports(load_sidecar_ports(self._sidecar_path, self._source_size))
+
+    def _adopt_ports(self, loaded: ShipPorts) -> None:
+        """Copy ``loaded`` into the app's ``ShipPorts`` in place.
+
+        Callers (and tests) hold a reference to the original object, so
+        Reset swaps the contents, never the identity.
+        """
+        self._ports.clear()
+        for section in PORT_SECTIONS:
+            for port in loaded.section_ports(section):
+                self._ports.add(section, port.x, port.y, level=port.level)
+
+    def _on_reset_click(self) -> None:
+        """Reset's Button callback: a reload failure ends the session
+        with the startup rules - same stderr message, same exit code
+        (spec 15: Reset, "Load on startup")."""
+        try:
+            self.reset_ports()
+        except (SidecarReadError, InvalidSidecarJsonError) as exc:
+            self._exit_request = (exc.code, str(exc))
 
     def update(self, events: list[pygame.event.Event]) -> None:
         """Feed the frame's event batch to the panel widgets (spec 04:
@@ -685,13 +757,23 @@ class ShipEditorApp:
 
         header = self._make_header_label(rects[4], "Options")
         widgets.append(header)
+        option_handlers: dict[str, Callable[[], None]] = {
+            "Reset": self._on_reset_click,
+            "Clear": self.clear_ports,
+        }
         for index, label_text in enumerate(OPTION_BUTTON_LABELS, start=5):
-            button = Button(rects[index], text=label_text)
-            # Stage four is render-only for option buttons: no on_click
-            # until "Reset"/"Clear" (six), "Save" (seven), and "Exit"
-            # (eight) land. The accept sound still fires on click -
-            # that is the widget's contract (spec 09), not a wiring bug.
+            button = Button(
+                rects[index],
+                text=label_text,
+                on_click=option_handlers.get(label_text),
+            )
+            # Stage seven wires "Reset" and "Clear"; "Save" (stage
+            # eight) and "Exit" (stage nine) keep a None callback and
+            # stay inert until their stages land. The accept sound
+            # still fires on click - that is the widget's contract
+            # (spec 09), not a wiring bug.
             button.set_font_point_size(WIDGET_FONT_POINT_SIZE)
+            self._option_buttons[label_text] = button
             widgets.append(button)
 
         self.ui.widgets = widgets
@@ -860,7 +942,14 @@ def run(argv: list[str] | None = None, loader: ImageLoader | None = None) -> int
     # font is resolved through the tool's own ResourceLoader (spec 15:
     # Open questions #2). The user's game.json is deliberately ignored.
     theme = Theme("", "", resource_loader)
-    return _run_display(surface, ports, theme)
+
+    # prepare() already parsed this argv and accepted it (exit code 0),
+    # so this second parse cannot fail; it only recovers the sprite path
+    # so the session can derive the sidecar path the same way startup
+    # does - Reset (stage seven) and Save (stage eight) both need it.
+    args = _build_parser().parse_args(argv)
+    sidecar_path = Path(args.input_sprite).with_suffix(".json")
+    return _run_display(surface, ports, theme, sidecar_path)
 
 
 def _init_pygame() -> ResourceLoader | None:
@@ -904,7 +993,10 @@ def _init_pygame() -> ResourceLoader | None:
 
 
 def _run_display(
-    surface: pygame.Surface, ports: ShipPorts, theme: Theme
+    surface: pygame.Surface,
+    ports: ShipPorts,
+    theme: Theme,
+    sidecar_path: Path | None = None,
 ) -> int:
     """Pump the tool's window events until QUIT (spec 15: The main
     interface).
@@ -912,8 +1004,10 @@ def _run_display(
     Fixed 60FPS via ``clock.tick(60)``, game-loop style: drain events,
     dispatch display-area clicks (left: port editing, right: background
     toggle), feed the whole batch to the panel widgets (``app.update``),
-    render (``app.draw``), flip, tick. Left-clicks reach both handlers,
-    but never fight over one click: the port handler ignores everything
+    honor any ``exit_request`` the widgets filed (spec 15: Reset's hard
+    errors end the session with the startup message and code), render
+    (``app.draw``), flip, tick. Left-clicks reach both handlers, but
+    never fight over one click: the port handler ignores everything
     right of the display area, and the widgets all live inside the
     control panel. ESC and F11 are deliberately not handled at all: per
     the spec they "do nothing" in this tool, and an unhandled key is the
@@ -922,7 +1016,13 @@ def _run_display(
     window_surface = pygame.display.get_surface()
     if window_surface is None:
         return 1
-    app = ShipEditorApp(surface, ports, theme, build_layout(window_surface.get_size()))
+    app = ShipEditorApp(
+        surface,
+        ports,
+        theme,
+        build_layout(window_surface.get_size()),
+        sidecar_path,
+    )
     clock = pygame.time.Clock()
 
     while True:
@@ -936,6 +1036,11 @@ def _run_display(
                 elif event.button == 3:
                     app.handle_right_click(event.pos)
         app.update(events)
+        if app.exit_request is not None:
+            code, message = app.exit_request
+            if message is not None:
+                print(message, file=sys.stderr)
+            return code
         app.draw(window_surface)
         pygame.display.flip()
         clock.tick(60)

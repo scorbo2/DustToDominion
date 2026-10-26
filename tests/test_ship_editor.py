@@ -69,8 +69,21 @@ and the stage six contract (spec 15: Edit mode, Pixel mapping):
 - clicks that map outside the image (display margin, panel) are no-ops
 - ports land in whichever section the Edit mode checkboxes selected
 - downscale mappings add a port at the cell the click maps back to
-- the option Buttons render but are inert (stage four is display-only
-  for them)
+- the "Save" and "Exit" Buttons render but stay inert (their stages
+  are eight and nine)
+
+and the stage seven contract (spec 15: Reset, Clear):
+
+- a "Clear" click empties every port section in-memory and requests
+  no exit, leaving any sidecar file on disk byte-identical
+- a "Reset" click re-adopts the sidecar's on-disk contents (including
+  external edits and levels), is equivalent to Clear when no sidecar
+  exists (or it was deleted mid-session), and leaves the file untouched
+- a "Reset" onto a malformed sidecar files an exit request (code 1,
+  "Can't read Json file {file}"); onto a schema-invalid sidecar, code 2
+  with an "Invalid Json:" message - the startup rules, verbatim
+- ``apply_click_edit`` is the pygame-free collision policy: add,
+  toggle-clear, and reassign-with-level-intact over the dumb store
 
 Tests generate their own images under ``tmp_path``; nothing is ever read
 or written from the project's ``resources/`` directory (spec 15: Script
@@ -93,6 +106,7 @@ from ship_editor_lib import (
     BACKGROUND_WHITE,
     CONTROL_PANEL_COLOR,
     DEFAULT_EDIT_MODE,
+    apply_click_edit,
     InvalidSidecarJsonError,
     PORT_MARKER_SIZE,
     PORT_COLORS,
@@ -859,12 +873,14 @@ def _make_app(
     surface: pygame.Surface | None = None,
     ports: ShipPorts | None = None,
     layout: ToolLayout | None = None,
+    sidecar_path: Path | None = None,
 ) -> ShipEditorApp:
     return ShipEditorApp(
         surface if surface is not None else _make_surface((20, 10)),
         ports if ports is not None else ShipPorts(),
         _stub_theme(),
         layout if layout is not None else _design_layout(),
+        sidecar_path,
     )
 
 
@@ -1592,3 +1608,256 @@ def test_left_click_on_a_downscaled_sprite_should_add_a_port_at_the_clicked_cell
     found = ports.find_at(image_x, image_y)
     assert found is not None
     assert found[0] == "gun_ports"
+
+
+# ---------------------------------------------------------------------- #
+# stage seven: "Reset" and "Clear" (spec 15: Reset, Clear)
+# ---------------------------------------------------------------------- #
+
+_STAGE7_SIDECAR = {
+    "name": "viper",
+    "mass": 0,
+    "gun_ports": [{"x": 0, "y": 0, "level": 1}],
+    "thruster_ports": [{"x": 1, "y": 1, "level": 2}],
+    "collection_ports": [{"x": 2, "y": 2, "level": 3}],
+}
+
+
+def _port_snapshot(ports: ShipPorts) -> dict[str, list[tuple[int, int, int]]]:
+    return {
+        section: [(p.x, p.y, p.level) for p in ports.section_ports(section)]
+        for section in ("gun_ports", "thruster_ports", "collection_ports")
+    }
+
+
+def _stage7_session(
+    tmp_path: Path,
+) -> tuple[ShipPorts, ShipEditorApp, Path]:
+    """prepare() a 4x4 image with a three-port sidecar (spec 15: Reset
+    test bed) and wrap it in an app on the design-sized layout.
+
+    Returns (ports, app, sidecar_path); the ports object is the very one
+    the app mutates, so tests can assert through either end."""
+    sprite_path = tmp_path / "viper.png"
+    _write_png(sprite_path)
+    sidecar_path = _sidecar_path(sprite_path)
+    _write_sidecar_json(sidecar_path, json.dumps(_STAGE7_SIDECAR))
+    code, surface, ports = prepare([str(sprite_path)])
+    assert code == 0
+    app = _make_app(surface, ports, sidecar_path=sidecar_path)
+    return ports, app, sidecar_path
+
+
+def test_clear_button_click_should_emptily_all_sections_and_leave_the_sidecar_bytes_untouched(
+    pygame_ready: None, silent_audio_manager: None, tmp_path: Path
+) -> None:
+    # GIVEN a session loaded from a three-port sidecar:
+    ports, app, sidecar_path = _stage7_session(tmp_path)
+    sidecar_before = sidecar_path.read_bytes()
+
+    # WHEN the user clicks the "Clear" button:
+    app.update(_left_click_events(app.option_button("Clear").rect.center))
+
+    # THEN every section is empty in-memory (spec 15: Clear):
+    assert _port_snapshot(ports) == {
+        section: []
+        for section in ("gun_ports", "thruster_ports", "collection_ports")
+    }
+
+    # THEN the sidecar file on disk is byte-identical (spec 15: "no
+    # effect on an existing sidecar file!") and no exit was filed:
+    assert sidecar_path.read_bytes() == sidecar_before
+    assert app.exit_request is None
+
+
+def test_reset_button_click_should_discard_unsaved_edits_and_reload_the_sidecar(
+    pygame_ready: None, silent_audio_manager: None, tmp_path: Path
+) -> None:
+    # GIVEN a session whose in-memory list gained an unsaved port:
+    ports, app, sidecar_path = _stage7_session(tmp_path)
+    sidecar_before = sidecar_path.read_bytes()
+    ports.add("gun_ports", 3, 3)
+
+    # WHEN the user clicks "Reset":
+    app.update(_left_click_events(app.option_button("Reset").rect.center))
+
+    # THEN the in-memory list matches the sidecar on disk again, levels
+    # intact (spec 15: Reset):
+    assert _port_snapshot(ports) == {
+        "gun_ports": [(0, 0, 1)],
+        "thruster_ports": [(1, 1, 2)],
+        "collection_ports": [(2, 2, 3)],
+    }
+    assert app.exit_request is None
+    assert sidecar_path.read_bytes() == sidecar_before
+
+
+def test_reset_button_click_should_pick_up_sidecar_changes_from_disk(
+    pygame_ready: None, silent_audio_manager: None, tmp_path: Path
+) -> None:
+    # GIVEN a session whose sidecar is rewritten mid-session by another
+    # process (spec 15: Reset's known-limitation scenario):
+    ports, app, sidecar_path = _stage7_session(tmp_path)
+    _write_sidecar_json(
+        sidecar_path,
+        json.dumps(
+            {
+                **_STAGE7_SIDECAR,
+                "gun_ports": [
+                    {"x": 0, "y": 0, "level": 7},
+                    {"x": 3, "y": 3, "level": 0},
+                ],
+                "thruster_ports": [],
+            }
+        ),
+    )
+
+    # WHEN the user clicks "Reset":
+    app.update(_left_click_events(app.option_button("Reset").rect.center))
+
+    # THEN the new on-disk contents are what the tool now holds:
+    assert _port_snapshot(ports) == {
+        "gun_ports": [(0, 0, 7), (3, 3, 0)],
+        "thruster_ports": [],
+        "collection_ports": [(2, 2, 3)],
+    }
+
+
+def test_reset_button_click_without_any_sidecar_should_be_equivalent_to_clear(
+    pygame_ready: None, silent_audio_manager: None
+) -> None:
+    # GIVEN an app started without a sidecar (no path at all):
+    ports = ShipPorts()
+    ports.add("gun_ports", 1, 1)
+    app = _make_app(_make_surface((20, 10)), ports)
+
+    # WHEN the user clicks "Reset":
+    app.update(_left_click_events(app.option_button("Reset").rect.center))
+
+    # THEN it behaved exactly like Clear, and exited nothing:
+    assert _port_snapshot(ports) == {
+        section: []
+        for section in ("gun_ports", "thruster_ports", "collection_ports")
+    }
+    assert app.exit_request is None
+
+
+def test_reset_button_click_after_the_sidecar_was_deleted_should_be_equivalent_to_clear(
+    pygame_ready: None, silent_audio_manager: None, tmp_path: Path
+) -> None:
+    # GIVEN a session whose sidecar file is deleted mid-session:
+    ports, app, sidecar_path = _stage7_session(tmp_path)
+    sidecar_path.unlink()
+
+    # WHEN the user clicks "Reset":
+    app.update(_left_click_events(app.option_button("Reset").rect.center))
+
+    # THEN again: equivalent to Clear, no hard error (spec 15: "If the
+    # file does not exist, then Reset is functionally equivalent to
+    # Clear"):
+    assert _port_snapshot(ports) == {
+        section: []
+        for section in ("gun_ports", "thruster_ports", "collection_ports")
+    }
+    assert app.exit_request is None
+
+
+def test_reset_button_click_on_a_malformed_sidecar_should_file_a_code_1_exit_request(
+    pygame_ready: None, silent_audio_manager: None, tmp_path: Path
+) -> None:
+    # GIVEN a session whose sidecar is corrupted into non-Json text:
+    ports, app, sidecar_path = _stage7_session(tmp_path)
+    sidecar_path.write_text("{definitely not json", encoding="utf-8")
+
+    # WHEN the user clicks "Reset":
+    app.update(_left_click_events(app.option_button("Reset").rect.center))
+
+    # THEN the session is slated to end with the startup rules for read
+    # problems: code 1, exact "Can't read Json file {file}" message:
+    assert app.exit_request == (1, f"Can't read Json file {sidecar_path}")
+
+
+def test_reset_button_click_on_a_schema_invalid_sidecar_should_file_a_code_2_exit_request(
+    pygame_ready: None, silent_audio_manager: None, tmp_path: Path
+) -> None:
+    # GIVEN a session whose sidecar becomes schema-invalid (a port far
+    # outside the 4x4 image):
+    ports, app, sidecar_path = _stage7_session(tmp_path)
+    _write_sidecar_json(
+        sidecar_path,
+        json.dumps(
+            {
+                "name": "viper",
+                "mass": 0,
+                "gun_ports": [{"x": 99, "y": 0, "level": 0}],
+            }
+        ),
+    )
+
+    # WHEN the user clicks "Reset":
+    app.update(_left_click_events(app.option_button("Reset").rect.center))
+
+    # THEN the exit request carries code 2 and an "Invalid Json:"
+    # message (the startup validation rules, verbatim):
+    assert app.exit_request is not None
+    code, message = app.exit_request
+    assert code == 2
+    assert message is not None
+    assert message.startswith("Invalid Json:")
+
+
+def test_save_and_exit_button_clicks_should_remain_inert_until_their_stages(
+    pygame_ready: None, silent_audio_manager: None, tmp_path: Path
+) -> None:
+    # GIVEN a session with unsaved in-memory edits and an untouched
+    # sidecar on disk:
+    ports, app, sidecar_path = _stage7_session(tmp_path)
+    sidecar_before = sidecar_path.read_bytes()
+    ports.add("gun_ports", 3, 3)
+
+    # WHEN the user clicks "Save", then "Exit":
+    app.update(_left_click_events(app.option_button("Save").rect.center))
+    app.update(_left_click_events(app.option_button("Exit").rect.center))
+
+    # THEN neither wrote the file, discarded the edits, nor filed an
+    # exit - those arrive in dev plan stages eight and nine:
+    assert _port_snapshot(ports)["gun_ports"] == [(0, 0, 1), (3, 3, 0)]
+    assert sidecar_path.read_bytes() == sidecar_before
+    assert app.exit_request is None
+
+
+def test_apply_click_edit_on_a_free_cell_should_add_a_level_zero_port() -> None:
+    # GIVEN an empty store:
+    ports = ShipPorts()
+
+    # WHEN a gun-mode click lands on (2, 3):
+    assert apply_click_edit(ports, "gun_ports", 2, 3) is True
+
+    # THEN a level-0 gun port exists and nothing else:
+    assert ports.find_at(2, 3) == ("gun_ports", Port(x=2, y=3, level=0))
+
+
+def test_apply_click_edit_twice_on_the_same_section_should_toggle_the_port_off() -> None:
+    # GIVEN a store holding one gun port at (2, 3):
+    ports = ShipPorts()
+    apply_click_edit(ports, "gun_ports", 2, 3)
+
+    # WHEN the same gun-mode click lands again:
+    assert apply_click_edit(ports, "gun_ports", 2, 3) is True
+
+    # THEN the port is cleared (the spec's repeated-click toggle):
+    assert ports.find_at(2, 3) is None
+    assert not ports.section_ports("gun_ports")
+
+
+def test_apply_click_edit_over_a_foreign_port_should_reassign_it_keeping_the_level() -> None:
+    # GIVEN a store holding a level-5 collection port at (4, 4):
+    ports = ShipPorts()
+    ports.add("collection_ports", 4, 4, level=5)
+
+    # WHEN a thruster-mode click lands on it:
+    assert apply_click_edit(ports, "thruster_ports", 4, 4) is True
+
+    # THEN the port moved sections, location and level untouched:
+    assert not ports.section_ports("collection_ports")
+    assert ports.find_at(4, 4) == ("thruster_ports", Port(x=4, y=4, level=5))
