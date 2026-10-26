@@ -1,11 +1,11 @@
 ---
 description: Describes a standalone tool for the game: `ship_editor`
-status: proposed
+status: active
 ---
 
 # Ship editor
 
-This document proposes a new `tools/ship_editor` standalone Python
+This document describes a new `tools/ship_editor` standalone Python
 script that allows for editing or creating ship Json files for the game.
 
 This standalone script expects one mandatory argument: the ship sprite
@@ -454,4 +454,8 @@ drivable from tests without entering the 60FPS loop.
 10. Verification pass: do all tests pass? Are all acceptance criteria met?
   Edit this document to change all "proposes" prose to "describes" to reflect
   reality. Flip this document to "active" status.
+  **Completed 2026-10-26** (all 16 Testing-section criteria and all 6
+  acceptance criteria verified against tests; one audit gap closed -
+  thruster/collection click-adds now proven per-type through the UI;
+  full suite green at 1296 tests; doc status flipped to active.)
 

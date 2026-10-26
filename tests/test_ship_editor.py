@@ -1594,20 +1594,25 @@ def test_left_click_inside_the_control_panel_should_not_touch_the_port_list(
 def test_left_clicks_should_add_ports_of_the_currently_selected_edit_mode(
     pygame_ready: None, silent_audio_manager: None
 ) -> None:
-    # GIVEN a fresh app whose edit mode is switched to collection:
-    ports = ShipPorts()
-    app = _make_app(_make_surface((20, 10)), ports)
-    collection_checkbox = app.edit_mode_checkbox("collection_ports")
-    app.update(_left_click_events(collection_checkbox.rect.center))
-    assert app.edit_mode == "collection_ports"
+    """Acceptance audit (dev plan stage ten): "left-click to add ports
+    of the three types" is proven per type. Gun-mode adds are covered
+    by the free-cell test; this covers the other two modes through the
+    actual checkboxes."""
+    for section in ("thruster_ports", "collection_ports"):
+        # GIVEN a fresh app whose edit mode is switched to ``section``:
+        ports = ShipPorts()
+        app = _make_app(_make_surface((20, 10)), ports)
+        checkbox = app.edit_mode_checkbox(section)
+        app.update(_left_click_events(checkbox.rect.center))
+        assert app.edit_mode == section
 
-    # WHEN left-clicking image cell (5, 5) in the display area:
-    anchor = app.image_to_screen(5, 5)
-    assert app.handle_left_click(anchor) is True
+        # WHEN left-clicking image cell (5, 5) in the display area:
+        anchor = app.image_to_screen(5, 5)
+        assert app.handle_left_click(anchor) is True
 
-    # THEN the new port is of the selected type, and only that type:
-    assert ports.find_at(5, 5) == ("collection_ports", Port(x=5, y=5, level=0))
-    assert not ports.section_ports("gun_ports")
+        # THEN the new port is of the selected type, and only that type:
+        assert ports.find_at(5, 5) == (section, Port(x=5, y=5, level=0))
+        assert not ports.section_ports("gun_ports")
 
 
 def test_left_click_on_a_downscaled_sprite_should_add_a_port_at_the_clicked_cell(
@@ -1632,7 +1637,7 @@ def test_left_click_on_a_downscaled_sprite_should_add_a_port_at_the_clicked_cell
 # stage seven: "Reset" and "Clear" (spec 15: Reset, Clear)
 # ---------------------------------------------------------------------- #
 
-_STAGE7_SIDECAR = {
+_THREE_PORT_SIDECAR = {
     "name": "viper",
     "mass": 0,
     "gun_ports": [{"x": 0, "y": 0, "level": 1}],
@@ -1648,18 +1653,21 @@ def _port_snapshot(ports: ShipPorts) -> dict[str, list[tuple[int, int, int]]]:
     }
 
 
-def _stage7_session(
+def _session_with_three_port_sidecar(
     tmp_path: Path,
 ) -> tuple[ShipPorts, ShipEditorApp, Path]:
-    """prepare() a 4x4 image with a three-port sidecar (spec 15: Reset
-    test bed) and wrap it in an app on the design-sized layout.
+    """prepare() a 4x4 image with a sidecar holding one port in each
+    section, and wrap it in an app on the design-sized layout.
+
+    The standard stage-agnostic session bed (born for stage seven's
+    Reset tests; pressed into service ever since).
 
     Returns (ports, app, sidecar_path); the ports object is the very one
     the app mutates, so tests can assert through either end."""
     sprite_path = tmp_path / "viper.png"
     _write_png(sprite_path)
     sidecar_path = _sidecar_path(sprite_path)
-    _write_sidecar_json(sidecar_path, json.dumps(_STAGE7_SIDECAR))
+    _write_sidecar_json(sidecar_path, json.dumps(_THREE_PORT_SIDECAR))
     code, surface, ports = prepare([str(sprite_path)])
     assert code == 0
     app = _make_app(surface, ports, sidecar_path=sidecar_path)
@@ -1670,7 +1678,7 @@ def test_clear_button_click_should_emptily_all_sections_and_leave_the_sidecar_by
     pygame_ready: None, silent_audio_manager: None, tmp_path: Path
 ) -> None:
     # GIVEN a session loaded from a three-port sidecar:
-    ports, app, sidecar_path = _stage7_session(tmp_path)
+    ports, app, sidecar_path = _session_with_three_port_sidecar(tmp_path)
     sidecar_before = sidecar_path.read_bytes()
 
     # WHEN the user clicks the "Clear" button:
@@ -1692,7 +1700,7 @@ def test_reset_button_click_should_discard_unsaved_edits_and_reload_the_sidecar(
     pygame_ready: None, silent_audio_manager: None, tmp_path: Path
 ) -> None:
     # GIVEN a session whose in-memory list gained an unsaved port:
-    ports, app, sidecar_path = _stage7_session(tmp_path)
+    ports, app, sidecar_path = _session_with_three_port_sidecar(tmp_path)
     sidecar_before = sidecar_path.read_bytes()
     ports.add("gun_ports", 3, 3)
 
@@ -1715,12 +1723,12 @@ def test_reset_button_click_should_pick_up_sidecar_changes_from_disk(
 ) -> None:
     # GIVEN a session whose sidecar is rewritten mid-session by another
     # process (spec 15: Reset's known-limitation scenario):
-    ports, app, sidecar_path = _stage7_session(tmp_path)
+    ports, app, sidecar_path = _session_with_three_port_sidecar(tmp_path)
     _write_sidecar_json(
         sidecar_path,
         json.dumps(
             {
-                **_STAGE7_SIDECAR,
+                **_THREE_PORT_SIDECAR,
                 "gun_ports": [
                     {"x": 0, "y": 0, "level": 7},
                     {"x": 3, "y": 3, "level": 0},
@@ -1764,7 +1772,7 @@ def test_reset_button_click_after_the_sidecar_was_deleted_should_be_equivalent_t
     pygame_ready: None, silent_audio_manager: None, tmp_path: Path
 ) -> None:
     # GIVEN a session whose sidecar file is deleted mid-session:
-    ports, app, sidecar_path = _stage7_session(tmp_path)
+    ports, app, sidecar_path = _session_with_three_port_sidecar(tmp_path)
     sidecar_path.unlink()
 
     # WHEN the user clicks "Reset":
@@ -1784,7 +1792,7 @@ def test_reset_button_click_on_a_malformed_sidecar_should_file_a_code_1_exit_req
     pygame_ready: None, silent_audio_manager: None, tmp_path: Path
 ) -> None:
     # GIVEN a session whose sidecar is corrupted into non-Json text:
-    ports, app, sidecar_path = _stage7_session(tmp_path)
+    ports, app, sidecar_path = _session_with_three_port_sidecar(tmp_path)
     sidecar_path.write_text("{definitely not json", encoding="utf-8")
 
     # WHEN the user clicks "Reset":
@@ -1800,7 +1808,7 @@ def test_reset_button_click_on_a_schema_invalid_sidecar_should_file_a_code_2_exi
 ) -> None:
     # GIVEN a session whose sidecar becomes schema-invalid (a port far
     # outside the 4x4 image):
-    ports, app, sidecar_path = _stage7_session(tmp_path)
+    ports, app, sidecar_path = _session_with_three_port_sidecar(tmp_path)
     _write_sidecar_json(
         sidecar_path,
         json.dumps(
@@ -1829,7 +1837,7 @@ def test_exit_button_click_with_unsaved_changes_should_request_clean_exit_withou
 ) -> None:
     # GIVEN a session with in-memory edits that were never saved to
     # disk:
-    ports, app, sidecar_path = _stage7_session(tmp_path)
+    ports, app, sidecar_path = _session_with_three_port_sidecar(tmp_path)
     sidecar_before = sidecar_path.read_bytes()
     ports.add("gun_ports", 3, 3)
 
@@ -1856,7 +1864,7 @@ def test_option_button_clicks_should_all_have_observable_effects(
         # file exactly - then dirtied on demand:
         session_dir = tmp_path / label
         session_dir.mkdir()
-        ports, app, sidecar_path = _stage7_session(session_dir)
+        ports, app, sidecar_path = _session_with_three_port_sidecar(session_dir)
         pristine = _port_snapshot(ports)
         if label in ("Reset", "Exit", "Save"):
             ports.clear()  # unsaved in-memory damage to react to
@@ -2144,7 +2152,7 @@ def test_save_button_click_without_a_sidecar_should_create_it_from_memory(
 ) -> None:
     # GIVEN a session whose sidecar was deleted mid-session, plus a new
     # in-memory collection port:
-    ports, app, sidecar_path = _stage7_session(tmp_path)
+    ports, app, sidecar_path = _session_with_three_port_sidecar(tmp_path)
     sidecar_path.unlink()
     ports.add("collection_ports", 3, 3)
 
@@ -2170,7 +2178,7 @@ def test_save_button_click_should_merge_into_the_existing_sidecar(
 ) -> None:
     # GIVEN a session whose sidecar was externally rewritten with a
     # hand-picked name, mass, and an upgraded gun level:
-    ports, app, sidecar_path = _stage7_session(tmp_path)
+    ports, app, sidecar_path = _session_with_three_port_sidecar(tmp_path)
     _write_sidecar_json(
         sidecar_path,
         json.dumps(
@@ -2206,7 +2214,7 @@ def test_save_button_click_on_an_unwritable_sidecar_should_file_a_code_1_exit_re
     pygame_ready: None, silent_audio_manager: None, tmp_path: Path
 ) -> None:
     # GIVEN a session whose sidecar became unwritable:
-    ports, app, sidecar_path = _stage7_session(tmp_path)
+    ports, app, sidecar_path = _session_with_three_port_sidecar(tmp_path)
     sidecar_path.chmod(0o444)
     try:
         # WHEN the user clicks "Save":
