@@ -35,7 +35,10 @@ and the stage three contract (spec 15: The main interface):
   with the 64px margin
 - right-clicking inside the display area toggles the background black
   <-> white; right-clicking in the reserved control panel is ignored
-- sidecar ports are drawn as fixed-size color-coded markers
+- sidecar ports are drawn as color-coded markers that scale with the
+  image, floored at 3 screen pixels (spec 15: Edit mode)
+- ``image_to_screen``/``screen_to_image`` round-trip through the scaled
+  ship rect's actual pixel geometry (spec 15: Pixel mapping)
 
 Tests generate their own images under ``tmp_path``; nothing is ever read
 or written from the project's ``resources/`` directory (spec 15: Script
@@ -54,6 +57,7 @@ from ship_editor_lib import (
     BACKGROUND_BLACK,
     BACKGROUND_WHITE,
     DISPLAY_AREA,
+    DISPLAY_MARGIN,
     InvalidSidecarJsonError,
     PORT_MARKER_SIZE,
     PORT_COLORS,
@@ -416,9 +420,9 @@ _INVALID_SIDECAR_CASES = pytest.mark.parametrize(
         # ports of different types at the same location
         ('{"gun_ports": [{"x": 1, "y": 2}], "thruster_ports": [{"x": 1, "y": 2}]}',
          "multiple ports of different types at location 1,2"),
-    ('{"thruster_ports": [{"x": 1, "y": 2}], "collection_ports": [{"x": 1, "y": 2}]}',
+        ('{"thruster_ports": [{"x": 1, "y": 2}], "collection_ports": [{"x": 1, "y": 2}]}',
          "multiple ports of different types at location 1,2"),
-]
+    ]
 )
 
 @_INVALID_SIDECAR_CASES
@@ -848,7 +852,9 @@ def test_ship_editor_app_right_click_toggles_background_inside_display_area(
 
 
 def test_ship_editor_app_draws_sidecar_ports_as_colored_markers(pygame_ready: None) -> None:
-    # GIVEN a sprite with one port in each section:
+    # GIVEN a sprite with one port in each section (the 100x50 sprite in
+    # the 960x720 display area scales 8.32x, so markers scale past the
+    # 3px floor):
     surface = _make_surface((100, 50), (10, 20, 30))
     ports = ShipPorts()
     ports.add("gun_ports", 10, 10, 0)
@@ -859,8 +865,11 @@ def test_ship_editor_app_draws_sidecar_ports_as_colored_markers(pygame_ready: No
     screen = pygame.Surface((WINDOW_WIDTH, WINDOW_HEIGHT))
     app.draw(screen)
 
+    # THEN the marker scales with the image (round(8.32) = 8 screen px):
+    assert app.marker_size == 8
+
     # THEN each port is visible at its scaled screen position, in the
-    # section's spec color, as a fixed-size square:
+    # section's spec color, across the whole scaled marker:
     for section, port in (
         ("gun_ports", ports.section_ports("gun_ports")[0]),
         ("thruster_ports", ports.section_ports("thruster_ports")[0]),
@@ -868,8 +877,8 @@ def test_ship_editor_app_draws_sidecar_ports_as_colored_markers(pygame_ready: No
     ):
         x, y = app.screen_position_for_port(port)
         expected_color = PORT_COLORS[section]
-        for offset_x in range(PORT_MARKER_SIZE):
-            for offset_y in range(PORT_MARKER_SIZE):
+        for offset_x in range(app.marker_size):
+            for offset_y in range(app.marker_size):
                 assert screen.get_at((x + offset_x, y + offset_y)) == (
                     *expected_color,
                     255,
@@ -933,6 +942,124 @@ def test_ship_editor_app_scales_tall_sprite_down(pygame_ready: None) -> None:
     # THEN it is scaled down proportionally and centered:
     assert app.scaled_size == (474, 592)
     assert app.ship_rect == pygame.Rect(243, 64, 474, 592)
+
+
+# ---------------------------------------------------------------------- #
+# stage three: port marker sizing + pixel mapping (spec 15: Edit mode,
+# Pixel mapping; acceptance criterion "Do the single-pixel port locations
+# scale up as the ship image scales up?")
+# ---------------------------------------------------------------------- #
+
+
+def test_ship_editor_app_with_upscaled_sprite_scales_port_markers_with_the_image(
+    pygame_ready: None,
+) -> None:
+    # GIVEN a tiny 10x10 sprite (upscaled 59.2x into the display area)
+    # with a single gun port at image location (5, 5):
+    surface = _make_surface((10, 10), (10, 20, 30))
+    ports = ShipPorts()
+    ports.add("gun_ports", 5, 5, 0)
+    app = ShipEditorApp(surface, ports)
+    screen = pygame.Surface((WINDOW_WIDTH, WINDOW_HEIGHT))
+    app.draw(screen)
+
+    # THEN the marker scales with the image instead of staying at the
+    # 3px floor (round(59.2) = 59 screen pixels):
+    assert app.marker_size == 59
+
+    # THEN the marker covers its full scaled extent, top-left anchored
+    # at the mapped port location:
+    marker_x, marker_y = app.screen_position_for_port(
+        ports.section_ports("gun_ports")[0]
+    )
+    assert (marker_x, marker_y) == (480, 360)
+    marker_color = PORT_COLORS["gun_ports"] + (255,)
+    assert screen.get_at((marker_x, marker_y)) == marker_color
+    assert screen.get_at((marker_x + 40, marker_y + 40)) == marker_color
+    assert screen.get_at((marker_x + 58, marker_y + 58)) == marker_color
+
+    # THEN the pixel just past the marker's bottom-right corner is plain
+    # sprite, proving the marker did not spill arbitrarily far:
+    assert screen.get_at((marker_x + 59, marker_y + 59)) == (10, 20, 30, 255)
+
+
+def test_ship_editor_app_with_downscaled_sprite_floors_port_marker_at_three_pixels(
+    pygame_ready: None,
+) -> None:
+    # GIVEN a sprite that must scale down (0.74x) with a gun port at the
+    # image's top-left corner:
+    surface = _make_surface((1000, 800), (1, 2, 3))
+    ports = ShipPorts()
+    ports.add("gun_ports", 0, 0, 0)
+    app = ShipEditorApp(surface, ports)
+    screen = pygame.Surface((WINDOW_WIDTH, WINDOW_HEIGHT))
+    app.draw(screen)
+
+    # THEN the marker stays at the 3-screen-pixel floor:
+    assert app.marker_size == PORT_MARKER_SIZE
+
+    # THEN the drawn marker is exactly 3x3 at the mapped location
+    # (ship rect starts at (110, 64), so image (0, 0) anchors there):
+    marker_color = PORT_COLORS["gun_ports"] + (255,)
+    assert screen.get_at((112, 66)) == marker_color
+    assert screen.get_at((113, 67)) == (1, 2, 3, 255)
+
+
+def test_image_to_screen_and_screen_to_image_with_exact_scale_should_round_trip(
+    pygame_ready: None,
+) -> None:
+    # GIVEN a display area sized so a 20x10 sprite lands on an exact 6x
+    # scale (fit area 120x60, ship rect centered at (64, 64)):
+    display_area = pygame.Rect(
+        0, 0, 2 * DISPLAY_MARGIN + 120, 2 * DISPLAY_MARGIN + 60
+    )
+    app = ShipEditorApp(
+        _make_surface((20, 10)), ShipPorts(), display_area
+    )
+    assert app.ship_rect == pygame.Rect(64, 64, 120, 60)
+    assert app.marker_size == 6
+
+    # THEN forward mapping hits the expected screen anchors:
+    assert app.image_to_screen(0, 0) == (64, 64)
+    assert app.image_to_screen(7, 4) == (106, 88)
+    assert app.image_to_screen(19, 9) == (178, 118)
+
+    # THEN the inverse mapping round-trips every anchor exactly:
+    for image_x, image_y in ((0, 0), (7, 4), (19, 9)):
+        screen_x, screen_y = app.image_to_screen(image_x, image_y)
+        assert app.screen_to_image(screen_x, screen_y) == (image_x, image_y)
+
+    # THEN a click a couple of pixels inside the port's scaled cell maps
+    # back to the same image location (spec 15: rounding to the nearest
+    # whole number):
+    assert app.screen_to_image(106 + 2, 88 + 2) == (7, 4)
+
+
+def test_screen_to_image_with_click_in_the_margin_should_map_outside_the_image(
+    pygame_ready: None,
+) -> None:
+    # GIVEN the same exactly-6x setup, and a click in the margin far
+    # from the ship (spec 15: such clicks are no-ops, decided by the
+    # caller - the mapping itself stays a pure geometric transform):
+    display_area = pygame.Rect(
+        0, 0, 2 * DISPLAY_MARGIN + 120, 2 * DISPLAY_MARGIN + 60
+    )
+    app = ShipEditorApp(
+        _make_surface((20, 10)), ShipPorts(), display_area
+    )
+
+    # THEN the mapped image location falls outside the image bounds:
+    image_x, image_y = app.screen_to_image(0, 0)
+    assert image_x < 0 or image_y < 0
+    image_x, image_y = app.screen_to_image(247, 187)
+    assert image_x >= 20 or image_y >= 10
+
+
+def test_ship_editor_app_with_zero_size_sprite_should_raise_value_error() -> None:
+    # GIVEN a zero-width sprite (constructible in pygame, and reachable
+    # through an injected loader):
+    with pytest.raises(ValueError, match="sprite_surface"):
+        ShipEditorApp(_make_surface((0, 10)), ShipPorts())
 
 
 def test_ship_editor_app_rejects_zero_display_area() -> None:

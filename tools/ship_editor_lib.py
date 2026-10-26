@@ -48,6 +48,9 @@ CONTROL_PANEL_WIDTH = 320
 DISPLAY_MARGIN = 64
 BACKGROUND_BLACK = (0, 0, 0)
 BACKGROUND_WHITE = (255, 255, 255)
+#: Floor for the drawn port marker, in screen pixels (spec 15: Edit mode -
+#: "at least 3 screen pixels (square) regardless of image scale"). The
+#: marker otherwise scales with the image; see ``ShipEditorApp.marker_size``.
 PORT_MARKER_SIZE = 3
 PORT_COLORS = {
     "gun_ports": (255, 1, 1),
@@ -57,17 +60,11 @@ PORT_COLORS = {
 DISPLAY_AREA = pygame.Rect(
     0, 0, WINDOW_WIDTH - CONTROL_PANEL_WIDTH, WINDOW_HEIGHT
 )
-SHIP_FIT_AREA = pygame.Rect(
-    DISPLAY_MARGIN,
-    DISPLAY_MARGIN,
-    DISPLAY_AREA.width - 2 * DISPLAY_MARGIN,
-    DISPLAY_AREA.height - 2 * DISPLAY_MARGIN,
-)
 
 # The loader decodes a sprite path into a pygame.Surface. Injectable so
-# tests (and future stages, once the loaded surface feeds the display
-# area) never have to depend on real files on disk (spec 15: Script
-# structure).
+# tests never have to depend on real files on disk (spec 15: Script
+# structure), and so the loaded surface can drive both the display area
+# and the sidecar port bounds check.
 ImageLoader = Callable[[Path], pygame.Surface]
 
 
@@ -348,9 +345,15 @@ class ShipEditorApp:
     interface).
 
     Renders the input sprite scaled to fit the display area and overlays
-    one 3x3 marker per sidecar port. Right-clicking inside the display area
-    toggles the background between black and white; right-clicking in the
-    reserved control panel has no effect.
+    one marker per sidecar port: one image-space pixel scaled to match the
+    ship's current scale, floored at 3 screen pixels (spec 15: Edit mode).
+    ``image_to_screen``/``screen_to_image`` are the single pair of
+    forward/inverse mapping helpers - both derived from the actual pixel
+    geometry of the scaled ship rect, so future click hit-testing (dev
+    plan stage five) and marker rendering can never drift apart.
+    Right-clicking inside the display area toggles the background between
+    black and white; right-clicking in the reserved control panel has no
+    effect.
     """
 
     def __init__(
@@ -361,14 +364,20 @@ class ShipEditorApp:
     ) -> None:
         if display_area.width <= 0 or display_area.height <= 0:
             raise ValueError("display_area must be non-zero in both dimensions")
+        source_width, source_height = sprite_surface.get_size()
+        if source_width <= 0 or source_height <= 0:
+            raise ValueError("sprite_surface must be non-zero in both dimensions")
         self._sprite_surface = sprite_surface
         self._ports = ports
         self._display_area = pygame.Rect(display_area)
         self._background_color = BACKGROUND_BLACK
-        self._scaled_surface: pygame.Surface | None = None
-        self._ship_rect: pygame.Rect | None = None
-        self._source_size: tuple[int, int] | None = None
-        self._scaled_size: tuple[int, int] | None = None
+        self._scaled_surface: pygame.Surface
+        self._ship_rect: pygame.Rect
+        self._source_size: tuple[int, int] = (source_width, source_height)
+        self._scaled_size: tuple[int, int]
+        self._scale_x: float
+        self._scale_y: float
+        self._marker_size: int
         self._build_ship()
 
     @property
@@ -385,23 +394,54 @@ class ShipEditorApp:
     @property
     def ship_rect(self) -> pygame.Rect:
         """Rect of the scaled sprite inside the display area."""
-        if self._ship_rect is None:
-            raise ValueError("ShipEditorApp is in an invalid internal state")
         return self._ship_rect
 
     @property
     def source_size(self) -> tuple[int, int]:
         """Original sprite size, in pixels."""
-        if self._source_size is None:
-            raise ValueError("ShipEditorApp is in an invalid internal state")
         return self._source_size
 
     @property
     def scaled_size(self) -> tuple[int, int]:
         """Scaled sprite size, in pixels."""
-        if self._scaled_size is None:
-            raise ValueError("ShipEditorApp is in an invalid internal state")
         return self._scaled_size
+
+    @property
+    def marker_size(self) -> int:
+        """Side length, in screen pixels, of a drawn port marker: the
+        scaled size of one image pixel, floored at ``PORT_MARKER_SIZE``
+        (spec 15: Edit mode)."""
+        return self._marker_size
+
+    def image_to_screen(self, image_x: int, image_y: int) -> tuple[int, int]:
+        """Screen position of the marker for image-space location
+        (image_x, image_y), anchored at the marker's top-left.
+
+        Goes through the actual pixel geometry of the scaled ship rect
+        (spec 15: Pixel mapping). The anchor itself always round-trips
+        back through ``screen_to_image``; a marker's far edge may bleed
+        into the neighbouring image cell when scale exceeds 1, which is
+        unavoidable for fixed-size square markers and harmless to
+        hit-testing (clicks are tested in image space, not against
+        marker pixels).
+        """
+        return (
+            self._ship_rect.x + int(round(image_x * self._scale_x)),
+            self._ship_rect.y + int(round(image_y * self._scale_y)),
+        )
+
+    def screen_to_image(self, screen_x: int, screen_y: int) -> tuple[int, int]:
+        """Nearest image-space location for a screen position (spec 15:
+        Pixel mapping - "rounding to the nearest whole number").
+
+        Deliberately does not range-check: clicks that land off the image
+        (in the margin, say) map outside ``[0, width) x [0, height)`` and
+        the caller must treat them as no-ops (spec 15: Edit mode).
+        """
+        return (
+            int(round((screen_x - self._ship_rect.x) / self._scale_x)),
+            int(round((screen_y - self._ship_rect.y) / self._scale_y)),
+        )
 
     def handle_right_click(self, position: tuple[int, int]) -> bool:
         """Toggle the background if ``position`` is in the display area.
@@ -421,77 +461,57 @@ class ShipEditorApp:
     def draw(self, screen: pygame.Surface) -> None:
         """Paint the current display state to ``screen``."""
         screen.fill(self._background_color)
-        if self._scaled_surface is None or self._ship_rect is None:
-            return
         screen.blit(self._scaled_surface, self._ship_rect)
         self._draw_port_markers(screen)
 
     def screen_position_for_port(self, port: Port) -> tuple[int, int]:
         """Screen position of ``port``'s marker, clamped to the display area."""
-        return self._port_marker_position(port)
+        return self._port_marker_rect(port).topleft
 
     def _build_ship(self) -> None:
-        source_width, source_height = self._sprite_surface.get_size()
-        self._source_size = (source_width, source_height)
+        source_width, source_height = self._source_size
+        display_width, display_height = self._display_area.size
 
-        fit_width = max(self._display_area.width - 2 * DISPLAY_MARGIN, 1)
-        fit_height = max(self._display_area.height - 2 * DISPLAY_MARGIN, 1)
+        fit_width = max(display_width - 2 * DISPLAY_MARGIN, 1)
+        fit_height = max(display_height - 2 * DISPLAY_MARGIN, 1)
 
-        if source_width <= 0 or source_height <= 0:
-            scaled_width, scaled_height = 1, 1
-        else:
-            scale_x = fit_width / source_width
-            scale_y = fit_height / source_height
-            scale = min(scale_x, scale_y)
-            scaled_width = max(1, min(fit_width, round(scale * source_width)))
-            scaled_height = max(1, min(fit_height, round(scale * source_height)))
+        scale = min(fit_width / source_width, fit_height / source_height)
+        scaled_width = max(1, min(fit_width, round(scale * source_width)))
+        scaled_height = max(1, min(fit_height, round(scale * source_height)))
 
         self._scaled_surface = pygame.transform.scale(
             self._sprite_surface, (scaled_width, scaled_height)
         )
-        x = self._display_area.x + (self._display_area.width - scaled_width) // 2
-        y = self._display_area.y + (self._display_area.height - scaled_height) // 2
+        x = self._display_area.x + (display_width - scaled_width) // 2
+        y = self._display_area.y + (display_height - scaled_height) // 2
         self._ship_rect = pygame.Rect(x, y, scaled_width, scaled_height)
         self._scaled_size = (scaled_width, scaled_height)
 
-    def _map_port_to_screen(self, image_x: int, image_y: int) -> tuple[int, int]:
-        if (
-            self._source_size is None
-            or self._scaled_size is None
-            or self._ship_rect is None
-        ):
-            return (
-                self._display_area.x + self._display_area.width // 2,
-                self._display_area.y + self._display_area.height // 2,
-            )
+        # Forward/inverse mapping and marker sizing use the ratios of the
+        # final rounded rect, not the ideal scale, so every mapping honors
+        # the "actual pixel geometry of the scaled image rect" promise.
+        self._scale_x = scaled_width / source_width
+        self._scale_y = scaled_height / source_height
+        self._marker_size = max(
+            PORT_MARKER_SIZE,
+            round(self._scale_x),
+            round(self._scale_y),
+        )
 
-        source_width, source_height = self._source_size
-        scaled_width, scaled_height = self._scaled_size
-        if source_width <= 0 or source_height <= 0:
-            return (
-                self._display_area.x + self._display_area.width // 2,
-                self._display_area.y + self._display_area.height // 2,
-            )
-
-        x = self._ship_rect.x + int(round((image_x / source_width) * scaled_width))
-        y = self._ship_rect.y + int(round((image_y / source_height) * scaled_height))
-        return x, y
-
-    def _port_marker_position(self, port: Port) -> tuple[int, int]:
-        marker_x, marker_y = self._map_port_to_screen(port.x, port.y)
+    def _port_marker_rect(self, port: Port) -> pygame.Rect:
+        marker_x, marker_y = self.image_to_screen(port.x, port.y)
         marker_x = max(self._display_area.x, min(marker_x, self._display_area.right - 1))
         marker_y = max(self._display_area.y, min(marker_y, self._display_area.bottom - 1))
-        return marker_x, marker_y
+        return pygame.Rect(
+            marker_x, marker_y, self._marker_size, self._marker_size
+        )
 
     def _draw_port_markers(self, screen: pygame.Surface) -> None:
         for section in PORT_SECTIONS:
             marker_color = PORT_COLORS[section]
             for port in self._ports.section_ports(section):
-                marker_x, marker_y = self._port_marker_position(port)
                 pygame.draw.rect(
-                    screen,
-                    marker_color,
-                    pygame.Rect(marker_x, marker_y, PORT_MARKER_SIZE, PORT_MARKER_SIZE),
+                    screen, marker_color, self._port_marker_rect(port)
                 )
 
 
