@@ -57,6 +57,18 @@ and the stage four contract (spec 15: The control panel, Edit mode):
   2026-10-25: the checked state alone carries the mode)
 - every Edit mode checkbox renders the normal background, and the
   active one is distinguished only by its check mark
+
+and the stage six contract (spec 15: Edit mode, Pixel mapping):
+
+- left-clicking a free image cell adds a level-0 port of the current
+  Edit mode, drawn in that mode's color
+- repeated left-clicks on one cell toggle the port on/off, restoring
+  the source image pixel when off
+- left-clicking a port of another Edit mode reassigns it to the current
+  mode, carrying its level over untouched
+- clicks that map outside the image (display margin, panel) are no-ops
+- ports land in whichever section the Edit mode checkboxes selected
+- downscale mappings add a port at the cell the click maps back to
 - the option Buttons render but are inert (stage four is display-only
   for them)
 
@@ -1381,3 +1393,202 @@ def test_group_header_labels_should_be_transparent_with_visible_text_ink(
         for y in range(34, 70)
     )
     assert ink, "the 'Edit mode' header rendered no text at all"
+
+
+# ---------------------------------------------------------------------- #
+# stage six: left-click port editing (spec 15: Edit mode, Pixel mapping)
+# ---------------------------------------------------------------------- #
+
+
+def _exact_scale_layout() -> ToolLayout:
+    """Window plan where a 20x10 sprite lands on an exact 6x scale:
+    ship rect (64, 64, 120, 60), so image cell (ix, iy) maps to screen
+    anchor (64 + 6*ix, 64 + 6*iy) with no rounding surprises.
+
+    Gotcha: click the anchors + 2, not + 3. At exactly + 3 the inverse
+    mapping is a halfway ``x.5`` value, and Python's banker's rounding
+    sends it to the nearest *even* cell, not the one you clicked."""
+    return ToolLayout(
+        display_area=pygame.Rect(0, 0, 248, 188),
+        ship_fit_area=pygame.Rect(64, 64, 120, 60),
+        control_panel=pygame.Rect(192, 0, 56, 188),
+    )
+
+
+def test_left_click_on_free_image_cell_should_add_port_of_the_current_edit_mode(
+    pygame_ready: None, font_ready: None
+) -> None:
+    # GIVEN a 20x10 sprite at exact 6x scale with no ports (mode: gun):
+    ports = ShipPorts()
+    app = _make_app(_make_surface((20, 10)), ports, _exact_scale_layout())
+    screen = pygame.Surface((248, 188))
+
+    # WHEN left-clicking inside image cell (7, 4):
+    changed = app.handle_left_click((64 + 7 * 6 + 2, 64 + 4 * 6 + 2))
+
+    # THEN a level-0 gun port exists at that image location:
+    assert changed is True
+    assert ports.find_at(7, 4) == ("gun_ports", Port(x=7, y=4, level=0))
+    assert len(ports.section_ports("gun_ports")) == 1
+    assert not ports.section_ports("thruster_ports")
+    assert not ports.section_ports("collection_ports")
+
+    # THEN the redrawn marker sits at the mapped anchor in gun color:
+    app.draw(screen)
+    assert screen.get_at((106, 88)) == (*PORT_COLORS["gun_ports"], 255)
+
+    # THEN the background survived the left-click untouched:
+    assert app.background_color == BACKGROUND_BLACK
+
+
+def test_left_clicking_the_same_port_repeatedly_should_toggle_it_off_and_back(
+    pygame_ready: None, font_ready: None
+) -> None:
+    # GIVEN a free image cell (3, 6) in the exact-6x setup:
+    ports = ShipPorts()
+    app = _make_app(_make_surface((20, 10)), ports, _exact_scale_layout())
+    screen = pygame.Surface((248, 188))
+    anchor = app.image_to_screen(3, 6)
+
+    # WHEN left-clicking once inside the cell (offset 2 avoids the
+    # halfway-point banker's rounding that a +3 center click hits):
+    assert app.handle_left_click((anchor[0] + 2, anchor[1] + 2)) is True
+
+    # THEN a gun port exists and its marker covers the anchor pixel:
+    assert ports.find_at(3, 6) is not None
+    app.draw(screen)
+    assert screen.get_at(anchor) == (*PORT_COLORS["gun_ports"], 255)
+
+    # WHEN left-clicking the same cell again (spec 15: repeated clicks
+    # toggle between a port and a regular image pixel):
+    assert app.handle_left_click((anchor[0] + 2, anchor[1] + 2)) is True
+
+    # THEN the port is gone and the pixel reverts to the source image:
+    assert ports.find_at(3, 6) is None
+    app.draw(screen)
+    assert screen.get_at(anchor) == (10, 20, 30, 255)
+
+    # WHEN left-clicking a third time:
+    assert app.handle_left_click((anchor[0] + 2, anchor[1] + 2)) is True
+
+    # THEN the port is back:
+    assert ports.find_at(3, 6) == ("gun_ports", Port(x=3, y=6, level=0))
+
+
+def test_left_click_a_port_of_another_edit_mode_should_reassign_it_keeping_its_level(
+    pygame_ready: None, font_ready: None
+) -> None:
+    # GIVEN a thruster port with hand-edited level 2 at (7, 4), and the
+    # startup gun mode active (the spec's reassignment example):
+    ports = ShipPorts()
+    ports.add("thruster_ports", 7, 4, level=2)
+    app = _make_app(_make_surface((20, 10)), ports, _exact_scale_layout())
+    screen = pygame.Surface((248, 188))
+    anchor = app.image_to_screen(7, 4)
+    app.draw(screen)
+
+    # GIVEN the marker is initially drawn in thruster green:
+    assert screen.get_at(anchor) == (*PORT_COLORS["thruster_ports"], 255)
+
+    # WHEN left-clicking that cell:
+    assert app.handle_left_click((anchor[0] + 2, anchor[1] + 2)) is True
+
+    # THEN the thruster port is deleted and a gun port exists at the
+    # same location, with the level carried over untouched (spec 15:
+    # the tool never edits levels):
+    assert not ports.section_ports("thruster_ports")
+    assert ports.find_at(7, 4) == ("gun_ports", Port(x=7, y=4, level=2))
+
+    # THEN the redrawn marker is gun red:
+    app.draw(screen)
+    assert screen.get_at(anchor) == (*PORT_COLORS["gun_ports"], 255)
+
+
+def test_left_click_in_the_display_margin_should_not_add_any_port(
+    pygame_ready: None,
+) -> None:
+    # GIVEN the exact-6x setup with a wide margin (spec 15: clicks that
+    # do not map to an image location are no-ops):
+    ports = ShipPorts()
+    app = _make_app(_make_surface((20, 10)), ports, _exact_scale_layout())
+
+    # WHEN left-clicking the display area's far corners, well outside
+    # the scaled ship:
+    assert app.handle_left_click((0, 0)) is False
+    assert app.handle_left_click((247, 187)) is False
+
+    # THEN no port exists anywhere:
+    for section in ("gun_ports", "thruster_ports", "collection_ports"):
+        assert not ports.section_ports(section)
+
+
+def test_left_click_on_the_ships_outermost_corner_pixel_should_map_outside_the_image(
+    pygame_ready: None,
+) -> None:
+    # GIVEN the exact-6x setup: the outermost half-pixel of the ship's
+    # last row/column "rounds to the nearest whole number" out of the
+    # image (spec 15: Pixel mapping), making that corner a no-op:
+    ports = ShipPorts()
+    app = _make_app(_make_surface((20, 10)), ports, _exact_scale_layout())
+    assert app.screen_to_image(183, 123) == (20, 10)
+
+    # WHEN left-clicking the literal bottom-right ship pixel:
+    assert app.handle_left_click((183, 123)) is False
+
+    # THEN no port is created - but clicking the last *mappable* pixel
+    # of that cell still lands in cell (19, 9):
+    assert app.handle_left_click((180, 120)) is True
+    assert ports.find_at(19, 9) == ("gun_ports", Port(x=19, y=9, level=0))
+
+
+def test_left_click_inside_the_control_panel_should_not_touch_the_port_list(
+    pygame_ready: None,
+) -> None:
+    # GIVEN a design-sized app with an empty port list:
+    ports = ShipPorts()
+    app = _make_app(_make_surface((20, 10)), ports)
+
+    # WHEN left-clicking the panel edge and the far window corner:
+    assert app.handle_left_click((1600, 300)) is False
+    assert app.handle_left_click((1919, 1079)) is False
+
+    # THEN nothing was added (panel clicks belong to the widgets):
+    for section in ("gun_ports", "thruster_ports", "collection_ports"):
+        assert not ports.section_ports(section)
+
+
+def test_left_clicks_should_add_ports_of_the_currently_selected_edit_mode(
+    pygame_ready: None, silent_audio_manager: None
+) -> None:
+    # GIVEN a fresh app whose edit mode is switched to collection:
+    ports = ShipPorts()
+    app = _make_app(_make_surface((20, 10)), ports)
+    collection_checkbox = app.edit_mode_checkbox("collection_ports")
+    app.update(_left_click_events(collection_checkbox.rect.center))
+    assert app.edit_mode == "collection_ports"
+
+    # WHEN left-clicking image cell (5, 5) in the display area:
+    anchor = app.image_to_screen(5, 5)
+    assert app.handle_left_click(anchor) is True
+
+    # THEN the new port is of the selected type, and only that type:
+    assert ports.find_at(5, 5) == ("collection_ports", Port(x=5, y=5, level=0))
+    assert not ports.section_ports("gun_ports")
+
+
+def test_left_click_on_a_downscaled_sprite_should_add_a_port_at_the_clicked_cell(
+    pygame_ready: None,
+) -> None:
+    # GIVEN a design-sized app showing a downscaled 2000x1600 sprite:
+    ports = ShipPorts()
+    app = _make_app(_make_surface((2000, 1600), (1, 2, 3)), ports)
+
+    # WHEN left-clicking the screen anchor of image cell (1234, 567):
+    clicked = app.image_to_screen(1234, 567)
+    assert app.handle_left_click(clicked) is True
+
+    # THEN the port lands exactly on the cell the click maps back to:
+    image_x, image_y = app.screen_to_image(*clicked)
+    found = ports.find_at(image_x, image_y)
+    assert found is not None
+    assert found[0] == "gun_ports"

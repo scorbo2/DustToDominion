@@ -444,6 +444,7 @@ drivable from tests without entering the 60FPS loop.
 6. Implement left-clicking in the ship display area to handle creation, reassignment,
   or clearing of ports of the current Edit mode type. There are no other controls
   at this stage, and no way to save changes.
+  **Completed 2026-10-25** (full suite green at 1272 tests.)
 7. Implement "Reset" and "Clear" options.
 8. Implement "Save" option and verify that the generated/merged Json is correct.
 9. Implement "Exit". There is no "unsaved changes" confirmation prompt - just exit.

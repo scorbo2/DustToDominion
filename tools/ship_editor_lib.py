@@ -227,8 +227,8 @@ class ShipPorts:
 
     The per-location uniqueness invariant (no two ports of any section
     at the same x, y) is enforced by load-time validation (spec 15:
-    Json validation) and, once display click handling lands (dev plan
-    stage five), by the click handler's collision checks, which must
+    Json validation) and, since the display click handling landed (dev
+    plan stage six), by the click handler's collision checks, which
     consult this list rather than pixel colors.
     """
 
@@ -458,9 +458,11 @@ class ShipEditorApp:
     are the single pair of forward/inverse mapping helpers - both derived
     from the actual pixel geometry of the scaled ship rect, so future
     click hit-testing (dev plan stage five) and marker rendering can
-    never drift apart. Right-clicking inside the display area toggles the
-    background between black and white; right-clicking anywhere else
-    (including the control panel) has no effect.
+    never drift apart. Left-clicking inside the display area adds,
+    clears, or reassigns a port of the current edit mode (spec 15: Edit
+    mode); right-clicking inside it toggles the background between black
+    and white; clicking anywhere else (including the control panel) does
+    nothing to the display.
 
     Right of the divider: the fixed-theme control panel (spec 15: The
     control panel) - header Labels, the three Edit mode Checkboxes, and
@@ -566,8 +568,8 @@ class ShipEditorApp:
         back through ``screen_to_image``; a marker's far edge may bleed
         into the neighbouring image cell when scale exceeds 1, which is
         unavoidable for fixed-size square markers and harmless to
-        hit-testing (clicks are tested in image space, not against
-        marker pixels).
+        hit-testing (clicks are tested in image space via
+        ``screen_to_image``, not against marker pixels).
         """
         return (
             self._ship_rect.x + int(round(image_x * self._scale_x)),
@@ -600,6 +602,40 @@ class ShipEditorApp:
             if self._background_color == BACKGROUND_BLACK
             else BACKGROUND_BLACK
         )
+        return True
+
+    def handle_left_click(self, position: tuple[int, int]) -> bool:
+        """Apply the Edit mode click rules to ``position`` (spec 15:
+        Edit mode).
+
+        Inside the display area the click maps to the nearest image cell
+        (spec 15: Pixel mapping); clicks that map outside the image
+        (margins) are no-ops. A free cell gains a port of the current
+        edit mode at level 0; a cell holding a port of the current mode
+        loses it (repeated clicks toggle); a cell holding a port of
+        another mode has that port reassigned - its level travels with
+        it, because the tool never edits levels (spec 15: Open
+        questions #1), and reclassifying a port is not an edit to its
+        power level.
+
+        Returns ``True`` when the in-memory port list changed.
+        """
+        if not self._layout.display_area.collidepoint(position):
+            return False
+        image_x, image_y = self.screen_to_image(*position)
+        image_width, image_height = self._source_size
+        if not (0 <= image_x < image_width and 0 <= image_y < image_height):
+            return False
+        existing = self._ports.find_at(image_x, image_y)
+        if existing is None:
+            self._ports.add(self._edit_mode, image_x, image_y)
+            return True
+        section, port = existing
+        if section == self._edit_mode:
+            self._ports.remove(section, image_x, image_y)
+        else:
+            self._ports.remove(section, image_x, image_y)
+            self._ports.add(self._edit_mode, image_x, image_y, level=port.level)
         return True
 
     def update(self, events: list[pygame.event.Event]) -> None:
@@ -874,11 +910,14 @@ def _run_display(
     interface).
 
     Fixed 60FPS via ``clock.tick(60)``, game-loop style: drain events,
-    dispatch right-clicks to the display area, feed the batch to the
-    panel widgets (``app.update``), render (``app.draw``), flip, tick.
-    ESC and F11 are deliberately not handled at all: per the spec they
-    "do nothing" in this tool, and an unhandled key is the purest
-    implementation of nothing.
+    dispatch display-area clicks (left: port editing, right: background
+    toggle), feed the whole batch to the panel widgets (``app.update``),
+    render (``app.draw``), flip, tick. Left-clicks reach both handlers,
+    but never fight over one click: the port handler ignores everything
+    right of the display area, and the widgets all live inside the
+    control panel. ESC and F11 are deliberately not handled at all: per
+    the spec they "do nothing" in this tool, and an unhandled key is the
+    purest implementation of nothing.
     """
     window_surface = pygame.display.get_surface()
     if window_surface is None:
@@ -891,8 +930,11 @@ def _run_display(
         for event in events:
             if event.type == pygame.QUIT:
                 return 0
-            if event.type == pygame.MOUSEBUTTONDOWN and event.button == 3:
-                app.handle_right_click(event.pos)
+            if event.type == pygame.MOUSEBUTTONDOWN:
+                if event.button == 1:
+                    app.handle_left_click(event.pos)
+                elif event.button == 3:
+                    app.handle_right_click(event.pos)
         app.update(events)
         app.draw(window_surface)
         pygame.display.flip()
