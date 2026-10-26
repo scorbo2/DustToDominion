@@ -6,11 +6,14 @@ boilerplate (``sys.path`` bootstrap) and forwards to ``run``. All logic
 lives in this module so the tool is unit-testable in-process (spec 15:
 Script structure).
 
-Dev plan stages one, two, and three: argument handling, input-sprite
+Dev plan stages one through four: argument handling, input-sprite
 validation, sidecar Json loading (read, validate, populate the in-memory
-port list - spec 15: Load on startup + Json validation), and the stage
-three ship display area. The control panel is reserved but not rendered;
-right-clicking the display area toggles the background between black and
+port list - spec 15: Load on startup + Json validation), the ship display
+area, and the control panel. The control panel renders its Label,
+Checkbox, and Button widgets (spec 15: The control panel); the Edit mode
+checkboxes already work as a radio group, while the four option buttons
+are render-only until their stages land (six through eight).
+Right-clicking the display area toggles the background between black and
 white.
 """
 from __future__ import annotations
@@ -25,9 +28,13 @@ from typing import Callable
 import pygame
 from loguru import logger
 
-from dtd import audio
+from dtd import audio, game_constants
 from dtd.errors import ResourceError
 from dtd.resource_loader import ResourceLoader
+from dtd.ui import Scale, Theme, UIManager, Widget
+from dtd.widgets.button import Button
+from dtd.widgets.checkbox import Checkbox
+from dtd.widgets.label import Label
 
 # Accepted sprite formats (spec 15: "accepted file extensions: .png,
 # .jpg, or .jpeg, case insensitive"). The extension check is a path
@@ -38,14 +45,29 @@ ACCEPTED_IMAGE_EXTENSIONS = (".png", ".jpg", ".jpeg")
 # The three port sections, in sidecar file order (spec 15: Json format).
 PORT_SECTIONS = ("gun_ports", "thruster_ports", "collection_ports")
 
-#: Stage three geometry (spec 15: The main interface). The display area is
-#: everything left of the reserved 320px control panel; the ship must
-#: always fit inside the display area with a 64px margin on every edge.
+#: The window itself is specified in actual pixels - the one exception to
+#: the design-space rule (spec 15: The main interface: "dimensions and
+#: point sizes in this section *other than the window dimensions* are
+#: specified in design space"). Everything below lives in spec 04 design
+#: space (1920x1080) and reaches the screen through ``build_layout``
+#: (pixels, for the ship display) or a Widget's design-space rect math
+#: (for the panel controls).
 WINDOW_WIDTH = 1280
 WINDOW_HEIGHT = 720
 WINDOW_TITLE = "Ship editor"
-CONTROL_PANEL_WIDTH = 320
-DISPLAY_MARGIN = 64
+
+PANEL_WIDTH_DESIGN = 320
+PANEL_MARGIN_DESIGN = 32
+WIDGET_WIDTH_DESIGN = 256
+WIDGET_HEIGHT_DESIGN = 40
+WIDGET_FONT_POINT_SIZE = 18
+GROUP_SPACING_DESIGN = 48
+WIDGET_SPACING_DESIGN = 12
+DISPLAY_MARGIN_DESIGN = 64
+PANEL_X_DESIGN = game_constants.DESIGN_W - PANEL_WIDTH_DESIGN
+DISPLAY_WIDTH_DESIGN = PANEL_X_DESIGN
+CONTROL_PANEL_COLOR = (64, 64, 64)
+
 BACKGROUND_BLACK = (0, 0, 0)
 BACKGROUND_WHITE = (255, 255, 255)
 #: Floor for the drawn port marker, in screen pixels (spec 15: Edit mode -
@@ -57,15 +79,100 @@ PORT_COLORS = {
     "thruster_ports": (1, 255, 1),
     "collection_ports": (1, 1, 255),
 }
-DISPLAY_AREA = pygame.Rect(
-    0, 0, WINDOW_WIDTH - CONTROL_PANEL_WIDTH, WINDOW_HEIGHT
-)
+
+#: Control-panel group contents, in spec 15 order. Group 1 toggles the
+#: Edit mode; group 2's buttons stay inert until dev plan stages six
+#: through eight wire them up.
+EDIT_MODE_CHECKBOX_LABELS = {
+    "gun_ports": "Gun ports",
+    "thruster_ports": "Thruster ports",
+    "collection_ports": "Collection ports",
+}
+OPTION_BUTTON_LABELS = ("Reset", "Clear", "Save", "Exit")
+DEFAULT_EDIT_MODE = PORT_SECTIONS[0]
 
 # The loader decodes a sprite path into a pygame.Surface. Injectable so
 # tests never have to depend on real files on disk (spec 15: Script
 # structure), and so the loaded surface can drive both the display area
 # and the sidecar port bounds check.
 ImageLoader = Callable[[Path], pygame.Surface]
+
+
+@dataclass(frozen=True)
+class ToolLayout:
+    """Pixel-space rects for the three window regions at one specific
+    window size (spec 15: The main interface).
+
+    The ship display and control panel are computed in design space by
+    ``build_layout``; the ship display machinery (scaling, markers,
+    click mapping) then works purely in these pixel rects, honoring the
+    "actual pixel geometry of the scaled image rect" promise.
+    """
+
+    display_area: pygame.Rect
+    ship_fit_area: pygame.Rect
+    control_panel: pygame.Rect
+
+
+def build_layout(window_size: tuple[int, int]) -> ToolLayout:
+    """Convert the design-space window plan to pixel rects for one
+    window size (spec 15: The main interface; spec 04: Widget
+    coordinates).
+
+    The control panel hugs the right edge, and the ship display area is
+    "the entire portion of the window that is not consumed by the control
+    panel" - so at 1280x720 (scale 2/3) the display ends at x=1066 and
+    the 64-design-px ship margin lands at 42 screen px.
+    """
+    scale = Scale(*window_size)
+    return ToolLayout(
+        display_area=scale.rect(
+            0, 0, DISPLAY_WIDTH_DESIGN, game_constants.DESIGN_H
+        ),
+        ship_fit_area=scale.rect(
+            DISPLAY_MARGIN_DESIGN,
+            DISPLAY_MARGIN_DESIGN,
+            DISPLAY_WIDTH_DESIGN - 2 * DISPLAY_MARGIN_DESIGN,
+            game_constants.DESIGN_H - 2 * DISPLAY_MARGIN_DESIGN,
+        ),
+        control_panel=scale.rect(
+            PANEL_X_DESIGN, 0, PANEL_WIDTH_DESIGN, game_constants.DESIGN_H
+        ),
+    )
+
+
+def panel_widget_rects() -> list[pygame.Rect]:
+    """The nine control-panel widget rects in design space, back-to-front
+    (spec 15: The control panel layout).
+
+    Groups start at the top margin, each group fills the panel minus its
+    side margins (320 - 2*32 = 256, matching the fixed widget width),
+    with 12 design px between widgets and 48 design px between groups.
+    Order: "Edit mode" label, the three Edit mode checkboxes, "Options"
+    label, the four option buttons.
+    """
+    x = PANEL_X_DESIGN + PANEL_MARGIN_DESIGN
+    groups = (
+        ["Edit mode"] + [
+            EDIT_MODE_CHECKBOX_LABELS[section] for section in PORT_SECTIONS
+        ],
+        ["Options"] + list(OPTION_BUTTON_LABELS),
+    )
+    rects: list[pygame.Rect] = []
+    y = PANEL_MARGIN_DESIGN
+    for group in groups:
+        for index in range(len(group)):
+            rects.append(
+                pygame.Rect(
+                    x,
+                    y + index * (WIDGET_HEIGHT_DESIGN + WIDGET_SPACING_DESIGN),
+                    WIDGET_WIDTH_DESIGN,
+                    WIDGET_HEIGHT_DESIGN,
+                )
+            )
+        y += len(group) * WIDGET_HEIGHT_DESIGN + (len(group) - 1) * WIDGET_SPACING_DESIGN
+        y += GROUP_SPACING_DESIGN
+    return rects
 
 
 class SidecarReadError(Exception):
@@ -341,35 +448,50 @@ def _default_image_loader(sprite_path: Path) -> pygame.Surface:
 
 
 class ShipEditorApp:
-    """Stage three display state for the ship editor (spec 15: The main
+    """Display and control state for the ship editor (spec 15: The main
     interface).
 
-    Renders the input sprite scaled to fit the display area and overlays
-    one marker per sidecar port: one image-space pixel scaled to match the
-    ship's current scale, floored at 3 screen pixels (spec 15: Edit mode).
-    ``image_to_screen``/``screen_to_image`` are the single pair of
-    forward/inverse mapping helpers - both derived from the actual pixel
-    geometry of the scaled ship rect, so future click hit-testing (dev
-    plan stage five) and marker rendering can never drift apart.
-    Right-clicking inside the display area toggles the background between
-    black and white; right-clicking in the reserved control panel has no
-    effect.
+    Left of the control panel: renders the input sprite scaled to fit the
+    display area and overlays one marker per port - one image-space
+    pixel scaled to match the ship's current scale, floored at 3 screen
+    pixels (spec 15: Edit mode). ``image_to_screen``/``screen_to_image``
+    are the single pair of forward/inverse mapping helpers - both derived
+    from the actual pixel geometry of the scaled ship rect, so future
+    click hit-testing (dev plan stage five) and marker rendering can
+    never drift apart. Right-clicking inside the display area toggles the
+    background between black and white; right-clicking anywhere else
+    (including the control panel) has no effect.
+
+    Right of the divider: the fixed-theme control panel (spec 15: The
+    control panel) - header Labels, the three Edit mode Checkboxes, and
+    the four option Buttons, all 256x40 at a pinned 18pt. The Edit mode
+    checkboxes act as a radio group: exactly one is checked, matching
+    ``edit_mode`` (spec 15: Edit mode, amended 2026-10-25 - the checked
+    state alone carries the mode; the checkboxes are never selected).
+    The Buttons are deliberately unwired until dev plan stages six
+    through eight give them something to do.
     """
 
     def __init__(
         self,
         sprite_surface: pygame.Surface,
         ports: ShipPorts,
-        display_area: pygame.Rect = DISPLAY_AREA,
+        theme: Theme,
+        layout: ToolLayout,
     ) -> None:
-        if display_area.width <= 0 or display_area.height <= 0:
-            raise ValueError("display_area must be non-zero in both dimensions")
+        for name, rect in (
+            ("display_area", layout.display_area),
+            ("ship_fit_area", layout.ship_fit_area),
+            ("control_panel", layout.control_panel),
+        ):
+            if rect.width <= 0 or rect.height <= 0:
+                raise ValueError(f"layout.{name} must be non-zero in both dimensions")
         source_width, source_height = sprite_surface.get_size()
         if source_width <= 0 or source_height <= 0:
             raise ValueError("sprite_surface must be non-zero in both dimensions")
         self._sprite_surface = sprite_surface
         self._ports = ports
-        self._display_area = pygame.Rect(display_area)
+        self._layout = layout
         self._background_color = BACKGROUND_BLACK
         self._scaled_surface: pygame.Surface
         self._ship_rect: pygame.Rect
@@ -380,10 +502,32 @@ class ShipEditorApp:
         self._marker_size: int
         self._build_ship()
 
+        self._edit_mode = DEFAULT_EDIT_MODE
+        self._edit_checkboxes: dict[str, Checkbox] = {}
+        self.ui = UIManager(theme)
+        self._build_panel_widgets()
+
     @property
     def display_area(self) -> pygame.Rect:
-        """Rect of the ship display area, left of the reserved panel."""
-        return self._display_area
+        """Rect of the ship display area, left of the control panel."""
+        return self._layout.display_area
+
+    @property
+    def control_panel(self) -> pygame.Rect:
+        """Rect of the control panel, right of the ship display area."""
+        return self._layout.control_panel
+
+    @property
+    def edit_mode(self) -> str:
+        """The currently active port section (spec 15: Edit mode): one of
+        ``PORT_SECTIONS``. Left clicks (dev plan stage five) will add,
+        reassign, or clear ports of this type."""
+        return self._edit_mode
+
+    def edit_mode_checkbox(self, section: str) -> Checkbox:
+        """The Edit mode Checkbox for ``section`` (test seam and the
+        stage-five mirror of ``edit_mode``)."""
+        return self._edit_checkboxes[section]
 
     @property
     def background_color(self) -> tuple[int, int, int]:
@@ -449,7 +593,7 @@ class ShipEditorApp:
         Returns ``True`` when the background changed, ``False`` when the
         click was ignored.
         """
-        if not self._display_area.collidepoint(position):
+        if not self._layout.display_area.collidepoint(position):
             return False
         self._background_color = (
             BACKGROUND_WHITE
@@ -458,22 +602,102 @@ class ShipEditorApp:
         )
         return True
 
+    def update(self, events: list[pygame.event.Event]) -> None:
+        """Feed the frame's event batch to the panel widgets (spec 04:
+        Changes to game loop): hover flags, click handling, and hover
+        audio all live in the UIManager/Widget framework."""
+        self.ui.update(events)
+
     def draw(self, screen: pygame.Surface) -> None:
-        """Paint the current display state to ``screen``."""
+        """Paint the current display and control-panel state to
+        ``screen``."""
         screen.fill(self._background_color)
         screen.blit(self._scaled_surface, self._ship_rect)
         self._draw_port_markers(screen)
+        screen.fill(CONTROL_PANEL_COLOR, self._layout.control_panel)
+        self.ui.draw(screen)
 
     def screen_position_for_port(self, port: Port) -> tuple[int, int]:
         """Screen position of ``port``'s marker, clamped to the display area."""
         return self._port_marker_rect(port).topleft
 
+    def _build_panel_widgets(self) -> None:
+        """Instantiate the control panel's widgets (spec 15: The control
+        panel).
+
+        Rects come from ``panel_widget_rects`` in order: the two header
+        Labels (not opaque, selected, per the spec's group headers), the
+        three Edit mode Checkboxes (the active mode checked; never
+        selected, per spec 15 as amended 2026-10-25), and the four option
+        Buttons. All widgets pin the spec's 18pt point size.
+        """
+        rects = panel_widget_rects()
+        widgets: list[Widget] = []
+
+        header = self._make_header_label(rects[0], "Edit mode")
+        widgets.append(header)
+        for index, section in enumerate(PORT_SECTIONS, start=1):
+            checkbox = Checkbox(
+                rects[index],
+                text=EDIT_MODE_CHECKBOX_LABELS[section],
+                initially_checked=section == self._edit_mode,
+                on_click=self._make_mode_handler(section),
+            )
+            checkbox.set_font_point_size(WIDGET_FONT_POINT_SIZE)
+            self._edit_checkboxes[section] = checkbox
+            widgets.append(checkbox)
+
+        header = self._make_header_label(rects[4], "Options")
+        widgets.append(header)
+        for index, label_text in enumerate(OPTION_BUTTON_LABELS, start=5):
+            button = Button(rects[index], text=label_text)
+            # Stage four is render-only for option buttons: no on_click
+            # until "Reset"/"Clear" (six), "Save" (seven), and "Exit"
+            # (eight) land. The accept sound still fires on click -
+            # that is the widget's contract (spec 09), not a wiring bug.
+            button.set_font_point_size(WIDGET_FONT_POINT_SIZE)
+            widgets.append(button)
+
+        self.ui.widgets = widgets
+
+    def _make_header_label(self, rect: pygame.Rect, text: str) -> Label:
+        """One group header Label (spec 15: The control panel): selected
+        and not opaque."""
+        label = Label(rect, text=text)
+        label.set_opaque(False)
+        label.selected = True
+        label.set_font_point_size(WIDGET_FONT_POINT_SIZE)
+        return label
+
+    def _make_mode_handler(self, section: str) -> Callable[[], None]:
+        """Factory so each checkbox's callback captures its own section
+        instead of sharing the loop variable."""
+
+        def on_mode_click() -> None:
+            self._select_edit_mode(section)
+
+        return on_mode_click
+
+    def _select_edit_mode(self, section: str) -> None:
+        """Apply radio-group semantics (spec 15: Edit mode, amended
+        2026-10-25: checked state only, no selection involved).
+
+        A user click has already toggled the clicked checkbox's internal
+        boolean before this callback runs; forcing every checkbox's
+        checked state from ``edit_mode`` is what makes the group behave
+        like radios - re-clicking the active mode re-checks it and
+        changes nothing, and clicking another mode moves the check in
+        one shot.
+        """
+        self._edit_mode = section
+        for checkbox_section, checkbox in self._edit_checkboxes.items():
+            checkbox.set_checked(checkbox_section == section)
+
     def _build_ship(self) -> None:
         source_width, source_height = self._source_size
-        display_width, display_height = self._display_area.size
-
-        fit_width = max(display_width - 2 * DISPLAY_MARGIN, 1)
-        fit_height = max(display_height - 2 * DISPLAY_MARGIN, 1)
+        display_width, display_height = self._layout.display_area.size
+        fit_width = self._layout.ship_fit_area.width
+        fit_height = self._layout.ship_fit_area.height
 
         scale = min(fit_width / source_width, fit_height / source_height)
         scaled_width = max(1, min(fit_width, round(scale * source_width)))
@@ -482,8 +706,8 @@ class ShipEditorApp:
         self._scaled_surface = pygame.transform.scale(
             self._sprite_surface, (scaled_width, scaled_height)
         )
-        x = self._display_area.x + (display_width - scaled_width) // 2
-        y = self._display_area.y + (display_height - scaled_height) // 2
+        x = self._layout.display_area.x + (display_width - scaled_width) // 2
+        y = self._layout.display_area.y + (display_height - scaled_height) // 2
         self._ship_rect = pygame.Rect(x, y, scaled_width, scaled_height)
         self._scaled_size = (scaled_width, scaled_height)
 
@@ -499,9 +723,10 @@ class ShipEditorApp:
         )
 
     def _port_marker_rect(self, port: Port) -> pygame.Rect:
+        display_area = self._layout.display_area
         marker_x, marker_y = self.image_to_screen(port.x, port.y)
-        marker_x = max(self._display_area.x, min(marker_x, self._display_area.right - 1))
-        marker_y = max(self._display_area.y, min(marker_y, self._display_area.bottom - 1))
+        marker_x = max(display_area.x, min(marker_x, display_area.right - 1))
+        marker_y = max(display_area.y, min(marker_y, display_area.bottom - 1))
         return pygame.Rect(
             marker_x, marker_y, self._marker_size, self._marker_size
         )
@@ -590,18 +815,25 @@ def run(argv: list[str] | None = None, loader: ImageLoader | None = None) -> int
     if exit_code != 0 or surface is None:
         return exit_code
 
-    if _init_pygame() != 0:
+    resource_loader = _init_pygame()
+    if resource_loader is None:
         return 1
 
-    return _run_display(surface, ports)
+    # Spec 15: The control panel - the widgets use a fixed theme driven
+    # from the spec 04 default theme values (empty theme value), and the
+    # font is resolved through the tool's own ResourceLoader (spec 15:
+    # Open questions #2). The user's game.json is deliberately ignored.
+    theme = Theme("", "", resource_loader)
+    return _run_display(surface, ports, theme)
 
 
-def _init_pygame() -> int:
+def _init_pygame() -> ResourceLoader | None:
     """Initialize pygame, load resources/audio, and open the display window.
 
     Mirrors the game startup order (spec 03, as used by the main application)
-    so the tool never starts in an invalid state. Any failure logs a warning
-    and returns 1; the window is never opened.
+    so the tool never starts in an invalid state, and hands the loaded
+    ``ResourceLoader`` back for Theme construction. Any failure logs a
+    warning and returns ``None``; the window is never opened.
     """
     try:
         _, failures = pygame.init()
@@ -624,38 +856,44 @@ def _init_pygame() -> int:
 
         pygame.display.set_mode((WINDOW_WIDTH, WINDOW_HEIGHT))
         pygame.display.set_caption(WINDOW_TITLE)
-        return 0
+        return resource_loader
     except pygame.error as exc:
         logger.warning("Could not initialize pygame display: {}", exc)
         pygame.quit()
-        return 1
+        return None
     except ResourceError as exc:
         logger.warning("Could not initialize resources: {}", exc)
         pygame.quit()
-        return 1
+        return None
 
 
-def _run_display(surface: pygame.Surface, ports: ShipPorts) -> int:
-    """Open the stage three window and pump events until QUIT."""
+def _run_display(
+    surface: pygame.Surface, ports: ShipPorts, theme: Theme
+) -> int:
+    """Pump the tool's window events until QUIT (spec 15: The main
+    interface).
+
+    Fixed 60FPS via ``clock.tick(60)``, game-loop style: drain events,
+    dispatch right-clicks to the display area, feed the batch to the
+    panel widgets (``app.update``), render (``app.draw``), flip, tick.
+    ESC and F11 are deliberately not handled at all: per the spec they
+    "do nothing" in this tool, and an unhandled key is the purest
+    implementation of nothing.
+    """
     window_surface = pygame.display.get_surface()
     if window_surface is None:
         return 1
-    app = ShipEditorApp(surface, ports)
+    app = ShipEditorApp(surface, ports, theme, build_layout(window_surface.get_size()))
     clock = pygame.time.Clock()
 
     while True:
-        for event in pygame.event.get():
+        events = pygame.event.get()
+        for event in events:
             if event.type == pygame.QUIT:
                 return 0
             if event.type == pygame.MOUSEBUTTONDOWN and event.button == 3:
                 app.handle_right_click(event.pos)
-            if event.type == pygame.KEYDOWN and event.key in (
-                pygame.K_ESCAPE,
-                pygame.K_F11,
-            ):
-                # Stage three ignores these keys; the window is still active.
-                continue
-
+        app.update(events)
         app.draw(window_surface)
         pygame.display.flip()
         clock.tick(60)

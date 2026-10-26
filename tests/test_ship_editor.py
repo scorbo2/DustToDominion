@@ -31,14 +31,34 @@ and the stage three contract (spec 15: The main interface):
   success stdout message
 - a valid image with a valid sidecar prepares ports for display with no
   success stdout message
-- ``ShipEditorApp`` scales the sprite proportionally into the display area
-  with the 64px margin
+- ``build_layout`` converts the design-space window plan (spec 15: "all
+  dimensions other than the window dimensions are specified in design
+  space") to pixel rects for 1280x720 and 1920x1080 windows
+- ``ShipEditorApp`` scales the sprite proportionally into the ship fit
+  area (display area minus the 64 design-px margin)
 - right-clicking inside the display area toggles the background black
-  <-> white; right-clicking in the reserved control panel is ignored
+  <-> white; right-clicking on the control panel is ignored
 - sidecar ports are drawn as color-coded markers that scale with the
   image, floored at 3 screen pixels (spec 15: Edit mode)
 - ``image_to_screen``/``screen_to_image`` round-trip through the scaled
   ship rect's actual pixel geometry (spec 15: Pixel mapping)
+
+and the stage four contract (spec 15: The control panel, Edit mode):
+
+- ``panel_widget_rects`` lays out the two spec groups: fixed (256,40)
+  rects, 12 design-px inside-group gaps, 48 design-px between groups
+- the control panel paints solid dark gray (64,64,64) right of the ship
+  display area
+- "Gun ports" is the startup Edit mode: its checkbox is checked, the
+  other two are unchecked
+- clicking an Edit mode checkbox checks it and unchecks the other two;
+  re-clicking the active mode changes nothing
+- all three Edit mode checkboxes are never selected (spec 15 amendment
+  2026-10-25: the checked state alone carries the mode)
+- every Edit mode checkbox renders the normal background, and the
+  active one is distinguished only by its check mark
+- the option Buttons render but are inert (stage four is display-only
+  for them)
 
 Tests generate their own images under ``tmp_path``; nothing is ever read
 or written from the project's ``resources/`` directory (spec 15: Script
@@ -53,11 +73,14 @@ from pathlib import Path
 import pygame
 import pytest
 
+from dtd import game_constants
+from dtd.resource_loader import ResourceLoader
+from dtd.ui import Theme
 from ship_editor_lib import (
     BACKGROUND_BLACK,
     BACKGROUND_WHITE,
-    DISPLAY_AREA,
-    DISPLAY_MARGIN,
+    CONTROL_PANEL_COLOR,
+    DEFAULT_EDIT_MODE,
     InvalidSidecarJsonError,
     PORT_MARKER_SIZE,
     PORT_COLORS,
@@ -66,9 +89,12 @@ from ship_editor_lib import (
     SidecarReadError,
     ShipPorts,
     ShipEditorApp,
-    WINDOW_WIDTH,
+    ToolLayout,
     WINDOW_HEIGHT,
+    WINDOW_WIDTH,
+    build_layout,
     load_sidecar_ports,
+    panel_widget_rects,
     parse_sidecar,
     run,
 )
@@ -783,9 +809,10 @@ def test_prepare_injected_loader_size_drives_bounds_check(
     assert "Invalid Json:" in err
     assert "out of bounds" in err
 
-
 # ---------------------------------------------------------------------- #
-# stage three: ship display area
+# stage three: ship display area (design-space layout, spec 15: "The
+# main interface" - all dimensions except the window are spec 04 design
+# space, 1920x1080)
 # ---------------------------------------------------------------------- #
 
 
@@ -798,33 +825,107 @@ def _make_surface(
     return surface
 
 
+def _stub_theme() -> Theme:
+    """Fixed default-value theme (spec 15: The control panel): an empty
+    theme/font value resolves to spec 04's built-in defaults. The loader
+    resolves no font resources, so drawing uses the deterministic system
+    fallback (needs the ``font_ready`` fixture at draw time)."""
+    return Theme("", "", ResourceLoader())
+
+
+def _design_layout() -> ToolLayout:
+    """Window plan for a design-sized window: scale 1.0, so design
+    coordinates land 1:1 on the test screen."""
+    return build_layout((game_constants.DESIGN_W, game_constants.DESIGN_H))
+
+
+def _design_screen() -> pygame.Surface:
+    return pygame.Surface((game_constants.DESIGN_W, game_constants.DESIGN_H))
+
+
+def _make_app(
+    surface: pygame.Surface | None = None,
+    ports: ShipPorts | None = None,
+    layout: ToolLayout | None = None,
+) -> ShipEditorApp:
+    return ShipEditorApp(
+        surface if surface is not None else _make_surface((20, 10)),
+        ports if ports is not None else ShipPorts(),
+        _stub_theme(),
+        layout if layout is not None else _design_layout(),
+    )
+
+
+def test_build_layout_with_1280x720_window_should_convert_design_space_to_pixels() -> None:
+    # GIVEN the spec's fixed window size:
+    layout = build_layout((WINDOW_WIDTH, WINDOW_HEIGHT))
+
+    # THEN the 320-design-px control panel is flush right (214 pixels at
+    # scale 2/3), the display area fills the rest with no dead zone, and
+    # the fit area insets the 64-design-px margin (rounds to 42px):
+    assert layout.control_panel == pygame.Rect(1066, 0, 214, 720)
+    assert layout.display_area == pygame.Rect(0, 0, 1066, 720)
+    assert layout.ship_fit_area == pygame.Rect(42, 42, 982, 635)
+
+
+def test_build_layout_with_design_size_window_should_be_an_identity_conversion() -> None:
+    # GIVEN a window at exactly design size (scale 1.0):
+    layout = build_layout((game_constants.DESIGN_W, game_constants.DESIGN_H))
+
+    # THEN every rect is its design-space value, and the panel + display
+    # tile the window edge to edge:
+    assert layout.display_area == pygame.Rect(0, 0, 1600, 1080)
+    assert layout.ship_fit_area == pygame.Rect(64, 64, 1472, 952)
+    assert layout.control_panel == pygame.Rect(1600, 0, 320, 1080)
+    assert layout.display_area.right == layout.control_panel.x
+    assert layout.control_panel.right == game_constants.DESIGN_W
+
+
+def test_panel_widget_rects_should_stack_two_groups_with_the_spec_gaps() -> None:
+    # GIVEN the design-space panel layout:
+    rects = panel_widget_rects()
+
+    # THEN there are nine widgets (2 headers + 3 checkboxes + 4 buttons),
+    # all 256x40 (spec 15: "all widgets are 256x40"), 32 design-px inside
+    # the 320-px panel:
+    assert len(rects) == 9
+    assert all(rect.width == 256 and rect.height == 40 for rect in rects)
+    assert all(rect.x == 1632 for rect in rects)
+
+    # THEN the first group (header + three edit mode checkboxes) and the
+    # second group (header + four option buttons) stack with 12 design-px
+    # within-group gaps and a 48 design-px gap between groups:
+    assert [rect.y for rect in rects] == [32, 84, 136, 188, 276, 328, 380, 432, 484]
+
+
 def test_ship_editor_app_initial_background_is_black_and_scales_sprite(
-    pygame_ready: None,
+    pygame_ready: None, font_ready: None
 ) -> None:
     # GIVEN a small opaque sprite and an empty sidecar:
     surface = _make_surface((20, 10), (10, 20, 30))
-    app = ShipEditorApp(surface, ShipPorts())
-    screen = pygame.Surface((WINDOW_WIDTH, WINDOW_HEIGHT))
+    app = _make_app(surface)
+    screen = _design_screen()
 
     # WHEN drawn:
     app.draw(screen)
 
-    # THEN it starts black, uses the spec's display area, and scales the
-    # sprite proportionally into the 64px-margin fit area:
-    assert app.display_area == DISPLAY_AREA
+    # THEN it starts black, uses the design-space window plan, and scales
+    # the sprite proportionally into the 64-design-px-margin fit area:
+    assert app.display_area == pygame.Rect(0, 0, 1600, 1080)
+    assert app.control_panel == pygame.Rect(1600, 0, 320, 1080)
     assert app.background_color == BACKGROUND_BLACK
     assert app.source_size == (20, 10)
-    assert app.scaled_size == (832, 416)
-    assert app.ship_rect == pygame.Rect(64, 152, 832, 416)
+    assert app.scaled_size == (1472, 736)
+    assert app.ship_rect == pygame.Rect(64, 172, 1472, 736)
     assert screen.get_at(app.ship_rect.center) == (10, 20, 30, 255)
 
 
 def test_ship_editor_app_right_click_toggles_background_inside_display_area(
-    pygame_ready: None,
+    pygame_ready: None, font_ready: None
 ) -> None:
     # GIVEN a ship app on the default black background:
-    app = ShipEditorApp(_make_surface((10, 10)), ShipPorts())
-    screen = pygame.Surface((WINDOW_WIDTH, WINDOW_HEIGHT))
+    app = _make_app(_make_surface((10, 10)))
+    screen = _design_screen()
     app.draw(screen)
 
     # WHEN right-clicking inside the ship display area but outside the sprite:
@@ -843,30 +944,36 @@ def test_ship_editor_app_right_click_toggles_background_inside_display_area(
     assert app.background_color == BACKGROUND_BLACK
     assert screen.get_at((1, 1)) == BACKGROUND_BLACK + (255,)
 
-    # WHEN right-clicking in the reserved control panel:
-    assert app.handle_right_click((961, 300)) is False
-    assert app.handle_right_click((1279, 300)) is False
+    # WHEN right-clicking the display area's bottom-right corner pixel:
+    # THEN it still counts as the display area:
+    assert app.handle_right_click((1599, 1079)) is True
+
+    # WHEN right-clicking the control panel (its left edge and far right):
+    assert app.handle_right_click((1600, 300)) is False
+    assert app.handle_right_click((1919, 300)) is False
 
     # THEN the background is unchanged:
-    assert app.background_color == BACKGROUND_BLACK
+    assert app.background_color == BACKGROUND_WHITE
 
 
-def test_ship_editor_app_draws_sidecar_ports_as_colored_markers(pygame_ready: None) -> None:
+def test_ship_editor_app_draws_sidecar_ports_as_colored_markers(
+    pygame_ready: None, font_ready: None
+) -> None:
     # GIVEN a sprite with one port in each section (the 100x50 sprite in
-    # the 960x720 display area scales 8.32x, so markers scale past the
-    # 3px floor):
+    # the 1600x1080 design display area scales 14.72x, so markers scale
+    # past the 3px floor):
     surface = _make_surface((100, 50), (10, 20, 30))
     ports = ShipPorts()
     ports.add("gun_ports", 10, 10, 0)
     ports.add("thruster_ports", 90, 40, 1)
     ports.add("collection_ports", 50, 25, 0)
 
-    app = ShipEditorApp(surface, ports)
-    screen = pygame.Surface((WINDOW_WIDTH, WINDOW_HEIGHT))
+    app = _make_app(surface, ports)
+    screen = _design_screen()
     app.draw(screen)
 
-    # THEN the marker scales with the image (round(8.32) = 8 screen px):
-    assert app.marker_size == 8
+    # THEN the marker scales with the image (round(14.72) = 15 screen px):
+    assert app.marker_size == 15
 
     # THEN each port is visible at its scaled screen position, in the
     # section's spec color, across the whole scaled marker:
@@ -886,9 +993,19 @@ def test_ship_editor_app_draws_sidecar_ports_as_colored_markers(pygame_ready: No
         # The marker's top-left pixel should also be the section color:
         assert screen.get_at((x, y)) == (*expected_color, 255)
 
+    # THEN the anchors match the expected 14.72x mapping of the ship rect
+    # at (64, 172):
+    assert app.screen_position_for_port(ports.section_ports("gun_ports")[0]) == (211, 319)
+    assert app.screen_position_for_port(
+        ports.section_ports("thruster_ports")[0]
+    ) == (1389, 761)
+    assert app.screen_position_for_port(
+        ports.section_ports("collection_ports")[0]
+    ) == (800, 540)
+
 
 def test_prepare_valid_sidecar_ports_are_rendered(
-    pygame_ready: None, tmp_path: Path
+    pygame_ready: None, font_ready: None, tmp_path: Path
 ) -> None:
     # GIVEN a valid image and a valid sidecar with ports in all sections:
     sprite_path = tmp_path / "viper.png"
@@ -909,11 +1026,12 @@ def test_prepare_valid_sidecar_ports_are_rendered(
     # WHEN prepared and drawn:
     code, surface, ports = prepare([str(sprite_path)])
     assert code == 0
-    app = ShipEditorApp(surface, ports)
-    screen = pygame.Surface((WINDOW_WIDTH, WINDOW_HEIGHT))
+    app = _make_app(surface, ports)
+    screen = _design_screen()
     app.draw(screen)
 
-    # THEN each section's port is drawn at its scaled position:
+    # THEN each section's port is drawn at its scaled position (the 4x4
+    # sprite scales 238x into the design fit area, ship rect (324, 64)):
     for section, expected_color in (
         ("gun_ports", PORT_COLORS["gun_ports"]),
         ("thruster_ports", PORT_COLORS["thruster_ports"]),
@@ -925,23 +1043,23 @@ def test_prepare_valid_sidecar_ports_are_rendered(
 
 
 def test_ship_editor_app_scales_large_sprite_down(pygame_ready: None) -> None:
-    # GIVEN a sprite wider and taller than the display fit area:
+    # GIVEN a sprite wider and taller than the design display fit area:
     surface = _make_surface((1000, 800), (1, 2, 3))
-    app = ShipEditorApp(surface, ShipPorts())
+    app = _make_app(surface)
 
     # THEN it is scaled down proportionally and centered:
-    assert app.scaled_size == (740, 592)
-    assert app.ship_rect == pygame.Rect(110, 64, 740, 592)
+    assert app.scaled_size == (1190, 952)
+    assert app.ship_rect == pygame.Rect(205, 64, 1190, 952)
 
 
 def test_ship_editor_app_scales_tall_sprite_down(pygame_ready: None) -> None:
-    # GIVEN a sprite taller than the display fit area:
+    # GIVEN a sprite taller than the design display fit area:
     surface = _make_surface((800, 1000), (1, 2, 3))
-    app = ShipEditorApp(surface, ShipPorts())
+    app = _make_app(surface)
 
     # THEN it is scaled down proportionally and centered:
-    assert app.scaled_size == (474, 592)
-    assert app.ship_rect == pygame.Rect(243, 64, 474, 592)
+    assert app.scaled_size == (762, 952)
+    assert app.ship_rect == pygame.Rect(419, 64, 762, 952)
 
 
 # ---------------------------------------------------------------------- #
@@ -952,70 +1070,70 @@ def test_ship_editor_app_scales_tall_sprite_down(pygame_ready: None) -> None:
 
 
 def test_ship_editor_app_with_upscaled_sprite_scales_port_markers_with_the_image(
-    pygame_ready: None,
+    pygame_ready: None, font_ready: None
 ) -> None:
-    # GIVEN a tiny 10x10 sprite (upscaled 59.2x into the display area)
-    # with a single gun port at image location (5, 5):
+    # GIVEN a tiny 10x10 sprite (upscaled 95.2x into the design display
+    # area) with a single gun port at image location (5, 5):
     surface = _make_surface((10, 10), (10, 20, 30))
     ports = ShipPorts()
     ports.add("gun_ports", 5, 5, 0)
-    app = ShipEditorApp(surface, ports)
-    screen = pygame.Surface((WINDOW_WIDTH, WINDOW_HEIGHT))
+    app = _make_app(surface, ports)
+    screen = _design_screen()
     app.draw(screen)
 
     # THEN the marker scales with the image instead of staying at the
-    # 3px floor (round(59.2) = 59 screen pixels):
-    assert app.marker_size == 59
+    # 3px floor (round(95.2) = 95 screen pixels):
+    assert app.marker_size == 95
 
     # THEN the marker covers its full scaled extent, top-left anchored
     # at the mapped port location:
     marker_x, marker_y = app.screen_position_for_port(
         ports.section_ports("gun_ports")[0]
     )
-    assert (marker_x, marker_y) == (480, 360)
+    assert (marker_x, marker_y) == (800, 540)
     marker_color = PORT_COLORS["gun_ports"] + (255,)
     assert screen.get_at((marker_x, marker_y)) == marker_color
     assert screen.get_at((marker_x + 40, marker_y + 40)) == marker_color
-    assert screen.get_at((marker_x + 58, marker_y + 58)) == marker_color
+    assert screen.get_at((marker_x + 94, marker_y + 94)) == marker_color
 
     # THEN the pixel just past the marker's bottom-right corner is plain
     # sprite, proving the marker did not spill arbitrarily far:
-    assert screen.get_at((marker_x + 59, marker_y + 59)) == (10, 20, 30, 255)
+    assert screen.get_at((marker_x + 95, marker_y + 95)) == (10, 20, 30, 255)
 
 
 def test_ship_editor_app_with_downscaled_sprite_floors_port_marker_at_three_pixels(
-    pygame_ready: None,
+    pygame_ready: None, font_ready: None
 ) -> None:
-    # GIVEN a sprite that must scale down (0.74x) with a gun port at the
+    # GIVEN a sprite that must scale down (0.595x) with a gun port at the
     # image's top-left corner:
-    surface = _make_surface((1000, 800), (1, 2, 3))
+    surface = _make_surface((2000, 1600), (1, 2, 3))
     ports = ShipPorts()
     ports.add("gun_ports", 0, 0, 0)
-    app = ShipEditorApp(surface, ports)
-    screen = pygame.Surface((WINDOW_WIDTH, WINDOW_HEIGHT))
+    app = _make_app(surface, ports)
+    screen = _design_screen()
     app.draw(screen)
 
     # THEN the marker stays at the 3-screen-pixel floor:
     assert app.marker_size == PORT_MARKER_SIZE
 
     # THEN the drawn marker is exactly 3x3 at the mapped location
-    # (ship rect starts at (110, 64), so image (0, 0) anchors there):
+    # (ship rect starts at (205, 64), so image (0, 0) anchors there):
     marker_color = PORT_COLORS["gun_ports"] + (255,)
-    assert screen.get_at((112, 66)) == marker_color
-    assert screen.get_at((113, 67)) == (1, 2, 3, 255)
+    assert screen.get_at((207, 66)) == marker_color
+    assert screen.get_at((208, 67)) == (1, 2, 3, 255)
 
 
 def test_image_to_screen_and_screen_to_image_with_exact_scale_should_round_trip(
     pygame_ready: None,
 ) -> None:
-    # GIVEN a display area sized so a 20x10 sprite lands on an exact 6x
+    # GIVEN a window plan sized so a 20x10 sprite lands on an exact 6x
     # scale (fit area 120x60, ship rect centered at (64, 64)):
-    display_area = pygame.Rect(
-        0, 0, 2 * DISPLAY_MARGIN + 120, 2 * DISPLAY_MARGIN + 60
+    layout = ToolLayout(
+        display_area=pygame.Rect(0, 0, 248, 188),
+        ship_fit_area=pygame.Rect(64, 64, 120, 60),
+        control_panel=pygame.Rect(192, 0, 56, 188),
     )
-    app = ShipEditorApp(
-        _make_surface((20, 10)), ShipPorts(), display_area
-    )
+    app = _make_app(_make_surface((20, 10)), layout=layout)
     assert app.ship_rect == pygame.Rect(64, 64, 120, 60)
     assert app.marker_size == 6
 
@@ -1041,12 +1159,12 @@ def test_screen_to_image_with_click_in_the_margin_should_map_outside_the_image(
     # GIVEN the same exactly-6x setup, and a click in the margin far
     # from the ship (spec 15: such clicks are no-ops, decided by the
     # caller - the mapping itself stays a pure geometric transform):
-    display_area = pygame.Rect(
-        0, 0, 2 * DISPLAY_MARGIN + 120, 2 * DISPLAY_MARGIN + 60
+    layout = ToolLayout(
+        display_area=pygame.Rect(0, 0, 248, 188),
+        ship_fit_area=pygame.Rect(64, 64, 120, 60),
+        control_panel=pygame.Rect(192, 0, 56, 188),
     )
-    app = ShipEditorApp(
-        _make_surface((20, 10)), ShipPorts(), display_area
-    )
+    app = _make_app(_make_surface((20, 10)), layout=layout)
 
     # THEN the mapped image location falls outside the image bounds:
     image_x, image_y = app.screen_to_image(0, 0)
@@ -1059,11 +1177,207 @@ def test_ship_editor_app_with_zero_size_sprite_should_raise_value_error() -> Non
     # GIVEN a zero-width sprite (constructible in pygame, and reachable
     # through an injected loader):
     with pytest.raises(ValueError, match="sprite_surface"):
-        ShipEditorApp(_make_surface((0, 10)), ShipPorts())
+        _make_app(_make_surface((0, 10)))
 
 
-def test_ship_editor_app_rejects_zero_display_area() -> None:
-    # GIVEN a zero-sized display area:
+def test_ship_editor_app_rejects_zero_sized_layout_rect() -> None:
+    # GIVEN a window plan with a zero-sized display area:
+    layout = ToolLayout(
+        display_area=pygame.Rect(0, 0, 0, 0),
+        ship_fit_area=pygame.Rect(10, 10, 120, 100),
+        control_panel=pygame.Rect(200, 0, 100, 100),
+    )
     with pytest.raises(ValueError, match="display_area"):
-        ShipEditorApp(_make_surface((10, 10)), ShipPorts(), pygame.Rect(0, 0, 0, 0))
+        _make_app(_make_surface((10, 10)), layout=layout)
 
+
+# ---------------------------------------------------------------------- #
+# stage four: control panel widgets + Edit mode radio checkboxes
+# (spec 15: The control panel, Edit mode)
+# ---------------------------------------------------------------------- #
+
+
+def _left_click_events(pos: tuple[int, int]) -> list[pygame.event.Event]:
+    """One full left-button click (press + release at ``pos``) as the
+    UIManager would see it in a single frame's event batch."""
+    return [
+        pygame.event.Event(pygame.MOUSEBUTTONDOWN, {"button": 1, "pos": pos}),
+        pygame.event.Event(pygame.MOUSEBUTTONUP, {"button": 1, "pos": pos}),
+    ]
+
+
+def test_ship_editor_app_startup_should_have_gun_ports_as_the_checked_edit_mode(
+    pygame_ready: None,
+) -> None:
+    # GIVEN a freshly constructed app:
+    app = _make_app()
+
+    # THEN the spec's startup edit mode is "gun ports":
+    assert app.edit_mode == "gun_ports"
+    assert DEFAULT_EDIT_MODE == "gun_ports"
+
+    # THEN its checkbox is checked, the other two are unchecked, and no
+    # checkbox is ever selected (spec 15, amended 2026-10-25):
+    for section in ("gun_ports", "thruster_ports", "collection_ports"):
+        checkbox = app.edit_mode_checkbox(section)
+        assert checkbox.is_checked() is (section == "gun_ports")
+        assert checkbox.selected is False
+
+
+@pytest.mark.parametrize(
+    "section", ["thruster_ports", "collection_ports"]
+)
+def test_clicking_an_edit_mode_checkbox_should_move_the_check_and_nothing_else(
+    pygame_ready: None, silent_audio_manager: None, section: str
+) -> None:
+    # GIVEN a fresh app on the startup "gun ports" mode:
+    app = _make_app()
+
+    # WHEN the user left-clicks the checkbox for another section:
+    clicked = app.edit_mode_checkbox(section)
+    app.update(_left_click_events(clicked.rect.center))
+
+    # THEN the clicked section becomes the edit mode, with its checkbox
+    # checked and the other two unchecked (spec 15: the three checkboxes
+    # "switch the edit mode"; amendment 2026-10-25: no selection
+    # involved):
+    assert app.edit_mode == section
+    for other in ("gun_ports", "thruster_ports", "collection_ports"):
+        checkbox = app.edit_mode_checkbox(other)
+        assert checkbox.is_checked() is (other == section)
+        assert checkbox.selected is False
+
+
+def test_reclicking_the_active_edit_mode_checkbox_should_change_nothing(
+    pygame_ready: None, silent_audio_manager: None
+) -> None:
+    # GIVEN a fresh app on the startup "gun ports" mode:
+    app = _make_app()
+
+    # WHEN the user clicks the already-active mode's checkbox (the
+    # Checkbox contract toggles first, so the radio handler must
+    # re-check it to keep exactly one mode active):
+    gun = app.edit_mode_checkbox("gun_ports")
+    app.update(_left_click_events(gun.rect.center))
+
+    # THEN the edit mode and all checkbox states are unchanged:
+    assert app.edit_mode == "gun_ports"
+    for section in ("gun_ports", "thruster_ports", "collection_ports"):
+        checkbox = app.edit_mode_checkbox(section)
+        assert checkbox.is_checked() is (section == "gun_ports")
+        assert checkbox.selected is False
+
+
+def test_clicking_edit_mode_checkboxes_in_sequence_should_follow_the_last_click(
+    pygame_ready: None, silent_audio_manager: None
+) -> None:
+    # GIVEN a fresh app on the startup "gun ports" mode:
+    app = _make_app()
+
+    # WHEN the user clicks through the three modes over successive frames:
+    for section in ("thruster_ports", "collection_ports", "gun_ports"):
+        # THEN each click moves the check to the clicked mode and
+        # nowhere else, with no checkbox ever selected:
+        clicked = app.edit_mode_checkbox(section)
+        app.update(_left_click_events(clicked.rect.center))
+        assert app.edit_mode == section
+        assert clicked.is_checked() is True
+        for other in ("gun_ports", "thruster_ports", "collection_ports"):
+            checkbox = app.edit_mode_checkbox(other)
+            assert checkbox.is_checked() is (other == section)
+            assert checkbox.selected is False
+
+
+def test_ship_editor_app_draw_should_paint_a_dark_gray_panel_right_of_the_display_area(
+    pygame_ready: None, font_ready: None
+) -> None:
+    # GIVEN a drawn app on the default black background:
+    app = _make_app()
+    screen = _design_screen()
+    app.draw(screen)
+
+    # THEN the control panel area is solid dark gray (spec 15: "solid
+    # dark gray (64, 64, 64)"), even at its far corner:
+    panel_gray = CONTROL_PANEL_COLOR + (255,)
+    assert screen.get_at((1600, 1000)) == panel_gray
+    assert screen.get_at((1919, 1079)) == panel_gray
+
+    # THEN the display area side keeps the background color:
+    assert screen.get_at((1599, 1000)) == BACKGROUND_BLACK + (255,)
+
+    # WHEN the background is toggled white and redrawn:
+    app.handle_right_click((1, 1))
+    app.draw(screen)
+
+    # THEN only the display area side changes; the panel stays gray:
+    assert screen.get_at((1599, 1000)) == BACKGROUND_WHITE + (255,)
+    assert screen.get_at((1600, 1000)) == panel_gray
+
+
+def test_ship_editor_app_draw_should_carry_the_edit_mode_in_checkmarks_not_selection(
+    pygame_ready: None, font_ready: None
+) -> None:
+    # GIVEN a drawn app on the startup "gun ports" mode:
+    app = _make_app()
+    screen = _design_screen()
+    app.draw(screen)
+
+    # THEN every Edit mode checkbox paints the default theme's *normal*
+    # background - none is selected (spec 15, amended 2026-10-25) -
+    # sampled at each rect's right edge, clear of any text or box:
+    normal_background = (0x11, 0x11, 0xFF, 255)
+    for row_y in (104, 156, 208):
+        assert screen.get_at((1886, row_y)) == normal_background
+
+    # THEN the active ("gun ports", first row) checkbox shows its check
+    # mark: the leftmost ink in every row is its checkbox box (same
+    # size and offset for all three, they share font and rect width),
+    # and the checked row's box window differs from the identical
+    # unchecked boxes below it - an X over the box, and nothing else
+    # distinguishes the rows:
+    def row_ink_x_range(row_y: int) -> tuple[int, int]:
+        ink = [
+            x
+            for x in range(1632, 1888)
+            if screen.get_at((x, row_y)) != normal_background
+        ]
+        assert ink, f"row at y={row_y} rendered no content at all"
+        return (ink[0], ink[-1])
+
+    def box_window(row_y: int) -> list[tuple[int, int, int, int]]:
+        # The box is a square starting at the row's leftmost ink; the
+        # text only begins one box-gap further right, so a 12px window
+        # from the box's left edge sees box + check mark, never text.
+        left, _ = row_ink_x_range(row_y)
+        return [screen.get_at((x, row_y)) for x in range(left, left + 12)]
+
+    assert box_window(104) != box_window(156)
+    assert box_window(104) != box_window(208)
+    assert box_window(156) == box_window(208)
+
+    # THEN the (unwired, never-selected) option buttons also paint the
+    # normal background:
+    assert screen.get_at((1886, 504)) == normal_background
+
+
+def test_group_header_labels_should_be_transparent_with_visible_text_ink(
+    pygame_ready: None, font_ready: None
+) -> None:
+    # GIVEN a drawn app:
+    app = _make_app()
+    screen = _design_screen()
+    app.draw(screen)
+
+    # THEN the "Edit mode" header does not paint its own background
+    # (spec 15: headers are drawn with the selected style but not
+    # opaque), so the panel gray shows through the right of its rect:
+    panel_gray = CONTROL_PANEL_COLOR + (255,)
+    assert screen.get_at((1886, 68)) == panel_gray
+
+    # THEN some text ink is present inside the header's left half:
+    ink = any(
+        screen.get_at((x, y)) != panel_gray
+        for x in range(1632, 1760)
+        for y in range(34, 70)
+    )
+    assert ink, "the 'Edit mode' header rendered no text at all"

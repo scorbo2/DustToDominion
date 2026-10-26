@@ -155,12 +155,15 @@ Group 2:
 
 The default edit mode is "Gun ports". The user can change the edit mode
 by checking any of the three checkboxes in the "Edit mode" group. The current
-edit mode is shown by checking and selecting the corresponding Checkbox. For example,
-on startup, the "Gun ports" checkbox should be checked and selected, and the other two
-edit mode checkboxes should be unchecked and unselected. Clicking any Edit mode checkbox
-will cause that checkbox to become checked and selected if it wasn't already, and will
-uncheck and unselect the other two Edit mode checkboxes. This gives the user a visual
-indication of which mode is active.
+edit mode is shown by the checked state of the corresponding Checkbox. For example,
+on startup, the "Gun ports" checkbox should be checked, and the other two
+edit mode checkboxes should be unchecked. Clicking any Edit mode checkbox
+will cause that checkbox to become checked if it wasn't already, and will
+uncheck the other two Edit mode checkboxes. This gives the user a visual
+indication of which mode is active. The Edit mode checkboxes are never
+selected - the `selected` property stays at its Checkbox default for all
+three, and the checked state alone carries the mode. (Only the group header
+Labels use the selected style.)
 
 Left-clicking anywhere in the ship display area adds or removes a port
 of the type described by the active edit mode. This draws a single pixel (in image space) marker,
@@ -428,13 +431,23 @@ drivable from tests without entering the 60FPS loop.
   so that the "Gun ports" checkbox is checked/selected at startup, and the user can click
   any of the three Edit mode checkboxes to change the current Edit mode. No control
   actually works at this stage - rendering only.
-5. Implement left-clicking in the ship display area to handle creation, reassignment,
+  **Completed 2026-10-25** (full suite green at 1264 tests. Note: the panel/display
+  geometry from stage 3 was converted from hardcoded pixels to spec 04 design space,
+  as the main interface section requires; `build_layout` now handles the one
+  pixel-space value, the window size.)
+5. Amendment 2026-10-25: drop the `selected` half of the Edit mode checkbox
+  indication. The checked state alone shows the current edit mode, and all
+  three Edit mode checkboxes stay unselected (the Checkbox widget default).
+  Group header Labels are unaffected and remain selected. Code and test
+  changes live in `ShipEditorApp` (tool) and its test module.
+  **Completed 2026-10-25** (full suite green at 1264 tests.)
+6. Implement left-clicking in the ship display area to handle creation, reassignment,
   or clearing of ports of the current Edit mode type. There are no other controls
   at this stage, and no way to save changes.
-6. Implement "Reset" and "Clear" options.
-7. Implement "Save" option and verify that the generated/merged Json is correct.
-8. Implement "Exit". There is no "unsaved changes" confirmation prompt - just exit.
-9. Verification pass: do all tests pass? Are all acceptance criteria met?
+7. Implement "Reset" and "Clear" options.
+8. Implement "Save" option and verify that the generated/merged Json is correct.
+9. Implement "Exit". There is no "unsaved changes" confirmation prompt - just exit.
+10. Verification pass: do all tests pass? Are all acceptance criteria met?
   Edit this document to change all "proposes" prose to "describes" to reflect
   reality. Flip this document to "active" status.
 
