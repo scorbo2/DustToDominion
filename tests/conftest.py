@@ -233,6 +233,21 @@ def font_ready() -> None:
         pygame.font.init()
 
 
+@pytest.fixture
+def pygame_ready() -> None:
+    """Ensure the pygame display subsystem is initialised (spec 15: The main
+    interface - the ship display area).
+
+    Mirrors ``mixer_ready`` and ``font_ready``. Tests that build
+    ``ShipEditorApp`` objects or exercise display-related geometry need the
+    display module up before ``pygame.transform`` / drawing code runs.
+    Cleanup is handled by the autouse ``clean_pygame_state`` fixture, so this
+    fixture never quits.
+    """
+    if not pygame.display.get_init():
+        pygame.display.init()
+
+
 #: Brightest glyph coverage the ``low_coverage_rasterizer`` fixture allows.
 #: On the issue #34 Windows machine the brightest anti-aliased title pixel
 #: was (222, 33, 0) over a pure background - a coverage of 222/255 - so no

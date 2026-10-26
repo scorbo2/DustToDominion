@@ -1,4 +1,4 @@
-"""Ship editor tool tests (spec 15, Dev plan stages one and two).
+"""Ship editor tool tests (spec 15, Dev plan stages one, two, and three).
 
 Covers the stage one contract:
 
@@ -25,6 +25,18 @@ validation):
 - read and validation failures raise ``SidecarReadError`` /
   ``InvalidSidecarJsonError`` with the spec's messages and codes
 
+and the stage three contract (spec 15: The main interface):
+
+- a valid image with no sidecar prepares an empty-ports display with no
+  success stdout message
+- a valid image with a valid sidecar prepares ports for display with no
+  success stdout message
+- ``ShipEditorApp`` scales the sprite proportionally into the display area
+  with the 64px margin
+- right-clicking inside the display area toggles the background black
+  <-> white; right-clicking in the reserved control panel is ignored
+- sidecar ports are drawn as fixed-size color-coded markers
+
 Tests generate their own images under ``tmp_path``; nothing is ever read
 or written from the project's ``resources/`` directory (spec 15: Script
 structure).
@@ -39,10 +51,19 @@ import pygame
 import pytest
 
 from ship_editor_lib import (
+    BACKGROUND_BLACK,
+    BACKGROUND_WHITE,
+    DISPLAY_AREA,
     InvalidSidecarJsonError,
+    PORT_MARKER_SIZE,
+    PORT_COLORS,
     Port,
+    prepare,
     SidecarReadError,
     ShipPorts,
+    ShipEditorApp,
+    WINDOW_WIDTH,
+    WINDOW_HEIGHT,
     load_sidecar_ports,
     parse_sidecar,
     run,
@@ -221,24 +242,30 @@ def test_run_corrupt_image_should_exit_code_1(tmp_path: Path, capsys: pytest.Cap
         (".JPEG", _write_jpg),
     ],
 )
-def test_run_valid_image_no_sidecar_should_print_all_good_and_exit_code_0(
+def test_prepare_valid_image_no_sidecar_should_return_zero_and_empty_ports(
     tmp_path: Path, capsys: pytest.Capsys, extension: str, writer
 ) -> None:
     # GIVEN a valid image with an accepted extension (case-insensitive)
-    # and no sidecar file:
+    # and no sidecar file (spec 15: The main interface - no sidecar means
+    # "load and display the ship with no ports"):
     sprite_path = tmp_path / f"ship{extension}"
     writer(sprite_path)
 
-    # WHEN we run the tool with that single argument:
-    code = run([str(sprite_path)])
+    # WHEN we prepare the tool with that single argument:
+    code, surface, ports = prepare([str(sprite_path)])
 
-    # THEN it prints "All good" (no sidecar - stage 15: Load on
-    # startup message unchanged) to stdout and exits 0:
+    # THEN it succeeds, returns a displayable surface and empty ports, and
+    # stage three removes the old success stdout message:
     assert code == 0
-    assert capsys.readouterr().out == "All good\n"
+    assert surface is not None
+    assert ports is not None
+    assert capsys.readouterr().out == ""
+    assert ports.section_ports("gun_ports") == []
+    assert ports.section_ports("thruster_ports") == []
+    assert ports.section_ports("collection_ports") == []
 
 
-def test_run_valid_image_with_valid_sidecar_should_report_json_also_good(
+def test_prepare_valid_image_with_valid_sidecar_should_return_ports_and_no_success_stdout(
     tmp_path: Path, capsys: pytest.Capsys
 ) -> None:
     # GIVEN a valid image with a valid sidecar describing ports
@@ -258,16 +285,21 @@ def test_run_valid_image_with_valid_sidecar_should_report_json_also_good(
         ),
     )
 
-    # WHEN we run the tool:
-    code = run([str(sprite_path)])
+    # WHEN we prepare the tool:
+    code, surface, ports = prepare([str(sprite_path)])
 
-    # THEN it reports the extended success message and exits 0
-    # (spec 15, Dev plan stage two):
+    # THEN it succeeds with ports loaded, no success stdout (stage three
+    # removed the old "All good" message), and the loader saw the file:
     assert code == 0
-    assert capsys.readouterr().out == "All good, and the Json is also good\n"
+    assert surface is not None
+    assert ports is not None
+    assert capsys.readouterr().out == ""
+    assert ports.section_ports("gun_ports") == [Port(x=1, y=1, level=0)]
+    assert ports.section_ports("thruster_ports") == [Port(x=2, y=2, level=1)]
+    assert ports.section_ports("collection_ports") == []
 
 
-def test_run_valid_image_with_sidecar_missing_name_mass_level_should_warn_and_exit_code_0(
+def test_prepare_valid_image_with_sidecar_missing_name_mass_level_should_warn_and_no_success_stdout(
     tmp_path: Path, capsys: pytest.Capsys
 ) -> None:
     # GIVEN a valid image and a sidecar with no name, no mass, and a
@@ -280,16 +312,19 @@ def test_run_valid_image_with_sidecar_missing_name_mass_level_should_warn_and_ex
         json.dumps({"gun_ports": [{"x": 1, "y": 1}]}),
     )
 
-    # WHEN we run the tool:
-    code = run([str(sprite_path)])
+    # WHEN we prepare the tool:
+    code, surface, ports = prepare([str(sprite_path)])
 
-    # THEN it still succeeds, with the three warnings on stderr:
+    # THEN it still succeeds, with the three warnings on stderr and no
+    # stage-one success message on stdout:
     assert code == 0
+    assert surface is not None
     result = capsys.readouterr()
-    assert result.out == "All good, and the Json is also good\n"
+    assert result.out == ""
     assert "Warning: ship has no name!" in result.err
     assert "Warning: ship has no mass!" in result.err
     assert "Warning: port has no level!" in result.err
+    assert ports.section_ports("gun_ports") == [Port(x=1, y=1, level=0)]
 
 
 # ---------------------------------------------------------------------- #
@@ -297,7 +332,7 @@ def test_run_valid_image_with_sidecar_missing_name_mass_level_should_warn_and_ex
 # ---------------------------------------------------------------------- #
 
 
-def test_run_valid_image_with_malformed_sidecar_should_exit_code_1(
+def test_prepare_valid_image_with_malformed_sidecar_should_exit_code_1(
     tmp_path: Path, capsys: pytest.Capsys
 ) -> None:
     # GIVEN a valid image with a sidecar containing unparseable Json:
@@ -305,12 +340,14 @@ def test_run_valid_image_with_malformed_sidecar_should_exit_code_1(
     _write_png(sprite_path)
     _write_sidecar_json(_sidecar_path(sprite_path), "{ not valid json at all\n")
 
-    # WHEN we run the tool:
-    code = run([str(sprite_path)])
+    # WHEN we prepare the tool:
+    code, surface, ports = prepare([str(sprite_path)])
 
     # THEN the exit code is 1 and stderr carries the spec's exact
     # message with the full sidecar path (spec 15: Load on startup):
     assert code == 1
+    assert surface is None
+    assert ports is None
     err = capsys.readouterr().err
     assert f"Can't read Json file {_sidecar_path(sprite_path)}" in err
 
@@ -319,7 +356,7 @@ def test_run_valid_image_with_malformed_sidecar_should_exit_code_1(
     not hasattr(os, "geteuid") or os.geteuid() == 0,
     reason="permission tests are meaningless when running as root (Unix) or on Windows",
 )
-def test_run_valid_image_with_unreadable_sidecar_should_exit_code_1(
+def test_prepare_valid_image_with_unreadable_sidecar_should_exit_code_1(
     tmp_path: Path, capsys: pytest.Capsys
 ) -> None:
     # GIVEN a valid image and a sidecar the current user cannot read:
@@ -328,11 +365,13 @@ def test_run_valid_image_with_unreadable_sidecar_should_exit_code_1(
     _write_sidecar_json(_sidecar_path(sprite_path), "{}")
     _sidecar_path(sprite_path).chmod(0)
 
-    # WHEN we run the tool:
-    code = run([str(sprite_path)])
+    # WHEN we prepare the tool:
+    code, surface, ports = prepare([str(sprite_path)])
 
     # THEN the exit code is 1 and stderr carries the spec's message:
     assert code == 1
+    assert surface is None
+    assert ports is None
     err = capsys.readouterr().err
     assert f"Can't read Json file {_sidecar_path(sprite_path)}" in err
 
@@ -383,7 +422,7 @@ _INVALID_SIDECAR_CASES = pytest.mark.parametrize(
 )
 
 @_INVALID_SIDECAR_CASES
-def test_run_valid_image_with_invalid_sidecar_should_exit_code_2(
+def test_prepare_valid_image_with_invalid_sidecar_should_exit_code_2(
     tmp_path: Path, capsys: pytest.Capsys, sidecar_json: str, expect: str
 ) -> None:
     # GIVEN a valid 4x4 image and a sidecar with one of the spec's
@@ -392,13 +431,15 @@ def test_run_valid_image_with_invalid_sidecar_should_exit_code_2(
     _write_png(sprite_path)
     _write_sidecar_json(_sidecar_path(sprite_path), sidecar_json)
 
-    # WHEN we run the tool:
-    code = run([str(sprite_path)])
+    # WHEN we prepare the tool:
+    code, surface, ports = prepare([str(sprite_path)])
 
     # THEN the exit code is 2 and the validation message is on stderr
     # (spec 15: "Invalid Json:" message supplied by the validation
     # code):
     assert code == 2
+    assert surface is None
+    assert ports is None
     err = capsys.readouterr().err
     assert f"Invalid Json: {expect}" in err
 
@@ -673,7 +714,7 @@ def test_load_sidecar_ports_malformed_json_raises_read_error(tmp_path: Path) -> 
 # ---------------------------------------------------------------------- #
 
 
-def test_run_uses_injected_loader_when_supplied(tmp_path: Path) -> None:
+def test_prepare_uses_injected_loader_when_supplied(tmp_path: Path) -> None:
     # GIVEN a valid image and a fake loader that records its input:
     sprite_path = tmp_path / "ship.png"
     _write_png(sprite_path)
@@ -683,16 +724,18 @@ def test_run_uses_injected_loader_when_supplied(tmp_path: Path) -> None:
         loaded_paths.append(path)
         return pygame.Surface((2, 2))
 
-    # WHEN we run the tool with the fake loader injected:
-    code = run([str(sprite_path)], loader=fake_loader)
+    # WHEN we prepare the tool with the fake loader injected:
+    code, surface, ports = prepare([str(sprite_path)], loader=fake_loader)
 
     # THEN the tool succeeds and the injected loader was the one used
     # for the sprite:
     assert code == 0
+    assert surface is not None
+    assert ports is not None
     assert loaded_paths == [sprite_path]
 
 
-def test_run_injected_loader_failure_should_exit_code_1(
+def test_prepare_injected_loader_failure_should_exit_code_1(
     tmp_path: Path, capsys: pytest.Capsys
 ) -> None:
     # GIVEN a valid image path and a loader that fails to decode:
@@ -702,16 +745,18 @@ def test_run_injected_loader_failure_should_exit_code_1(
     def failing_loader(path: Path) -> pygame.Surface:
         raise pygame.error("fake decode failure")
 
-    # WHEN we run the tool with that loader:
-    code = run([str(sprite_path)], loader=failing_loader)
+    # WHEN we prepare the tool with that loader:
+    code, surface, ports = prepare([str(sprite_path)], loader=failing_loader)
 
     # THEN the loader failure surfaces as the standard code 1 path:
     assert code == 1
+    assert surface is None
+    assert ports is None
     err = capsys.readouterr().err
     assert str(sprite_path) in err
 
 
-def test_run_injected_loader_size_drives_bounds_check(
+def test_prepare_injected_loader_size_drives_bounds_check(
     tmp_path: Path, capsys: pytest.Capsys
 ) -> None:
     # GIVEN an injected loader reporting a 2x2 surface and a sidecar
@@ -720,13 +765,178 @@ def test_run_injected_loader_size_drives_bounds_check(
     _write_png(sprite_path)
     _write_sidecar_json(_sidecar_path(sprite_path), '{"gun_ports": [{"x": 5, "y": 0}]}')
 
-    # WHEN we run the tool:
-    code = run([str(sprite_path)], loader=lambda path: pygame.Surface((2, 2)))
+    # WHEN we prepare the tool:
+    code, surface, ports = prepare(
+        [str(sprite_path)], loader=lambda path: pygame.Surface((2, 2))
+    )
 
     # THEN the out-of-bounds check uses the loader's image size, not
     # the file's (spec 15: out-of-bounds "for the input image"):
     assert code == 2
+    assert surface is None
+    assert ports is None
     err = capsys.readouterr().err
     assert "Invalid Json:" in err
     assert "out of bounds" in err
+
+
+# ---------------------------------------------------------------------- #
+# stage three: ship display area
+# ---------------------------------------------------------------------- #
+
+
+def _make_surface(
+    size: tuple[int, int] = (20, 10),
+    color: tuple[int, int, int] = (10, 20, 30),
+) -> pygame.Surface:
+    surface = pygame.Surface(size)
+    surface.fill(color)
+    return surface
+
+
+def test_ship_editor_app_initial_background_is_black_and_scales_sprite(
+    pygame_ready: None,
+) -> None:
+    # GIVEN a small opaque sprite and an empty sidecar:
+    surface = _make_surface((20, 10), (10, 20, 30))
+    app = ShipEditorApp(surface, ShipPorts())
+    screen = pygame.Surface((WINDOW_WIDTH, WINDOW_HEIGHT))
+
+    # WHEN drawn:
+    app.draw(screen)
+
+    # THEN it starts black, uses the spec's display area, and scales the
+    # sprite proportionally into the 64px-margin fit area:
+    assert app.display_area == DISPLAY_AREA
+    assert app.background_color == BACKGROUND_BLACK
+    assert app.source_size == (20, 10)
+    assert app.scaled_size == (832, 416)
+    assert app.ship_rect == pygame.Rect(64, 152, 832, 416)
+    assert screen.get_at(app.ship_rect.center) == (10, 20, 30, 255)
+
+
+def test_ship_editor_app_right_click_toggles_background_inside_display_area(
+    pygame_ready: None,
+) -> None:
+    # GIVEN a ship app on the default black background:
+    app = ShipEditorApp(_make_surface((10, 10)), ShipPorts())
+    screen = pygame.Surface((WINDOW_WIDTH, WINDOW_HEIGHT))
+    app.draw(screen)
+
+    # WHEN right-clicking inside the ship display area but outside the sprite:
+    assert app.handle_right_click((1, 1)) is True
+    app.draw(screen)
+
+    # THEN the background becomes white:
+    assert app.background_color == BACKGROUND_WHITE
+    assert screen.get_at((1, 1)) == BACKGROUND_WHITE + (255,)
+
+    # WHEN right-clicking again:
+    assert app.handle_right_click((1, 1)) is True
+    app.draw(screen)
+
+    # THEN it returns to black:
+    assert app.background_color == BACKGROUND_BLACK
+    assert screen.get_at((1, 1)) == BACKGROUND_BLACK + (255,)
+
+    # WHEN right-clicking in the reserved control panel:
+    assert app.handle_right_click((961, 300)) is False
+    assert app.handle_right_click((1279, 300)) is False
+
+    # THEN the background is unchanged:
+    assert app.background_color == BACKGROUND_BLACK
+
+
+def test_ship_editor_app_draws_sidecar_ports_as_colored_markers(pygame_ready: None) -> None:
+    # GIVEN a sprite with one port in each section:
+    surface = _make_surface((100, 50), (10, 20, 30))
+    ports = ShipPorts()
+    ports.add("gun_ports", 10, 10, 0)
+    ports.add("thruster_ports", 90, 40, 1)
+    ports.add("collection_ports", 50, 25, 0)
+
+    app = ShipEditorApp(surface, ports)
+    screen = pygame.Surface((WINDOW_WIDTH, WINDOW_HEIGHT))
+    app.draw(screen)
+
+    # THEN each port is visible at its scaled screen position, in the
+    # section's spec color, as a fixed-size square:
+    for section, port in (
+        ("gun_ports", ports.section_ports("gun_ports")[0]),
+        ("thruster_ports", ports.section_ports("thruster_ports")[0]),
+        ("collection_ports", ports.section_ports("collection_ports")[0]),
+    ):
+        x, y = app.screen_position_for_port(port)
+        expected_color = PORT_COLORS[section]
+        for offset_x in range(PORT_MARKER_SIZE):
+            for offset_y in range(PORT_MARKER_SIZE):
+                assert screen.get_at((x + offset_x, y + offset_y)) == (
+                    *expected_color,
+                    255,
+                )
+        # The marker's top-left pixel should also be the section color:
+        assert screen.get_at((x, y)) == (*expected_color, 255)
+
+
+def test_prepare_valid_sidecar_ports_are_rendered(
+    pygame_ready: None, tmp_path: Path
+) -> None:
+    # GIVEN a valid image and a valid sidecar with ports in all sections:
+    sprite_path = tmp_path / "viper.png"
+    _write_png(sprite_path)
+    _write_sidecar_json(
+        _sidecar_path(sprite_path),
+        json.dumps(
+            {
+                "name": "viper",
+                "mass": 0,
+                "gun_ports": [{"x": 1, "y": 1, "level": 0}],
+                "thruster_ports": [{"x": 2, "y": 2, "level": 0}],
+                "collection_ports": [{"x": 3, "y": 3, "level": 0}],
+            }
+        ),
+    )
+
+    # WHEN prepared and drawn:
+    code, surface, ports = prepare([str(sprite_path)])
+    assert code == 0
+    app = ShipEditorApp(surface, ports)
+    screen = pygame.Surface((WINDOW_WIDTH, WINDOW_HEIGHT))
+    app.draw(screen)
+
+    # THEN each section's port is drawn at its scaled position:
+    for section, expected_color in (
+        ("gun_ports", PORT_COLORS["gun_ports"]),
+        ("thruster_ports", PORT_COLORS["thruster_ports"]),
+        ("collection_ports", PORT_COLORS["collection_ports"]),
+    ):
+        port = ports.section_ports(section)[0]
+        x, y = app.screen_position_for_port(port)
+        assert screen.get_at((x, y)) == (*expected_color, 255)
+
+
+def test_ship_editor_app_scales_large_sprite_down(pygame_ready: None) -> None:
+    # GIVEN a sprite wider and taller than the display fit area:
+    surface = _make_surface((1000, 800), (1, 2, 3))
+    app = ShipEditorApp(surface, ShipPorts())
+
+    # THEN it is scaled down proportionally and centered:
+    assert app.scaled_size == (740, 592)
+    assert app.ship_rect == pygame.Rect(110, 64, 740, 592)
+
+
+def test_ship_editor_app_scales_tall_sprite_down(pygame_ready: None) -> None:
+    # GIVEN a sprite taller than the display fit area:
+    surface = _make_surface((800, 1000), (1, 2, 3))
+    app = ShipEditorApp(surface, ShipPorts())
+
+    # THEN it is scaled down proportionally and centered:
+    assert app.scaled_size == (474, 592)
+    assert app.ship_rect == pygame.Rect(243, 64, 474, 592)
+
+
+def test_ship_editor_app_rejects_zero_display_area() -> None:
+    # GIVEN a zero-sized display area:
+    with pytest.raises(ValueError, match="display_area"):
+        ShipEditorApp(_make_surface((10, 10)), ShipPorts(), pygame.Rect(0, 0, 0, 0))
 

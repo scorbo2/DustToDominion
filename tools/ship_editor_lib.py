@@ -6,10 +6,12 @@ boilerplate (``sys.path`` bootstrap, SDL dummy drivers) and forwards to
 ``run``. All logic lives in this module so the tool is unit-testable
 in-process (spec 15: Script structure).
 
-Dev plan stages one and two: argument handling, input-sprite validation,
-sidecar Json loading (read, validate, populate the in-memory port list -
-spec 15: Load on startup + Json validation), and the startup report.
-No display yet (stage three).
+Dev plan stages one, two, and three: argument handling, input-sprite
+validation, sidecar Json loading (read, validate, populate the in-memory
+port list - spec 15: Load on startup + Json validation), and the stage
+three ship display area. The control panel is reserved but not rendered;
+right-clicking the display area toggles the background between black and
+white.
 """
 from __future__ import annotations
 
@@ -21,6 +23,11 @@ from pathlib import Path
 from typing import Callable
 
 import pygame
+from loguru import logger
+
+from dtd import audio
+from dtd.errors import ResourceError
+from dtd.resource_loader import ResourceLoader
 
 # Accepted sprite formats (spec 15: "accepted file extensions: .png,
 # .jpg, or .jpeg, case insensitive"). The extension check is a path
@@ -31,6 +38,31 @@ ACCEPTED_IMAGE_EXTENSIONS = (".png", ".jpg", ".jpeg")
 # The three port sections, in sidecar file order (spec 15: Json format).
 PORT_SECTIONS = ("gun_ports", "thruster_ports", "collection_ports")
 
+#: Stage three geometry (spec 15: The main interface). The display area is
+#: everything left of the reserved 320px control panel; the ship must
+#: always fit inside the display area with a 64px margin on every edge.
+WINDOW_WIDTH = 1280
+WINDOW_HEIGHT = 720
+WINDOW_TITLE = "Ship editor"
+CONTROL_PANEL_WIDTH = 320
+DISPLAY_MARGIN = 64
+BACKGROUND_BLACK = (0, 0, 0)
+BACKGROUND_WHITE = (255, 255, 255)
+PORT_MARKER_SIZE = 3
+PORT_COLORS = {
+    "gun_ports": (255, 1, 1),
+    "thruster_ports": (1, 255, 1),
+    "collection_ports": (1, 1, 255),
+}
+DISPLAY_AREA = pygame.Rect(
+    0, 0, WINDOW_WIDTH - CONTROL_PANEL_WIDTH, WINDOW_HEIGHT
+)
+SHIP_FIT_AREA = pygame.Rect(
+    DISPLAY_MARGIN,
+    DISPLAY_MARGIN,
+    DISPLAY_AREA.width - 2 * DISPLAY_MARGIN,
+    DISPLAY_AREA.height - 2 * DISPLAY_MARGIN,
+)
 
 # The loader decodes a sprite path into a pygame.Surface. Injectable so
 # tests (and future stages, once the loaded surface feeds the display
@@ -158,13 +190,10 @@ def _is_accepted_image_extension(sprite_path: Path) -> bool:
 
 
 def _build_parser() -> argparse.ArgumentParser:
-    return argparse.ArgumentParser(
+    parser = argparse.ArgumentParser(
         prog="ship_editor",
         description="Create or edit the ship Json sidecar file for a sprite.",
     )
-
-
-def _add_input_sprite_argument(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "input_sprite",
         help=(
@@ -172,6 +201,7 @@ def _add_input_sprite_argument(parser: argparse.ArgumentParser) -> None:
             "PNG or JPEG image file (.png, .jpg, or .jpeg)."
         ),
     )
+    return parser
 
 
 def _fail(message: str) -> int:
@@ -313,6 +343,213 @@ def _default_image_loader(sprite_path: Path) -> pygame.Surface:
     return pygame.image.load(str(sprite_path))
 
 
+class ShipEditorApp:
+    """Stage three display state for the ship editor (spec 15: The main
+    interface).
+
+    Renders the input sprite scaled to fit the display area and overlays
+    one 3x3 marker per sidecar port. Right-clicking inside the display area
+    toggles the background between black and white; right-clicking in the
+    reserved control panel has no effect.
+    """
+
+    def __init__(
+        self,
+        sprite_surface: pygame.Surface,
+        ports: ShipPorts,
+        display_area: pygame.Rect = DISPLAY_AREA,
+    ) -> None:
+        if display_area.width <= 0 or display_area.height <= 0:
+            raise ValueError("display_area must be non-zero in both dimensions")
+        self._sprite_surface = sprite_surface
+        self._ports = ports
+        self._display_area = pygame.Rect(display_area)
+        self._background_color = BACKGROUND_BLACK
+        self._scaled_surface: pygame.Surface | None = None
+        self._ship_rect: pygame.Rect | None = None
+        self._source_size: tuple[int, int] | None = None
+        self._scaled_size: tuple[int, int] | None = None
+        self._build_ship()
+
+    @property
+    def display_area(self) -> pygame.Rect:
+        """Rect of the ship display area, left of the reserved panel."""
+        return self._display_area
+
+    @property
+    def background_color(self) -> tuple[int, int, int]:
+        """Current background color, either ``BACKGROUND_BLACK`` or
+        ``BACKGROUND_WHITE``."""
+        return self._background_color
+
+    @property
+    def ship_rect(self) -> pygame.Rect:
+        """Rect of the scaled sprite inside the display area."""
+        if self._ship_rect is None:
+            raise ValueError("ShipEditorApp is in an invalid internal state")
+        return self._ship_rect
+
+    @property
+    def source_size(self) -> tuple[int, int]:
+        """Original sprite size, in pixels."""
+        if self._source_size is None:
+            raise ValueError("ShipEditorApp is in an invalid internal state")
+        return self._source_size
+
+    @property
+    def scaled_size(self) -> tuple[int, int]:
+        """Scaled sprite size, in pixels."""
+        if self._scaled_size is None:
+            raise ValueError("ShipEditorApp is in an invalid internal state")
+        return self._scaled_size
+
+    def handle_right_click(self, position: tuple[int, int]) -> bool:
+        """Toggle the background if ``position`` is in the display area.
+
+        Returns ``True`` when the background changed, ``False`` when the
+        click was ignored.
+        """
+        if not self._display_area.collidepoint(position):
+            return False
+        self._background_color = (
+            BACKGROUND_WHITE
+            if self._background_color == BACKGROUND_BLACK
+            else BACKGROUND_BLACK
+        )
+        return True
+
+    def draw(self, screen: pygame.Surface) -> None:
+        """Paint the current display state to ``screen``."""
+        screen.fill(self._background_color)
+        if self._scaled_surface is None or self._ship_rect is None:
+            return
+        screen.blit(self._scaled_surface, self._ship_rect)
+        self._draw_port_markers(screen)
+
+    def screen_position_for_port(self, port: Port) -> tuple[int, int]:
+        """Screen position of ``port``'s marker, clamped to the display area."""
+        return self._port_marker_position(port)
+
+    def _build_ship(self) -> None:
+        source_width, source_height = self._sprite_surface.get_size()
+        self._source_size = (source_width, source_height)
+
+        fit_width = max(self._display_area.width - 2 * DISPLAY_MARGIN, 1)
+        fit_height = max(self._display_area.height - 2 * DISPLAY_MARGIN, 1)
+
+        if source_width <= 0 or source_height <= 0:
+            scaled_width, scaled_height = 1, 1
+        else:
+            scale_x = fit_width / source_width
+            scale_y = fit_height / source_height
+            scale = min(scale_x, scale_y)
+            scaled_width = max(1, min(fit_width, round(scale * source_width)))
+            scaled_height = max(1, min(fit_height, round(scale * source_height)))
+
+        self._scaled_surface = pygame.transform.scale(
+            self._sprite_surface, (scaled_width, scaled_height)
+        )
+        x = self._display_area.x + (self._display_area.width - scaled_width) // 2
+        y = self._display_area.y + (self._display_area.height - scaled_height) // 2
+        self._ship_rect = pygame.Rect(x, y, scaled_width, scaled_height)
+        self._scaled_size = (scaled_width, scaled_height)
+
+    def _map_port_to_screen(self, image_x: int, image_y: int) -> tuple[int, int]:
+        if (
+            self._source_size is None
+            or self._scaled_size is None
+            or self._ship_rect is None
+        ):
+            return (
+                self._display_area.x + self._display_area.width // 2,
+                self._display_area.y + self._display_area.height // 2,
+            )
+
+        source_width, source_height = self._source_size
+        scaled_width, scaled_height = self._scaled_size
+        if source_width <= 0 or source_height <= 0:
+            return (
+                self._display_area.x + self._display_area.width // 2,
+                self._display_area.y + self._display_area.height // 2,
+            )
+
+        x = self._ship_rect.x + int(round((image_x / source_width) * scaled_width))
+        y = self._ship_rect.y + int(round((image_y / source_height) * scaled_height))
+        return x, y
+
+    def _port_marker_position(self, port: Port) -> tuple[int, int]:
+        marker_x, marker_y = self._map_port_to_screen(port.x, port.y)
+        marker_x = max(self._display_area.x, min(marker_x, self._display_area.right - 1))
+        marker_y = max(self._display_area.y, min(marker_y, self._display_area.bottom - 1))
+        return marker_x, marker_y
+
+    def _draw_port_markers(self, screen: pygame.Surface) -> None:
+        for section in PORT_SECTIONS:
+            marker_color = PORT_COLORS[section]
+            for port in self._ports.section_ports(section):
+                marker_x, marker_y = self._port_marker_position(port)
+                pygame.draw.rect(
+                    screen,
+                    marker_color,
+                    pygame.Rect(marker_x, marker_y, PORT_MARKER_SIZE, PORT_MARKER_SIZE),
+                )
+
+
+def prepare(
+    argv: list[str] | None = None,
+    loader: ImageLoader | None = None,
+) -> tuple[int, pygame.Surface | None, ShipPorts | None]:
+    """Prepare the display for ``argv`` without opening a window (spec 15:
+    The main interface).
+
+    This is the testable part of ``run``. It parses args, loads the sprite
+    and sidecar, and returns everything the window would need.
+
+    Args:
+        argv: Argument list to parse. ``None`` means the process
+            ``sys.argv``.
+        loader: Optional injected image loader.
+
+    Returns:
+        (exit_code, surface, ports). ``surface`` and ``ports`` are ``None``
+        when no window is to be shown: argument parsing handled its own
+        exit (``--help``, wrong arg count), or sprite/sidecar validation
+        failed.
+    """
+    try:
+        args = _build_parser().parse_args(argv)
+    except SystemExit as exc:
+        return exc.code, None, None
+
+    sprite_path = Path(args.input_sprite)
+    if not _is_accepted_image_extension(sprite_path):
+        return _fail(
+            f"{sprite_path} is not an accepted image format "
+            "(accepted extensions: .png, .jpg, .jpeg)"
+        ), None, None
+    if not sprite_path.is_file():
+        if not sprite_path.exists():
+            return _fail(f"{sprite_path} does not exist"), None, None
+        return _fail(f"{sprite_path} is not a regular file"), None, None
+    try:
+        surface = (loader or _default_image_loader)(sprite_path)
+    except (OSError, pygame.error) as exc:
+        return _fail(
+            f"{sprite_path} could not be read or decoded as an image: {exc}"
+        ), None, None
+
+    sidecar_path = sprite_path.with_suffix(".json")
+    try:
+        ports = ShipPorts()
+        if sidecar_path.is_file():
+            ports = load_sidecar_ports(sidecar_path, surface.get_size())
+    except (SidecarReadError, InvalidSidecarJsonError) as exc:
+        print(str(exc), file=sys.stderr)
+        return exc.code, None, None
+
+    return 0, surface, ports
+
+
 def run(argv: list[str] | None = None, loader: ImageLoader | None = None) -> int:
     """Run the ship editor (spec 15: Script structure).
 
@@ -329,55 +566,59 @@ def run(argv: list[str] | None = None, loader: ImageLoader | None = None) -> int
         problems (stderr), 2 on argument problems or sidecar-validation
         failures (argparse convention / spec 15: Load on startup).
     """
-    parser = _build_parser()
-    _add_input_sprite_argument(parser)
-    try:
-        args = parser.parse_args(argv)
-    except SystemExit as exc:
-        # argparse's built-in behavior: --help exits 0 with help text,
-        # wrong argument counts exit 2. The spec keeps argparse's code
-        # mapping for both cases, so propagate it unchanged.
-        return exc.code
+    exit_code, surface, ports = prepare(argv, loader)
+    if exit_code != 0 or surface is None:
+        return exit_code
 
-    sprite_path = Path(args.input_sprite)
-    if not _is_accepted_image_extension(sprite_path):
-        return _fail(
-            f"{sprite_path} is not an accepted image format "
-            "(accepted extensions: .png, .jpg, .jpeg)"
-        )
-    if not sprite_path.is_file():
-        if not sprite_path.exists():
-            return _fail(f"{sprite_path} does not exist")
-        return _fail(f"{sprite_path} is not a regular file")
-    try:
-        # Decoding also yields the image dimensions, which the sidecar's
-        # out-of-bounds check needs (stage two).
-        surface = (loader or _default_image_loader)(sprite_path)
-    except (OSError, pygame.error) as exc:
-        return _fail(
-            f"{sprite_path} could not be read or decoded as an image: {exc}"
-        )
+    if _init_pygame() != 0:
+        return 1
 
-    # Sidecar: same base name, .json extension (case-sensitive replacement,
-    # spec 15: Load on startup + Json format).
-    sidecar_path = sprite_path.with_suffix(".json")
-    try:
-        ports = ShipPorts()
-        if sidecar_path.is_file():
-            ports = load_sidecar_ports(sidecar_path, surface.get_size())
-    except (SidecarReadError, InvalidSidecarJsonError) as exc:
-        # The exception message is the user-facing stderr string, pre-formed
-        # to match the spec's exact wording; ``code`` is the exit code.
-        print(str(exc), file=sys.stderr)
-        return exc.code
+    return _run_display(surface, ports)
 
-    # ``ports`` is the in-memory list required by the spec (Load on
-    # startup); it goes unused until the ship display area lands (dev plan
-    # stage three).
-    message = (
-        "All good, and the Json is also good"
-        if sidecar_path.is_file()
-        else "All good"
-    )
-    print(message)
-    return 0
+
+def _init_pygame() -> int:
+    """Initialize the display and shared resources before opening the window.
+
+    Follows the game startup sequence (spec 15: Additional dependencies).
+    Any failure logs a warning and returns 1; the window is never opened.
+    """
+    try:
+        pygame.display.set_mode((WINDOW_WIDTH, WINDOW_HEIGHT))
+        pygame.display.set_caption(WINDOW_TITLE)
+        resource_loader = ResourceLoader()
+        resource_loader.load(None)
+        audio.init_audio_manager(resource_loader, None)
+        return 0
+    except pygame.error as exc:
+        logger.warning("Could not initialize pygame display: %s", exc)
+        pygame.display.quit()
+        return 1
+    except ResourceError as exc:
+        logger.warning("Could not initialize resources: %s", exc)
+        pygame.display.quit()
+        return 1
+
+
+def _run_display(surface: pygame.Surface, ports: ShipPorts) -> int:
+    """Open the stage three window and pump events until QUIT."""
+    window_surface = pygame.display.get_surface()
+    if window_surface is None:
+        return 1
+    app = ShipEditorApp(surface, ports)
+    clock = pygame.time.Clock()
+
+    while True:
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                return 0
+            if event.type == pygame.MOUSEBUTTONDOWN and event.button == 3:
+                app.handle_right_click(event.pos)
+            if event.type == pygame.KEYDOWN and event.key in (
+                pygame.K_ESCAPE,
+                pygame.K_F11,
+            ):
+                # Stage three ignores these keys; the window is still active.
+                continue
+
+        app.draw(window_surface)
+        clock.tick(60)

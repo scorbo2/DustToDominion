@@ -422,7 +422,8 @@ drivable from tests without entering the 60FPS loop.
   but do not render it. Right-clicking in the
   ship display area should toggle between solid black and solid white background.
   There are no other controls in this stage: just display the ship image, and
-  scale it proportionally to the ship display area.
+   scale it proportionally to the ship display area.
+   **Completed 2026-10-25** (full suite green at 1248 tests.)
 4. Render the control panel widgets. Add the logic for the Edit mode toggle checkboxes,
   so that the "Gun ports" checkbox is checked/selected at startup, and the user can click
   any of the three Edit mode checkboxes to change the current Edit mode. No control
