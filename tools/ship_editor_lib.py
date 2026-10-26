@@ -595,9 +595,10 @@ class ShipEditorApp:
     checkboxes act as a radio group: exactly one is checked, matching
     ``edit_mode`` (spec 15: Edit mode, amended 2026-10-25 - the checked
     state alone carries the mode; the checkboxes are never selected).
-    "Reset", "Clear", and "Save" are wired (dev plan stages seven and
-    eight); "Exit" stays inert until stage nine gives it something to
-    do.
+    "Reset", "Clear", "Save", and "Exit" are all wired (dev plan
+    stages seven through nine); a "Reset" or "Save" click can end the
+    session on a sidecar hard error, and "Exit" ends it immediately,
+    unsaved changes and all (spec 15: acceptance criteria).
     """
 
     def __init__(
@@ -846,6 +847,16 @@ class ShipEditorApp:
         ) as exc:
             self.request_exit(exc.code, str(exc))
 
+    def _on_exit_click(self) -> None:
+        """Exit's Button callback (spec 15: acceptance criteria - "exit
+        immediately, even if unsaved changes exist in-memory").
+
+        Deliberately not a save-then-exit and deliberately no
+        confirmation prompt: the session simply ends with the success
+        code via the shared ``request_exit`` funnel.
+        """
+        self.request_exit(0)
+
     def update(self, events: list[pygame.event.Event]) -> None:
         """Feed the frame's event batch to the panel widgets (spec 04:
         Changes to game loop): hover flags, click handling, and hover
@@ -897,17 +908,22 @@ class ShipEditorApp:
             "Reset": self._on_reset_click,
             "Clear": self.clear_ports,
             "Save": self._on_save_click,
+            "Exit": self._on_exit_click,
         }
         for index, label_text in enumerate(OPTION_BUTTON_LABELS, start=5):
+            if label_text not in option_handlers:
+                # A renamed or newly added label reaching a None
+                # callback would go silently inert - loud now, per the
+                # stage-eight after-action note.
+                raise KeyError(f"no handler wired for option {label_text!r}")
             button = Button(
                 rects[index],
                 text=label_text,
-                on_click=option_handlers.get(label_text),
+                on_click=option_handlers[label_text],
             )
-            # Stage eight wires "Save"; "Exit" (stage nine) keeps a
-            # None callback until its stage lands. The accept sound
-            # still fires on click - that is the widget's contract
-            # (spec 09), not a wiring bug.
+            # All four options carry live handlers as of dev plan
+            # stage nine; the accept sound on click is the widget's
+            # own contract (spec 09), not our business.
             button.set_font_point_size(WIDGET_FONT_POINT_SIZE)
             self._option_buttons[label_text] = button
             widgets.append(button)

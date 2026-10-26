@@ -450,6 +450,7 @@ drivable from tests without entering the 60FPS loop.
 8. Implement "Save" option and verify that the generated/merged Json is correct.
   **Completed 2026-10-25** (full suite green at 1295 tests.)
 9. Implement "Exit". There is no "unsaved changes" confirmation prompt - just exit.
+  **Completed 2026-10-26** (full suite green at 1296 tests.)
 10. Verification pass: do all tests pass? Are all acceptance criteria met?
   Edit this document to change all "proposes" prose to "describes" to reflect
   reality. Flip this document to "active" status.

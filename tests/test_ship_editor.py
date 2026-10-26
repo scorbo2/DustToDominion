@@ -69,7 +69,8 @@ and the stage six contract (spec 15: Edit mode, Pixel mapping):
 - clicks that map outside the image (display margin, panel) are no-ops
 - ports land in whichever section the Edit mode checkboxes selected
 - downscale mappings add a port at the cell the click maps back to
-- the "Exit" Button renders but stays inert (its stage is nine)
+- the "Exit" Button files a clean code-0 exit request on click,
+  immediately and without saving (spec 15 acceptance criteria)
 
 and the stage seven contract (spec 15: Reset, Clear):
 
@@ -120,6 +121,7 @@ from ship_editor_lib import (
     BACKGROUND_WHITE,
     CONTROL_PANEL_COLOR,
     DEFAULT_EDIT_MODE,
+    OPTION_BUTTON_LABELS,
     apply_click_edit,
     InvalidSidecarJsonError,
     PORT_MARKER_SIZE,
@@ -1822,23 +1824,61 @@ def test_reset_button_click_on_a_schema_invalid_sidecar_should_file_a_code_2_exi
     assert message.startswith("Invalid Json:")
 
 
-def test_exit_button_click_should_remain_inert_until_stage_nine(
+def test_exit_button_click_with_unsaved_changes_should_request_clean_exit_without_writing(
     pygame_ready: None, silent_audio_manager: None, tmp_path: Path
 ) -> None:
-    # GIVEN a session with unsaved in-memory edits and an untouched
-    # sidecar on disk:
+    # GIVEN a session with in-memory edits that were never saved to
+    # disk:
     ports, app, sidecar_path = _stage7_session(tmp_path)
     sidecar_before = sidecar_path.read_bytes()
     ports.add("gun_ports", 3, 3)
 
-    # WHEN the user clicks "Exit" (the last still-unwired Button):
+    # WHEN the user clicks "Exit":
     app.update(_left_click_events(app.option_button("Exit").rect.center))
 
-    # THEN nothing was written, discarded, or filed as an exit - that
-    # arrives in dev plan stage nine:
-    assert _port_snapshot(ports)["gun_ports"] == [(0, 0, 1), (3, 3, 0)]
+    # THEN the session is slated to end immediately with code 0 and no
+    # error message - no auto-save, no confirmation (spec 15: clicking
+    # "Exit" should exit immediately, even if unsaved changes exist):
+    assert app.exit_request == (0, None)
     assert sidecar_path.read_bytes() == sidecar_before
-    assert app.exit_request is None
+    # ...and the in-memory edits are simply dropped on the floor:
+    assert _port_snapshot(ports)["gun_ports"] == [(0, 0, 1), (3, 3, 0)]
+
+
+def test_option_button_clicks_should_all_have_observable_effects(
+    pygame_ready: None, silent_audio_manager: None, tmp_path: Path
+) -> None:
+    """Wiring guard (stage nine): every option label must do something
+    a test can see - a renamed or forgotten label can never again go
+    silently inert with a None callback."""
+    for label in OPTION_BUTTON_LABELS:
+        # GIVEN a sidecar whose three in-memory ports match the sidecar
+        # file exactly - then dirtied on demand:
+        session_dir = tmp_path / label
+        session_dir.mkdir()
+        ports, app, sidecar_path = _stage7_session(session_dir)
+        pristine = _port_snapshot(ports)
+        if label in ("Reset", "Exit", "Save"):
+            ports.clear()  # unsaved in-memory damage to react to
+
+        # WHEN the user clicks the option Button:
+        app.update(_left_click_events(app.option_button(label).rect.center))
+
+        # THEN each label produces its own observable effect:
+        snapshot = _port_snapshot(ports)
+        if label == "Reset":
+            # ...and Reset pulls it back verbatim, levels and all:
+            assert snapshot == pristine
+        elif label == "Clear":
+            assert snapshot == {section: [] for section in snapshot}
+        elif label == "Save":
+            # The cleared session was written to disk, not reverted:
+            assert json.loads(sidecar_path.read_text(encoding="utf-8"))[
+                "gun_ports"
+            ] == []
+            assert app.exit_request is None
+        else:  # "Exit"
+            assert app.exit_request == (0, None)
 
 
 def test_apply_click_edit_on_a_free_cell_should_add_a_level_zero_port() -> None:
