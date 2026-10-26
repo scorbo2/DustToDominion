@@ -637,4 +637,5 @@ def _run_display(surface: pygame.Surface, ports: ShipPorts) -> int:
                 continue
 
         app.draw(window_surface)
+        pygame.display.flip()
         clock.tick(60)
