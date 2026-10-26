@@ -2,9 +2,9 @@
 (spec 15).
 
 The thin executable shim ``tools/ship_editor`` handles process-level
-boilerplate (``sys.path`` bootstrap, SDL dummy drivers) and forwards to
-``run``. All logic lives in this module so the tool is unit-testable
-in-process (spec 15: Script structure).
+boilerplate (``sys.path`` bootstrap) and forwards to ``run``. All logic
+lives in this module so the tool is unit-testable in-process (spec 15:
+Script structure).
 
 Dev plan stages one, two, and three: argument handling, input-sprite
 validation, sidecar Json loading (read, validate, populate the in-memory
