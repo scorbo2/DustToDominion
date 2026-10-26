@@ -577,25 +577,41 @@ def run(argv: list[str] | None = None, loader: ImageLoader | None = None) -> int
 
 
 def _init_pygame() -> int:
-    """Initialize the display and shared resources before opening the window.
+    """Initialize pygame, load resources/audio, and open the display window.
 
-    Follows the game startup sequence (spec 15: Additional dependencies).
-    Any failure logs a warning and returns 1; the window is never opened.
+    Mirrors the game startup order (spec 03, as used by the main application)
+    so the tool never starts in an invalid state. Any failure logs a warning
+    and returns 1; the window is never opened.
     """
     try:
-        pygame.display.set_mode((WINDOW_WIDTH, WINDOW_HEIGHT))
-        pygame.display.set_caption(WINDOW_TITLE)
+        _, failures = pygame.init()
+        if failures:
+            logger.warning(
+                "{} pygame module(s) failed to initialize; continuing because "
+                "only display, mixer, and font are required",
+                failures,
+            )
+        if not pygame.display.get_init():
+            raise pygame.error("pygame display failed to initialize")
+        if not pygame.mixer.get_init():
+            raise pygame.error("pygame mixer failed to initialize")
+        if not pygame.font.get_init():
+            raise pygame.error("pygame font failed to initialize")
+
         resource_loader = ResourceLoader()
         resource_loader.load(None)
         audio.init_audio_manager(resource_loader, None)
+
+        pygame.display.set_mode((WINDOW_WIDTH, WINDOW_HEIGHT))
+        pygame.display.set_caption(WINDOW_TITLE)
         return 0
     except pygame.error as exc:
-        logger.warning("Could not initialize pygame display: %s", exc)
-        pygame.display.quit()
+        logger.warning("Could not initialize pygame display: {}", exc)
+        pygame.quit()
         return 1
     except ResourceError as exc:
-        logger.warning("Could not initialize resources: %s", exc)
-        pygame.display.quit()
+        logger.warning("Could not initialize resources: {}", exc)
+        pygame.quit()
         return 1
 
 
