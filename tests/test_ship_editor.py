@@ -69,8 +69,7 @@ and the stage six contract (spec 15: Edit mode, Pixel mapping):
 - clicks that map outside the image (display margin, panel) are no-ops
 - ports land in whichever section the Edit mode checkboxes selected
 - downscale mappings add a port at the cell the click maps back to
-- the "Save" and "Exit" Buttons render but stay inert (their stages
-  are eight and nine)
+- the "Exit" Button renders but stays inert (its stage is nine)
 
 and the stage seven contract (spec 15: Reset, Clear):
 
@@ -84,6 +83,21 @@ and the stage seven contract (spec 15: Reset, Clear):
   with an "Invalid Json:" message - the startup rules, verbatim
 - ``apply_click_edit`` is the pygame-free collision policy: add,
   toggle-clear, and reassign-with-level-intact over the dumb store
+
+and the stage eight contract (spec 15: Save, Create behavior, Merge
+behavior, Json format):
+
+- saving without an existing sidecar creates it with name (derived
+  from the image filename), mass 0, and all three port lists,
+  pretty-printed
+- saving into an existing sidecar merges: name/mass/levels and
+  unrecognized keys pass through, deleted ports vanish, new ports land
+  with level 0, and missing lists are added
+- an unreadable or schema-invalid existing sidecar hits the startup
+  error rules during Save; an unwritable target raises SidecarWriteError
+  ("Can't write Json file {file}", code 1)
+- a "Save" click wires all of the above and files an exit request only
+  on hard errors
 
 Tests generate their own images under ``tmp_path``; nothing is ever read
 or written from the project's ``resources/`` directory (spec 15: Script
@@ -113,6 +127,7 @@ from ship_editor_lib import (
     Port,
     prepare,
     SidecarReadError,
+    SidecarWriteError,
     ShipPorts,
     ShipEditorApp,
     ToolLayout,
@@ -123,6 +138,7 @@ from ship_editor_lib import (
     panel_widget_rects,
     parse_sidecar,
     run,
+    save_ports,
 )
 
 
@@ -1806,7 +1822,7 @@ def test_reset_button_click_on_a_schema_invalid_sidecar_should_file_a_code_2_exi
     assert message.startswith("Invalid Json:")
 
 
-def test_save_and_exit_button_clicks_should_remain_inert_until_their_stages(
+def test_exit_button_click_should_remain_inert_until_stage_nine(
     pygame_ready: None, silent_audio_manager: None, tmp_path: Path
 ) -> None:
     # GIVEN a session with unsaved in-memory edits and an untouched
@@ -1815,12 +1831,11 @@ def test_save_and_exit_button_clicks_should_remain_inert_until_their_stages(
     sidecar_before = sidecar_path.read_bytes()
     ports.add("gun_ports", 3, 3)
 
-    # WHEN the user clicks "Save", then "Exit":
-    app.update(_left_click_events(app.option_button("Save").rect.center))
+    # WHEN the user clicks "Exit" (the last still-unwired Button):
     app.update(_left_click_events(app.option_button("Exit").rect.center))
 
-    # THEN neither wrote the file, discarded the edits, nor filed an
-    # exit - those arrive in dev plan stages eight and nine:
+    # THEN nothing was written, discarded, or filed as an exit - that
+    # arrives in dev plan stage nine:
     assert _port_snapshot(ports)["gun_ports"] == [(0, 0, 1), (3, 3, 0)]
     assert sidecar_path.read_bytes() == sidecar_before
     assert app.exit_request is None
@@ -1861,3 +1876,304 @@ def test_apply_click_edit_over_a_foreign_port_should_reassign_it_keeping_the_lev
     # THEN the port moved sections, location and level untouched:
     assert not ports.section_ports("collection_ports")
     assert ports.find_at(4, 4) == ("thruster_ports", Port(x=4, y=4, level=5))
+
+
+# ---------------------------------------------------------------------- #
+# stage eight: "Save" - create and merge (spec 15: Save, Create
+# behavior, Merge behavior, Json format)
+# ---------------------------------------------------------------------- #
+
+
+def test_save_ports_without_existing_file_should_create_the_full_template(
+    tmp_path: Path,
+) -> None:
+    # GIVEN a target path with no file and one in-memory gun port:
+    target = tmp_path / "falcon.json"
+    ports = ShipPorts()
+    ports.add("gun_ports", 1, 2)
+
+    # WHEN save_ports writes it:
+    save_ports(target, ports, "falcon", (4, 4))
+
+    # THEN the create template holds: derived name, mass 0, and all
+    # three port lists, with the port recorded verbatim:
+    raw = json.loads(target.read_text(encoding="utf-8"))
+    assert raw["name"] == "falcon"
+    assert raw["mass"] == 0
+    assert raw["gun_ports"] == [{"x": 1, "y": 2, "level": 0}]
+    assert raw["thruster_ports"] == []
+    assert raw["collection_ports"] == []
+
+    # THEN the file is pretty-printed (spec 15: "Always pretty-print"):
+    text = target.read_text(encoding="utf-8")
+    assert "\n  " in text
+
+
+def test_save_ports_with_an_empty_port_list_should_still_create_all_three_lists(
+    tmp_path: Path,
+) -> None:
+    # GIVEN no in-memory ports at all:
+    target = tmp_path / "empty.json"
+
+    # WHEN saved:
+    save_ports(target, ShipPorts(), "empty", (4, 4))
+
+    # THEN the file matches the spec's empty-save example structure:
+    assert json.loads(target.read_text(encoding="utf-8")) == {
+        "name": "empty",
+        "mass": 0,
+        "gun_ports": [],
+        "thruster_ports": [],
+        "collection_ports": [],
+    }
+
+
+def test_save_ports_merge_should_preserve_existing_name_mass_and_levels(
+    tmp_path: Path,
+) -> None:
+    # GIVEN a sidecar with hand-set name, mass, and a hand-edited port
+    # level of 8, and memory holding the same port at a *different*
+    # (lower-priority) level:
+    target = tmp_path / "viper.json"
+    target.write_text(
+        json.dumps(
+            {
+                "name": "hand_named",
+                "mass": 42,
+                "gun_ports": [{"x": 0, "y": 0, "level": 8}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    ports = ShipPorts()
+    ports.add("gun_ports", 0, 0)  # level 0 in memory
+
+    # WHEN merged:
+    save_ports(target, ports, "viper", (4, 4))
+
+    # THEN nothing hand-authored was clobbered (spec 15: Merge - "NOT
+    # overwriting any existing value for name, mass, or level"):
+    raw = json.loads(target.read_text(encoding="utf-8"))
+    assert raw["name"] == "hand_named"
+    assert raw["mass"] == 42
+    assert raw["gun_ports"] == [{"x": 0, "y": 0, "level": 8}]
+
+
+def test_save_ports_merge_should_drop_ports_missing_from_memory_and_add_new_ones(
+    tmp_path: Path,
+) -> None:
+    # GIVEN a file listing gun (1, 1) and thruster (2, 2):
+    target = tmp_path / "viper.json"
+    target.write_text(
+        json.dumps(
+            {
+                "name": "viper",
+                "mass": 0,
+                "gun_ports": [{"x": 1, "y": 1, "level": 0}],
+                "thruster_ports": [{"x": 2, "y": 2, "level": 0}],
+                "collection_ports": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    # ...while memory deleted the thruster and gained gun (3, 3):
+    ports = ShipPorts()
+    ports.add("gun_ports", 1, 1)
+    ports.add("gun_ports", 3, 3)
+
+    # WHEN merged:
+    save_ports(target, ports, "viper", (4, 4))
+
+    # THEN the deleted thruster list entry is gone, the surviving gun
+    # entry is verbatim, and the new port landed at level 0:
+    raw = json.loads(target.read_text(encoding="utf-8"))
+    assert raw["gun_ports"] == [
+        {"x": 1, "y": 1, "level": 0},
+        {"x": 3, "y": 3, "level": 0},
+    ]
+    assert raw["thruster_ports"] == []
+
+
+def test_save_ports_merge_should_backfill_missing_lists_and_unset_metadata(
+    tmp_path: Path,
+) -> None:
+    # GIVEN a file with no name key and only a gun list:
+    target = tmp_path / "viper.json"
+    target.write_text(
+        json.dumps({"mass": 5, "gun_ports": [{"x": 1, "y": 1, "level": 3}]}),
+        encoding="utf-8",
+    )
+    ports = ShipPorts()
+    ports.add("gun_ports", 1, 1)
+
+    # WHEN merged:
+    save_ports(target, ports, "derived_name", (4, 4))
+
+    # THEN name got the derived default, the existing mass survived,
+    # and all three lists are present (spec 15: Merge - missing lists
+    # are created even in merge mode):
+    raw = json.loads(target.read_text(encoding="utf-8"))
+    assert raw["name"] == "derived_name"
+    assert raw["mass"] == 5
+    assert set(raw) >= {"gun_ports", "thruster_ports", "collection_ports"}
+    assert raw["thruster_ports"] == []
+    assert raw["collection_ports"] == []
+
+
+def test_save_ports_merge_should_keep_unrecognized_keys_top_level_and_per_port(
+    tmp_path: Path,
+) -> None:
+    # GIVEN a file carrying keys this tool does not understand:
+    target = tmp_path / "viper.json"
+    target.write_text(
+        json.dumps(
+            {
+                "name": "keep",
+                "mass": 0,
+                "author": "bob",
+                "gun_ports": [{"x": 0, "y": 0, "level": 9, "tag": "hello"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    ports = ShipPorts()
+    ports.add("gun_ports", 0, 0)
+
+    # WHEN merged:
+    save_ports(target, ports, "viper", (4, 4))
+
+    # THEN both unknown keys pass through untouched (spec 15: Json
+    # format - "NOT changing/removing any unrecognized keys"):
+    raw = json.loads(target.read_text(encoding="utf-8"))
+    assert raw["author"] == "bob"
+    assert raw["gun_ports"] == [
+        {"x": 0, "y": 0, "level": 9, "tag": "hello"}
+    ]
+
+
+def test_save_ports_onto_a_malformed_existing_file_should_raise_sidecar_read_error(
+    tmp_path: Path,
+) -> None:
+    # GIVEN a sidecar corrupted into non-Json text:
+    target = tmp_path / "viper.json"
+    target.write_text("{nope", encoding="utf-8")
+
+    # WHEN saving onto it:
+    # THEN the pre-merge validation fails with the startup read rules
+    # (spec 15: Json validation - "and also before a merge operation"):
+    with pytest.raises(SidecarReadError, match="Can't read Json file"):
+        save_ports(target, ShipPorts(), "viper", (4, 4))
+
+
+def test_save_ports_onto_a_schema_invalid_existing_file_should_raise_invalid_json_error(
+    tmp_path: Path,
+) -> None:
+    # GIVEN a sidecar that is valid Json but the wrong shape:
+    target = tmp_path / "viper.json"
+    target.write_text("[]", encoding="utf-8")
+
+    # WHEN saving onto it:
+    with pytest.raises(InvalidSidecarJsonError, match="Invalid Json:"):
+        save_ports(target, ShipPorts(), "viper", (4, 4))
+
+
+def test_save_ports_to_an_unwritable_target_should_raise_sidecar_write_error(
+    tmp_path: Path,
+) -> None:
+    # GIVEN a readable-but-unwritable sidecar file:
+    target = tmp_path / "viper.json"
+    target.write_text(
+        json.dumps({"name": "viper", "mass": 0, "gun_ports": []}),
+        encoding="utf-8",
+    )
+    target.chmod(0o444)
+    try:
+        # WHEN saving onto it:
+        with pytest.raises(SidecarWriteError) as exc_info:
+            save_ports(target, ShipPorts(), "viper", (4, 4))
+    finally:
+        target.chmod(0o644)
+
+    # THEN the spec's exact message and exit code surface:
+    assert exc_info.value.code == 1
+    assert str(exc_info.value) == f"Can't write Json file {target}"
+
+
+def test_save_button_click_without_a_sidecar_should_create_it_from_memory(
+    pygame_ready: None, silent_audio_manager: None, tmp_path: Path
+) -> None:
+    # GIVEN a session whose sidecar was deleted mid-session, plus a new
+    # in-memory collection port:
+    ports, app, sidecar_path = _stage7_session(tmp_path)
+    sidecar_path.unlink()
+    ports.add("collection_ports", 3, 3)
+
+    # WHEN the user clicks "Save":
+    app.update(_left_click_events(app.option_button("Save").rect.center))
+
+    # THEN a fresh sidecar exists, named after the image stem, holding
+    # the in-memory configuration:
+    raw = json.loads(sidecar_path.read_text(encoding="utf-8"))
+    assert raw["name"] == "viper"
+    assert raw["mass"] == 0
+    assert raw["gun_ports"] == [{"x": 0, "y": 0, "level": 1}]
+    assert raw["thruster_ports"] == [{"x": 1, "y": 1, "level": 2}]
+    assert raw["collection_ports"] == [
+        {"x": 2, "y": 2, "level": 3},
+        {"x": 3, "y": 3, "level": 0},
+    ]
+    assert app.exit_request is None
+
+
+def test_save_button_click_should_merge_into_the_existing_sidecar(
+    pygame_ready: None, silent_audio_manager: None, tmp_path: Path
+) -> None:
+    # GIVEN a session whose sidecar was externally rewritten with a
+    # hand-picked name, mass, and an upgraded gun level:
+    ports, app, sidecar_path = _stage7_session(tmp_path)
+    _write_sidecar_json(
+        sidecar_path,
+        json.dumps(
+            {
+                "name": "hand_named",
+                "mass": 9,
+                "gun_ports": [{"x": 0, "y": 0, "level": 8}],
+                "thruster_ports": [{"x": 1, "y": 1, "level": 2}],
+                "collection_ports": [{"x": 2, "y": 2, "level": 3}],
+            }
+        ),
+    )
+    ports.add("gun_ports", 3, 3)  # fresh click-added port
+
+    # WHEN the user clicks "Save":
+    app.update(_left_click_events(app.option_button("Save").rect.center))
+
+    # THEN the merge preserved the hand-authored fields and landed the
+    # new port at level 0:
+    raw = json.loads(sidecar_path.read_text(encoding="utf-8"))
+    assert raw["name"] == "hand_named"
+    assert raw["mass"] == 9
+    assert raw["gun_ports"] == [
+        {"x": 0, "y": 0, "level": 8},
+        {"x": 3, "y": 3, "level": 0},
+    ]
+    assert raw["thruster_ports"] == [{"x": 1, "y": 1, "level": 2}]
+    assert raw["collection_ports"] == [{"x": 2, "y": 2, "level": 3}]
+    assert app.exit_request is None
+
+
+def test_save_button_click_on_an_unwritable_sidecar_should_file_a_code_1_exit_request(
+    pygame_ready: None, silent_audio_manager: None, tmp_path: Path
+) -> None:
+    # GIVEN a session whose sidecar became unwritable:
+    ports, app, sidecar_path = _stage7_session(tmp_path)
+    sidecar_path.chmod(0o444)
+    try:
+        # WHEN the user clicks "Save":
+        app.update(_left_click_events(app.option_button("Save").rect.center))
+
+        # THEN the session is slated to end with the spec's exact
+        # write-failure message and code 1:
+        assert app.exit_request == (1, f"Can't write Json file {sidecar_path}")
+    finally:
+        sidecar_path.chmod(0o644)

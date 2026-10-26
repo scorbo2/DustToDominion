@@ -206,6 +206,20 @@ class InvalidSidecarJsonError(Exception):
         super().__init__(message)
 
 
+class SidecarWriteError(Exception):
+    """The sidecar file could not be written (spec 15: Save, create
+    behavior - "Can't write Json file {file}", exit code 1).
+
+    Same code/message convention as the read errors, so the event loop's
+    exit handling treats every sidecar hard failure identically.
+    """
+
+    code = 1
+
+    def __init__(self, message: str) -> None:
+        super().__init__(message)
+
+
 @dataclass(frozen=True)
 class Port:
     """A single port: image-space location plus power level.
@@ -277,6 +291,93 @@ class ShipPorts:
         """Ports of one section, copied so callers can't mutate the
         internal lists."""
         return list(self._by_section[section])
+
+
+def build_sidecar_payload(
+    ports: ShipPorts,
+    existing: object | None,
+    derived_name: str,
+    image_size: tuple[int, int],
+) -> dict:
+    """The merged save payload, per spec 15: Save (create + merge
+    behavior).
+
+    ``existing`` is the already Json-parsed top-level value of the
+    current sidecar file, or ``None`` on create. The existing contents
+    are validated *before* the merge (spec 15: Json validation - "and
+    also before a merge operation"), reusing the startup validator.
+
+    Merge rules, verbatim from the spec: existing name/mass preserved,
+    listed ports that match in-memory ports (same section, same
+    location) pass through with their file level - and any unrecognized
+    keys, top-level or per-port - intact; listed ports missing from
+    memory are dropped; in-memory ports missing from the file are added.
+    Unset name/mass get the create defaults (the spec's "unless already
+    set"), and all three port lists always end up present.
+    """
+    if existing is None:
+        payload: dict = {}
+    else:
+        parse_sidecar(existing, image_size)  # validate before touching anything
+        payload = dict(existing)
+
+    if payload.get("name") is None:
+        payload["name"] = derived_name
+    if payload.get("mass") is None:
+        payload["mass"] = 0
+
+    for section in PORT_SECTIONS:
+        old_entries = payload.get(section)
+        old_by_position: dict[tuple[object, object], dict] = {}
+        if isinstance(old_entries, list):
+            for entry in old_entries:
+                if isinstance(entry, dict):
+                    old_by_position[(entry.get("x"), entry.get("y"))] = entry
+        merged_entries: list[dict] = []
+        for port in ports.section_ports(section):
+            old_entry = old_by_position.get((port.x, port.y))
+            if old_entry is not None:
+                # The file's entry verbatim: its level (and any extra
+                # keys) are the file's, never ours to overwrite.
+                merged_entries.append(old_entry)
+            else:
+                # New in-memory port: level 0 for click-added ports; a
+                # reassigned port carries its level through, since the
+                # tool never edits levels (spec 15: Open questions #1).
+                merged_entries.append(
+                    {"x": port.x, "y": port.y, "level": port.level}
+                )
+        payload[section] = merged_entries
+    return payload
+
+
+def save_ports(
+    sidecar_path: Path,
+    ports: ShipPorts,
+    derived_name: str,
+    image_size: tuple[int, int],
+) -> None:
+    """Commit the in-memory ports to the sidecar file, creating it or
+    merging into it (spec 15: Save).
+
+    Raises:
+        SidecarReadError: the existing file cannot be read/parsed - the
+            same hard error the tool exits with at startup.
+        InvalidSidecarJsonError: the existing file fails validation
+            before the merge (spec 15: Json validation).
+        SidecarWriteError: the merged result cannot be written (code 1,
+            "Can't write Json file {file}").
+    """
+    existing: object | None = None
+    if sidecar_path.is_file():
+        existing = _read_and_parse_json(sidecar_path)
+    payload = build_sidecar_payload(ports, existing, derived_name, image_size)
+    try:
+        sidecar_path.write_text(
+            json.dumps(payload, indent=2) + "\n", encoding="utf-8"
+        )
+    except OSError as exc:
+        raise SidecarWriteError(f"Can't write Json file {sidecar_path}") from exc
 
 
 def apply_click_edit(ports: ShipPorts, section: str, x: int, y: int) -> bool:
@@ -494,9 +595,9 @@ class ShipEditorApp:
     checkboxes act as a radio group: exactly one is checked, matching
     ``edit_mode`` (spec 15: Edit mode, amended 2026-10-25 - the checked
     state alone carries the mode; the checkboxes are never selected).
-    "Reset" and "Clear" are wired (dev plan stage seven); "Save" and
-    "Exit" stay inert until stages eight and nine give them something
-    to do.
+    "Reset", "Clear", and "Save" are wired (dev plan stages seven and
+    eight); "Exit" stays inert until stage nine gives it something to
+    do.
     """
 
     def __init__(
@@ -701,6 +802,15 @@ class ShipEditorApp:
             for port in loaded.section_ports(section):
                 self._ports.add(section, port.x, port.y, level=port.level)
 
+    def request_exit(self, code: int, message: str | None = None) -> None:
+        """File the session-ending verdict for the event loop.
+
+        Button handlers (Reset's hard errors, Save's write failures, and
+        eventually Exit's stage-nine click) all leave through this one
+        door; the loop ends the session between frames.
+        """
+        self._exit_request = (code, message)
+
     def _on_reset_click(self) -> None:
         """Reset's Button callback: a reload failure ends the session
         with the startup rules - same stderr message, same exit code
@@ -708,7 +818,33 @@ class ShipEditorApp:
         try:
             self.reset_ports()
         except (SidecarReadError, InvalidSidecarJsonError) as exc:
-            self._exit_request = (exc.code, str(exc))
+            self.request_exit(exc.code, str(exc))
+
+    def _on_save_click(self) -> None:
+        """Save's Button callback (spec 15: Save).
+
+        The derived ship name is the sidecar path's stem - identical to
+        the input image's filename stem, since startup derives the two
+        from each other. Any of the three sidecar hard errors ends the
+        session with its own message and code, exactly like startup.
+        """
+        if self._sidecar_path is None:
+            # Seam-only sessions built without a real file have nowhere
+            # to save to; live sessions always carry a sidecar path.
+            return
+        try:
+            save_ports(
+                self._sidecar_path,
+                self._ports,
+                self._sidecar_path.stem,
+                self._source_size,
+            )
+        except (
+            SidecarReadError,
+            InvalidSidecarJsonError,
+            SidecarWriteError,
+        ) as exc:
+            self.request_exit(exc.code, str(exc))
 
     def update(self, events: list[pygame.event.Event]) -> None:
         """Feed the frame's event batch to the panel widgets (spec 04:
@@ -760,6 +896,7 @@ class ShipEditorApp:
         option_handlers: dict[str, Callable[[], None]] = {
             "Reset": self._on_reset_click,
             "Clear": self.clear_ports,
+            "Save": self._on_save_click,
         }
         for index, label_text in enumerate(OPTION_BUTTON_LABELS, start=5):
             button = Button(
@@ -767,9 +904,8 @@ class ShipEditorApp:
                 text=label_text,
                 on_click=option_handlers.get(label_text),
             )
-            # Stage seven wires "Reset" and "Clear"; "Save" (stage
-            # eight) and "Exit" (stage nine) keep a None callback and
-            # stay inert until their stages land. The accept sound
+            # Stage eight wires "Save"; "Exit" (stage nine) keeps a
+            # None callback until its stage lands. The accept sound
             # still fires on click - that is the widget's contract
             # (spec 09), not a wiring bug.
             button.set_font_point_size(WIDGET_FONT_POINT_SIZE)
