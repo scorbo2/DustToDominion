@@ -41,7 +41,10 @@ of the Options screen. The first resource found using the list of candidate IDs 
 
 *Implementation note*: to avoid performance issues, follow the example that the Title
 screen uses: cache the scaled background per surface size and re-scale only when
-the target size changes.
+the target size changes. As of the 2026-10-28 CPU-regression follow-up (spec 08),
+that cached copy must also be in the display's pixel format - both screens get this
+behavior for free from the shared `dtd/screens/background.py` helper, which sources
+its image from `ResourceLoader.get_converted_image` (spec 03: Consumer API).
 
 If no such image resource exists, a random starfield is generated,
 using the same starfield generation mechanism used by the Title
@@ -211,6 +214,10 @@ The tests use the `mixer_ready` + `init_audio_manager` pattern to process audio 
   - the search order is respected based on the constant's list order.
   - if the given image doesn't have a 16:9 aspect ratio, it is stretched to fit the entire options screen.
   - if the given image is larger or smaller than our display, it is scaled as needed to fit the entire options screen.
+  - the scaled copy is cached per surface size and converted to the display's pixel
+    format (added 2026-10-28, CPU-regression follow-up): pinned by the shared-helper
+    tests in spec 08's test file (`tests/test_title_screen.py`), inherited here through
+    `dtd/screens/background.py` rather than duplicated.
 - If there is no background image resource, a random starfield is generated.
   - a count of stars between 150 and 300 is generated.
   - all generated stars are grayscale with values ranging from (0,0,0) to (192,192,192).
@@ -393,4 +400,12 @@ The tests use the `mixer_ready` + `init_audio_manager` pattern to process audio 
    survives future size tweaks) at (855, 12) over 210x110, and a new
    test assertion pins the equal left/right margins. Full suite:
    1011 passed.
+9. CPU regression follow-up (2026-10-28): the Options screen inherits the
+   background-cache fix landed for the Title screen (spec 08 dev stage 12)
+   through the shared `dtd/screens/background.py` helper - the scaled copy
+   is converted to the display's pixel format once per surface size, so
+   the per-frame blit stays on SDL's fast path. No Options-screen code
+   changes; no duplicated tests (pinned once in `tests/test_title_screen.py`).
+   **Completed 2026-10-28**: inherited via the shared helper; full suite:
+   1324 passed.
 

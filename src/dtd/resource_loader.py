@@ -92,6 +92,10 @@ class ResourceLoader:
         # API). Unbounded by design: one entry per (font, size) pair the
         # client actually requests.
         self._font_cache: dict[tuple[str, int], pygame.font.Font] = {}
+        # Display-format image copies, keyed by resource id (spec 03:
+        # Consumer API, get_converted_image). Unbounded by design, like
+        # the font cache; the raw store is never mutated.
+        self._converted_image_cache: dict[str, pygame.Surface] = {}
 
     # ------------------------------------------------------------------ #
     # startup entry point (spec 03)
@@ -127,8 +131,88 @@ class ResourceLoader:
     # ------------------------------------------------------------------ #
     def get_image_resource(self, resource_id: str) -> pygame.Surface | None:
         """The ``pygame.Surface`` for an image ID, or ``None`` if the
-        ID is absent or not an image resource."""
+        ID is absent or not an image resource.
+
+        The surface is exactly as the image decoder produced it: blitting
+        it to the window pays a per-pixel format conversion every frame.
+        Surfaces destined for the display should come from
+        ``get_converted_image`` instead (spec 03: Consumer API).
+        """
         return self._store.images.get(resource_id)
+
+    def get_converted_image(self, resource_id: str) -> pygame.Surface | None:
+        """A display-pixel-format copy of an image resource, blit-ready
+        (spec 03: Consumer API), or ``None`` if the ID is absent or not
+        an image resource.
+
+        Why this exists: a surface in a foreign pixel format makes SDL
+        convert every pixel on every blit - the spec 08 stage 12
+        regression measured ~9x the per-frame cost for a full-screen
+        background image, enough to pin one core. Screens do that today
+        and every future sprite blit will too, so the conversion policy
+        lives here once instead of per consumer.
+
+        ``convert_alpha()`` for per-pixel-alpha sources (blend semantics
+        preserved), ``convert()`` for opaque ones. Copies are cached per
+        id, unbounded by design like the font cache; the raw store is
+        never mutated, so ``get_image_resource`` keeps handing out the
+        original surface. The returned copy is a cache entry **owned by
+        the loader: treat it as read-only** - transforms and blits never
+        touch it, but in-place operations (``fill``, ``set_alpha``,
+        blitting *onto* it) corrupt it for every other holder; take a
+        ``.copy()`` for those (spec 03: ownership gotcha).
+
+        Gotcha (spec 03): pygame's convert calls need an active video
+        mode, and startup loads resources before the window exists. No
+        video mode (probed up front with ``pygame.display.get_surface()``)
+        returns the raw surface - correct, just not fast - uncached, so
+        a later request once the window is open gets the converted
+        copy. A conversion that fails *with* a video mode up is a
+        different animal and is never misdiagnosed as the startup case:
+        the actual SDL error is logged at warning level and the raw
+        surface is likewise returned, uncached. The cache assumes the
+        display's pixel format is stable for the process lifetime;
+        spec 02's mode switches preserve the desktop's 32-bit format.
+        """
+        surface = self.get_image_resource(resource_id)
+        if surface is None:
+            return None
+        cached = self._converted_image_cache.get(resource_id)
+        if cached is not None:
+            return cached
+        if pygame.display.get_surface() is None:
+            # The startup window of time (spec 03): resources load
+            # before the window exists. Probed, not guessed - a bare
+            # ``except pygame.error`` would also swallow real SDL
+            # failures and log them at a level nobody reads as if
+            # they were this benign case (spec 03 dev stage 11).
+            logger.debug(
+                "no video mode active: get_converted_image({}) returns the "
+                "raw surface; blits will pay per-pixel format conversion "
+                "until the window opens",
+                resource_id,
+            )
+            return surface
+        try:
+            if surface.get_flags() & pygame.SRCALPHA:
+                converted = surface.convert_alpha()
+            else:
+                converted = surface.convert()
+        except pygame.error as exc:
+            # Video mode is up, so this is a genuine conversion failure,
+            # not the startup case: report the real error loudly and
+            # degrade to the slow-but-correct raw surface. Uncached, so
+            # a transient SDL hiccup can succeed on a later request.
+            logger.warning(
+                "get_converted_image({}) could not convert the surface "
+                "({}); returning the raw surface; blits will pay per-pixel "
+                "format conversion",
+                resource_id,
+                exc,
+            )
+            return surface
+        self._converted_image_cache[resource_id] = converted
+        return converted
 
     def get_sfx_resource(self, resource_id: str) -> pygame.mixer.Sound | None:
         """The ``pygame.mixer.Sound`` for a sound effect ID, or ``None`` if

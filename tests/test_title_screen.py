@@ -621,3 +621,123 @@ class TestTitleScreenDrawCaching:
         assert scaled_sizes == [(300, 200), (640, 360)]
         for corner in [(0, 0), (639, 0), (0, 359), (639, 359)]:
             assert resized.get_at(corner)[:3] == (255, 0, 0)
+
+
+class TestTitleScreenBackgroundDisplayFormat:
+    """CPU-regression follow-up (spec 08 dev plan stage 12): the cached
+    scaled background must be in the display's pixel format, or every
+    frame's blit pays a full per-pixel format conversion again (measured
+    at ~9x the per-frame cost). The pin uses ``pygame.image.frombytes``
+    images because that byte order is exactly what ``pygame.image.load``
+    hands the game for a PNG - and it is provably foreign to the display
+    format under the dummy driver."""
+
+    def _rgbaOrderedImage(
+        self, pixel: bytes, size: tuple[int, int] = (10, 10)
+    ) -> pygame.Surface:
+        """A solid image in RGBA byte order (what ``image.load`` returns
+        for PNGs), built without touching the disk."""
+        return pygame.image.frombytes(pixel * (size[0] * size[1]), size, "RGBA")
+
+    def _scaledCopy(self, screen: TitleScreen) -> pygame.Surface:
+        """The scaled copy the screen cached during its last draw."""
+        cached = screen._background._scaled
+        assert cached is not None, "draw() did not populate the scaled cache"
+        return cached[1]
+
+    def _redScreenAtDesignSize(self, image: pygame.Surface) -> TitleScreen:
+        """A screen whose only background resource is the given image."""
+        loader = _StubImageLoader(
+            {"graphics/screens/title_screen.png": image}
+        )
+        return TitleScreen(_default_theme(), loader, rng=random.Random(1))
+
+    def test_draw_withForeignFormatImageBackground_andVideoMode_shouldCacheCopyInDisplayFormat(
+        self, font_ready: None
+    ) -> None:
+        # GIVEN an open window (the video mode that makes pygame's
+        # convert() legal) and a red background image in the loader's
+        # foreign RGBA byte order,
+        display = pygame.display.set_mode((300, 200))
+        image = self._rgbaOrderedImage(b"\xff\x00\x00\xff")
+        assert image.get_masks()[:3] != display.get_masks()[:3], (
+            "test is pointless if the dummy driver already matches"
+        )
+        screen = self._redScreenAtDesignSize(image)
+
+        # WHEN the screen draws one frame onto the display,
+        screen.draw(display)
+
+        # THEN the cached scaled copy carries the display's RGB channel
+        # masks (SDL's fast blit path) instead of the image's foreign
+        # masks, and the frame still shows red across the whole screen:
+        cached = self._scaledCopy(screen)
+        assert cached.get_masks()[:3] == display.get_masks()[:3]
+        for corner in [(0, 0), (299, 0), (0, 199), (299, 199)]:
+            assert display.get_at(corner)[:3] == (255, 0, 0)
+
+    def test_draw_withTranslucentImageBackground_andVideoMode_shouldKeepAlphaOnCachedCopyAndBlend(
+        self, font_ready: None
+    ) -> None:
+        # GIVEN an open window over a black screen and a half-transparent
+        # red image (RGBA order, per-pixel alpha 128),
+        display = pygame.display.set_mode((64, 48))
+        display.fill((0, 0, 0))
+        image = self._rgbaOrderedImage(b"\xff\x00\x00\x80", size=(20, 20))
+        screen = self._redScreenAtDesignSize(image)
+
+        # WHEN the screen draws one frame,
+        screen.draw(display)
+
+        # THEN the cached copy kept its SRCALPHA flag (convert_alpha, not
+        # convert: a translucent background must still blend) and the
+        # frame shows red at exactly half brightness over black:
+        cached = self._scaledCopy(screen)
+        assert cached.get_flags() & pygame.SRCALPHA
+        for corner in [(0, 0), (63, 0), (0, 47), (63, 47)]:
+            assert display.get_at(corner)[:3] == (128, 0, 0)
+
+    def test_draw_withOpaqueForeignFormatImageBackground_andVideoMode_shouldConvertCopyToDisplayDepth(
+        self, font_ready: None
+    ) -> None:
+        # GIVEN an open window and an opaque red 24-bit RGB image -
+        # foreign again, this time by bit depth rather than channel order,
+        display = pygame.display.set_mode((300, 200))
+        image = pygame.image.frombytes(
+            b"\xff\x00\x00" * (10 * 10), (10, 10), "RGB"
+        )
+        assert image.get_bitsize() != display.get_bitsize(), (
+            "test is pointless if the dummy driver already matches"
+        )
+        screen = self._redScreenAtDesignSize(image)
+
+        # WHEN the screen draws one frame,
+        screen.draw(display)
+
+        # THEN the cached copy took the opaque convert() path: display
+        # bit depth, no SRCALPHA (the fastest copy-blit path), and red
+        # across the whole frame:
+        cached = self._scaledCopy(screen)
+        assert cached.get_bitsize() == display.get_bitsize()
+        assert not cached.get_flags() & pygame.SRCALPHA
+        for corner in [(0, 0), (299, 0), (0, 199), (299, 199)]:
+            assert display.get_at(corner)[:3] == (255, 0, 0)
+
+    def test_draw_withForeignFormatImageBackground_withoutVideoMode_shouldKeepUnconvertedCopyAndDrawCorrectly(
+        self, font_ready: None
+    ) -> None:
+        # GIVEN no video mode anywhere in the process (headless: pygame's
+        # convert() is illegal and raises) and a foreign-format image,
+        image = self._rgbaOrderedImage(b"\xff\x00\x00\xff")
+        screen = self._redScreenAtDesignSize(image)
+        target = pygame.Surface((300, 200))
+
+        # WHEN the screen draws a frame, the draw must not raise,
+        screen.draw(target)
+
+        # THEN the unconverted copy was kept (masks still the image's)
+        # and the pixels are still correct:
+        cached = self._scaledCopy(screen)
+        assert cached.get_masks() == image.get_masks()
+        for corner in [(0, 0), (299, 0), (0, 199), (299, 199)]:
+            assert target.get_at(corner)[:3] == (255, 0, 0)
