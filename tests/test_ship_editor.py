@@ -44,7 +44,8 @@ display area):
 - right-clicking inside the display area toggles the background black
   <-> white; right-clicking on the control panel is ignored
 - sidecar ports are drawn as color-coded markers that scale with the
-  image, floored at 9 screen pixels (spec 15: Edit mode, amended 2026-10-27)
+  image, floored at 9 screen pixels and centered on their cell (spec 15:
+  Edit mode, amended 2026-10-27)
 - ``image_to_screen``/``screen_to_image`` round-trip through the scaled
   ship rect's actual pixel geometry (spec 15: Pixel mapping)
 
@@ -1039,26 +1040,29 @@ def test_ship_editor_app_draws_sidecar_ports_as_colored_markers(
         ("thruster_ports", ports.section_ports("thruster_ports")[0]),
         ("collection_ports", ports.section_ports("collection_ports")[0]),
     ):
-        x, y = app.screen_position_for_port(port)
+        center_x, center_y = app.marker_center_for_port(port)
         expected_color = PORT_COLORS[section]
+        top_left_x = center_x - app.marker_size // 2
+        top_left_y = center_y - app.marker_size // 2
         for offset_x in range(app.marker_size):
             for offset_y in range(app.marker_size):
-                assert screen.get_at((x + offset_x, y + offset_y)) == (
+                assert screen.get_at((top_left_x + offset_x, top_left_y + offset_y)) == (
                     *expected_color,
                     255,
                 )
-        # The marker's top-left pixel should also be the section color:
-        assert screen.get_at((x, y)) == (*expected_color, 255)
+        # The marker's center pixel should also be the section color:
+        assert screen.get_at((center_x, center_y)) == (*expected_color, 255)
 
-    # THEN the anchors match the expected 14.72x mapping of the ship rect
-    # at (64, 172):
-    assert app.screen_position_for_port(ports.section_ports("gun_ports")[0]) == (211, 319)
-    assert app.screen_position_for_port(
+    # THEN the marker centers match the expected 14.72x mapping of the
+    # ship rect at (64, 172) (cell center = ship_rect + (cell + 0.5) *
+    # 14.72):
+    assert app.marker_center_for_port(ports.section_ports("gun_ports")[0]) == (219, 327)
+    assert app.marker_center_for_port(
         ports.section_ports("thruster_ports")[0]
-    ) == (1389, 761)
-    assert app.screen_position_for_port(
+    ) == (1396, 768)
+    assert app.marker_center_for_port(
         ports.section_ports("collection_ports")[0]
-    ) == (800, 540)
+    ) == (807, 547)
 
 
 def test_prepare_valid_sidecar_ports_are_rendered(
@@ -1087,7 +1091,7 @@ def test_prepare_valid_sidecar_ports_are_rendered(
     screen = _design_screen()
     app.draw(screen)
 
-    # THEN each section's port is drawn at its scaled position (the 4x4
+    # THEN each section's port is drawn at its marker center (the 4x4
     # sprite scales 238x into the design fit area, ship rect (324, 64)):
     for section, expected_color in (
         ("gun_ports", PORT_COLORS["gun_ports"]),
@@ -1095,8 +1099,8 @@ def test_prepare_valid_sidecar_ports_are_rendered(
         ("collection_ports", PORT_COLORS["collection_ports"]),
     ):
         port = ports.section_ports(section)[0]
-        x, y = app.screen_position_for_port(port)
-        assert screen.get_at((x, y)) == (*expected_color, 255)
+        center_x, center_y = app.marker_center_for_port(port)
+        assert screen.get_at((center_x, center_y)) == (*expected_color, 255)
 
 
 def test_ship_editor_app_scales_large_sprite_down(pygame_ready: None) -> None:
@@ -1120,9 +1124,10 @@ def test_ship_editor_app_scales_tall_sprite_down(pygame_ready: None) -> None:
 
 
 # ---------------------------------------------------------------------- #
-# port marker sizing + pixel mapping (spec 15: Edit mode,
-# Pixel mapping; acceptance criterion "Do the single-pixel port locations
-# scale up as the ship image scales up?")
+# port marker sizing/centering + pixel mapping (spec 15: Edit mode,
+# Pixel mapping; acceptance criterion "Do the port markers scale up as
+# the ship image scales up, with a minimum size of 9x9 screen pixels,
+# centered over their port locations?")
 # ---------------------------------------------------------------------- #
 
 
@@ -1142,20 +1147,20 @@ def test_ship_editor_app_with_upscaled_sprite_scales_port_markers_with_the_image
     # 9px floor (round(95.2) = 95 screen pixels):
     assert app.marker_size == 95
 
-    # THEN the marker covers its full scaled extent, top-left anchored
-    # at the mapped port location:
-    marker_x, marker_y = app.screen_position_for_port(
+    # THEN the marker center sits at the mapped cell center, and the
+    # 95px footprint (half = 47) spans 801..895 x 541..635:
+    center_x, center_y = app.marker_center_for_port(
         ports.section_ports("gun_ports")[0]
     )
-    assert (marker_x, marker_y) == (800, 540)
+    assert (center_x, center_y) == (848, 588)
     marker_color = PORT_COLORS["gun_ports"] + (255,)
-    assert screen.get_at((marker_x, marker_y)) == marker_color
-    assert screen.get_at((marker_x + 40, marker_y + 40)) == marker_color
-    assert screen.get_at((marker_x + 94, marker_y + 94)) == marker_color
+    assert screen.get_at((center_x, center_y)) == marker_color
+    assert screen.get_at((center_x - 47, center_y - 47)) == marker_color
+    assert screen.get_at((center_x + 47, center_y + 47)) == marker_color
 
     # THEN the pixel just past the marker's bottom-right corner is plain
     # sprite, proving the marker did not spill arbitrarily far:
-    assert screen.get_at((marker_x + 95, marker_y + 95)) == (10, 20, 30, 255)
+    assert screen.get_at((center_x + 48, center_y + 48)) == (10, 20, 30, 255)
 
 
 def test_ship_editor_app_with_downscaled_sprite_floors_port_marker_at_nine_pixels(
@@ -1174,11 +1179,43 @@ def test_ship_editor_app_with_downscaled_sprite_floors_port_marker_at_nine_pixel
     # mode, amended 2026-10-27):
     assert app.marker_size == PORT_MARKER_SIZE
 
-    # THEN the drawn marker is exactly 9x9 at the mapped location
-    # (ship rect starts at (205, 64), so image (0, 0) anchors there):
+    # THEN the drawn marker is exactly 9x9, centered on the port's cell
+    # center (ship rect starts at (205, 64), so cell (0, 0) centers at
+    # (205, 64) and the never-clamped marker spans 201..209 x 60..68):
     marker_color = PORT_COLORS["gun_ports"] + (255,)
-    assert screen.get_at((213, 72)) == marker_color
-    assert screen.get_at((214, 73)) == (1, 2, 3, 255)
+    # top-left corner sits in the black margin, up/left of the ship rect
+    # - an edge port's bleed into the margin (spec 15: Edit mode,
+    # amended 2026-10-27):
+    assert screen.get_at((201, 60)) == marker_color
+    assert screen.get_at((209, 68)) == marker_color
+    # THEN the pixel just past the bottom-right corner is plain sprite,
+    # proving the footprint is exactly 9x9 and no further:
+    assert screen.get_at((210, 69)) == (1, 2, 3, 255)
+
+
+def test_ship_editor_app_with_downscaled_sprite_centers_interior_port_marker_symmetrically_over_its_cell(
+    pygame_ready: None, font_ready: None
+) -> None:
+    # GIVEN the same 0.595x downscaled sprite but with an interior gun
+    # port at (1000, 800), whose cell center maps to screen (800, 540):
+    surface = _make_surface((2000, 1600), (1, 2, 3))
+    ports = ShipPorts()
+    ports.add("gun_ports", 1000, 800, 0)
+    app = _make_app(surface, ports)
+    screen = _design_screen()
+    app.draw(screen)
+
+    # THEN the 9x9 marker is centered on the cell: the sub-pixel cell
+    # forces a symmetric +/-4px bleed into the neighbouring image cells
+    # on ALL sides, not just down/right of a top-left anchor (spec 15:
+    # Edit mode, amended 2026-10-27):
+    assert (app.marker_center_for_port(ports.section_ports("gun_ports")[0])
+            == (800, 540))
+    marker_color = PORT_COLORS["gun_ports"] + (255,)
+    assert screen.get_at((796, 536)) == marker_color
+    assert screen.get_at((804, 544)) == marker_color
+    assert screen.get_at((795, 535)) == (1, 2, 3, 255)
+    assert screen.get_at((805, 545)) == (1, 2, 3, 255)
 
 
 def test_image_to_screen_and_screen_to_image_with_exact_scale_should_round_trip(

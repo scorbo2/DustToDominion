@@ -166,16 +166,23 @@ three, and the checked state alone carries the mode. (Only the group header
 Labels use the selected style.)
 
 Left-clicking anywhere in the ship display area adds or removes a port
-of the type described by the active edit mode. This draws a marker,
-scaled to match the image's current scale (but with a minimum size
-of 9x9 screen pixels), at the clicked location, in
-a color to represent the current edit mode:
+of the type described by the active edit mode. This draws a marker, in
+a color to represent the current edit mode, centered on the on-screen
+location of the port's image-space cell:
 - Gun ports: RGB (255,1,1)
 - Thruster ports: RGB (1,255,1)
 - Collection ports: RGB (1,1,255)
 
-The drawn marker is at least 9 screen pixels (square) regardless of image scale;
-port hit-testing always uses image-space coordinates.
+The drawn marker is at least 9 screen pixels (square) regardless of image
+scale, and otherwise scales with the image. The marker is always centered
+on its scaled cell: once the image scale reaches the marker minimum, the
+marker aligns with the scaled cell. The marker is never clamped - at
+sub-pixel image scales it may bleed symmetrically into neighbouring image
+cells, and an edge port's marker may bleed into the ship display area's
+margin. Port hit-testing always uses image-space coordinates: a click
+resolves through the pixel-mapping rules, so a click landing on the outer
+bleed ring of a marker may map to a different image cell. This is an
+accepted known limitation until zoom controls land (Dev plan stage 13).
 
 This establishes a new port of the given type at that location, if the
 clicked location matches no in-memory port assignment.
@@ -382,6 +389,7 @@ drivable from tests without entering the 60FPS loop.
 - Clicking "Save" when a sidecar file exists should merge the in-memory ports into that file (do not overwrite "name", "mass", or "level")
 - Clicking "Exit" should exit immediately, even if unsaved changes exist in-memory.
 - Port markers are drawn at least 9x9 screen pixels regardless of image scale; markers scale up with the image beyond that floor; hit-testing remains image-space-only.
+- Port markers are drawn centered on the on-screen center of their image-space cell; below the marker minimum the bleed into adjacent image cells (or the display margin, for edge ports) is symmetric rather than anchored down-and-right of the cell. Recentering must not disturb the forward/inverse mapping round-trip or hit-testing.
 
 ## Acceptance criteria
 
@@ -389,7 +397,7 @@ drivable from tests without entering the 60FPS loop.
 - If the input image has a sidecar Json file, are its ports loaded and displayed on startup?
 - Can the user left-click to add ports of the three types anywhere on the image?
 - Are the ports color-coded according to their type for easy visual identification?
-- Do the port markers scale up as the ship image scales up, with a minimum size of 9x9 screen pixels?
+- Do the port markers scale up as the ship image scales up, with a minimum size of 9x9 screen pixels, centered over their port locations?
 - Can the user save changes once ports are defined in-memory?
 
 ## Open questions (all resolved)
@@ -468,3 +476,27 @@ drivable from tests without entering the 60FPS loop.
   incidental `marker_size == 6` assertion in the exact-scale round-trip test
   updated to the now-dominating 9px floor - mapping itself is image-space and
   unaffected; full suite green at 1296 tests; doc status flipped to active.)
+12. **Amendment 2026-10-27** Draw port markers centered on the on-screen
+  center of their scaled image-space cell, instead of top-left-anchored
+  at the scaled cell corner. This is a render-only change: pixel mapping,
+  image-space hit-testing, and the sidecar format are untouched. Update
+  the marker rect placement in `ShipEditorApp` (and the topleft contract
+  of the `screen_position_for_port` helper), and re-anchor the marker
+  pixel probes in the tests; cover the centered floor footprint and the
+  edge-port margin bleed. Full suite green. If all is well, flip this
+  doc back to "active" - stage 13 is only a placeholder and does not
+  block the flip.
+  **Completed 2026-10-27** (`_port_marker_rect` now centers on the
+  scaled cell center and no longer clamps; `image_to_screen` docstring
+  reworded to make clear it is the mapping anchor, not the marker;
+  three test anchors re-anchored ((212, 320) at 14.72x, (801, 541) at
+  95.2x, and the 0.595x floor probes), the floor test extended with the
+  edge-port margin-bleed probe, and a new interior symmetric-bleed test
+  added; mapping round-trip tests untouched and still green; full suite
+  green at 1297 tests; doc status flipped to active.)
+13. Placeholder (2026-10-27): zoom in/zoom out controls for the ship
+  display area, so sub-pixel image scales stop hiding placement detail.
+  Not yet specified: before starting this stage, flip this doc back to
+  "proposed" and expand it with the full zoom spec (controls and key
+  bindings, scale limits, interaction with the 64px display margin, the
+  9px marker floor, and the pixel mapping) plus a staged plan.

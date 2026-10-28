@@ -581,7 +581,8 @@ class ShipEditorApp:
     Left of the control panel: renders the input sprite scaled to fit the
     display area and overlays one marker per port - one image-space
     pixel scaled to match the ship's current scale, floored at 9 screen
-    pixels (spec 15: Edit mode, amended 2026-10-27).
+    pixels and centered on its scaled cell (spec 15: Edit mode, amended
+    2026-10-27).
     ``image_to_screen``/``screen_to_image``
     are the single pair of forward/inverse mapping helpers - both derived
     from the actual pixel geometry of the scaled ship rect, so click
@@ -700,16 +701,18 @@ class ShipEditorApp:
         return self._marker_size
 
     def image_to_screen(self, image_x: int, image_y: int) -> tuple[int, int]:
-        """Screen position of the marker for image-space location
-        (image_x, image_y), anchored at the marker's top-left.
+        """Screen position of the top-left corner of image-space cell
+        (image_x, image_y) - the pixel-mapping anchor (spec 15: Pixel
+        mapping), deliberately *not* the drawn marker: markers are
+        centered on their cell (spec 15: Edit mode, amended 2026-10-27);
+        see ``marker_center_for_port``.
 
-        Goes through the actual pixel geometry of the scaled ship rect
-        (spec 15: Pixel mapping). The anchor itself always round-trips
-        back through ``screen_to_image``; a marker's far edge may bleed
-        into the neighbouring image cell when scale exceeds 1, which is
-        unavoidable for fixed-size square markers and harmless to
-        hit-testing (clicks are tested in image space via
-        ``screen_to_image``, not against marker pixels).
+        Goes through the actual pixel geometry of the scaled ship rect.
+        The anchor always round-trips back through ``screen_to_image``;
+        marker bleed never enters the mapping algebra, so hit-testing
+        can never disagree with what the marker claims (clicks are
+        tested in image space via ``screen_to_image``, not against
+        marker pixels).
         """
         return (
             self._ship_rect.x + int(round(image_x * self._scale_x)),
@@ -876,9 +879,21 @@ class ShipEditorApp:
         screen.fill(CONTROL_PANEL_COLOR, self._layout.control_panel)
         self.ui.draw(screen)
 
-    def screen_position_for_port(self, port: Port) -> tuple[int, int]:
-        """Screen position of ``port``'s marker, clamped to the display area."""
-        return self._port_marker_rect(port).topleft
+    def marker_center_for_port(self, port: Port) -> tuple[int, int]:
+        """On-screen center of ``port``'s marker footprint (spec 15:
+        Edit mode, amended 2026-10-27). The center is the authoritative
+        decal position - a centered marker has no meaningful corner
+        coordinates - and it always sits at the on-screen center of the
+        port's scaled image-space cell. ``_port_marker_rect`` merely
+        pads it to ``marker_size``."""
+        return (
+            self._ship_rect.x + int(
+                round((port.x + 0.5) * self._scale_x)
+            ),
+            self._ship_rect.y + int(
+                round((port.y + 0.5) * self._scale_y)
+            ),
+        )
 
     def _build_panel_widgets(self) -> None:
         """Instantiate the control panel's widgets (spec 15: The control
@@ -997,12 +1012,21 @@ class ShipEditorApp:
         )
 
     def _port_marker_rect(self, port: Port) -> pygame.Rect:
-        display_area = self._layout.display_area
-        marker_x, marker_y = self.image_to_screen(port.x, port.y)
-        marker_x = max(display_area.x, min(marker_x, display_area.right - 1))
-        marker_y = max(display_area.y, min(marker_y, display_area.bottom - 1))
+        """Pad ``port``'s marker center to a ``marker_size`` square
+        (spec 15: Edit mode, amended 2026-10-27). Never clamped - below
+        the marker minimum the footprint bleeds symmetrically into
+        neighbouring cells, and an edge port's marker may bleed into
+        the display margin. Even marker sizes cannot center exactly on
+        a pixel coordinate: the extra pixel lands down/right of center,
+        which a decal can afford.
+        """
+        center_x, center_y = self.marker_center_for_port(port)
+        half = self._marker_size // 2
         return pygame.Rect(
-            marker_x, marker_y, self._marker_size, self._marker_size
+            center_x - half,
+            center_y - half,
+            self._marker_size,
+            self._marker_size,
         )
 
     def _draw_port_markers(self, screen: pygame.Surface) -> None:
