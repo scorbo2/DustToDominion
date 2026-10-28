@@ -166,14 +166,15 @@ three, and the checked state alone carries the mode. (Only the group header
 Labels use the selected style.)
 
 Left-clicking anywhere in the ship display area adds or removes a port
-of the type described by the active edit mode. This draws a single pixel (in image space) marker,
-scaled to match the image's current scale, at the clicked location, in
+of the type described by the active edit mode. This draws a marker,
+scaled to match the image's current scale (but with a minimum size
+of 9x9 screen pixels), at the clicked location, in
 a color to represent the current edit mode:
 - Gun ports: RGB (255,1,1)
 - Thruster ports: RGB (1,255,1)
 - Collection ports: RGB (1,1,255)
 
-The drawn marker is at least 3 screen pixels (square) regardless of image scale;
+The drawn marker is at least 9 screen pixels (square) regardless of image scale;
 port hit-testing always uses image-space coordinates.
 
 This establishes a new port of the given type at that location, if the
@@ -380,6 +381,7 @@ drivable from tests without entering the 60FPS loop.
 - Clicking "Save" when no sidecar file exists should generate a new sidecar file with the in-memory ports list.
 - Clicking "Save" when a sidecar file exists should merge the in-memory ports into that file (do not overwrite "name", "mass", or "level")
 - Clicking "Exit" should exit immediately, even if unsaved changes exist in-memory.
+- Port markers are drawn at least 9x9 screen pixels regardless of image scale; markers scale up with the image beyond that floor; hit-testing remains image-space-only.
 
 ## Acceptance criteria
 
@@ -387,7 +389,7 @@ drivable from tests without entering the 60FPS loop.
 - If the input image has a sidecar Json file, are its ports loaded and displayed on startup?
 - Can the user left-click to add ports of the three types anywhere on the image?
 - Are the ports color-coded according to their type for easy visual identification?
-- Do the single-pixel port locations scale up as the ship image scales up?
+- Do the port markers scale up as the ship image scales up, with a minimum size of 9x9 screen pixels?
 - Can the user save changes once ports are defined in-memory?
 
 ## Open questions (all resolved)
@@ -458,4 +460,11 @@ drivable from tests without entering the 60FPS loop.
   acceptance criteria verified against tests; one audit gap closed -
   thruster/collection click-adds now proven per-type through the UI;
   full suite green at 1296 tests; doc status flipped to active.)
-
+11. **Amendment 2026-10-27** Increase the minimum size of markers from
+  3x3 (square) to 9x9 (square), in screen pixels, to make them more visible.
+  Update code and tests as needed. If all is well, flip this doc back to "active".
+  **Completed 2026-10-27** (`PORT_MARKER_SIZE` bumped 3 -> 9; the downscaled-sprite
+  floor test renamed and re-anchored to prove an exact 9x9 footprint; one
+  incidental `marker_size == 6` assertion in the exact-scale round-trip test
+  updated to the now-dominating 9px floor - mapping itself is image-space and
+  unaffected; full suite green at 1296 tests; doc status flipped to active.)

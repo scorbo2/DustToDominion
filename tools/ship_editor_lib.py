@@ -72,9 +72,10 @@ CONTROL_PANEL_COLOR = (64, 64, 64)
 BACKGROUND_BLACK = (0, 0, 0)
 BACKGROUND_WHITE = (255, 255, 255)
 #: Floor for the drawn port marker, in screen pixels (spec 15: Edit mode -
-#: "at least 3 screen pixels (square) regardless of image scale"). The
-#: marker otherwise scales with the image; see ``ShipEditorApp.marker_size``.
-PORT_MARKER_SIZE = 3
+#: "at least 9 screen pixels (square) regardless of image scale", amended
+#: 2026-10-27 for visibility). The marker otherwise scales with the image;
+#: see ``ShipEditorApp.marker_size``.
+PORT_MARKER_SIZE = 9
 PORT_COLORS = {
     "gun_ports": (255, 1, 1),
     "thruster_ports": (1, 255, 1),
@@ -579,8 +580,9 @@ class ShipEditorApp:
 
     Left of the control panel: renders the input sprite scaled to fit the
     display area and overlays one marker per port - one image-space
-    pixel scaled to match the ship's current scale, floored at 3 screen
-    pixels (spec 15: Edit mode). ``image_to_screen``/``screen_to_image``
+    pixel scaled to match the ship's current scale, floored at 9 screen
+    pixels (spec 15: Edit mode, amended 2026-10-27).
+    ``image_to_screen``/``screen_to_image``
     are the single pair of forward/inverse mapping helpers - both derived
     from the actual pixel geometry of the scaled ship rect, so click
     hit-testing (spec 15: Pixel mapping) and marker rendering can never

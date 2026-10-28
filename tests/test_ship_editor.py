@@ -44,7 +44,7 @@ display area):
 - right-clicking inside the display area toggles the background black
   <-> white; right-clicking on the control panel is ignored
 - sidecar ports are drawn as color-coded markers that scale with the
-  image, floored at 3 screen pixels (spec 15: Edit mode)
+  image, floored at 9 screen pixels (spec 15: Edit mode, amended 2026-10-27)
 - ``image_to_screen``/``screen_to_image`` round-trip through the scaled
   ship rect's actual pixel geometry (spec 15: Pixel mapping)
 
@@ -1018,7 +1018,7 @@ def test_ship_editor_app_draws_sidecar_ports_as_colored_markers(
 ) -> None:
     # GIVEN a sprite with one port in each section (the 100x50 sprite in
     # the 1600x1080 design display area scales 14.72x, so markers scale
-    # past the 3px floor):
+    # past the 9px floor):
     surface = _make_surface((100, 50), (10, 20, 30))
     ports = ShipPorts()
     ports.add("gun_ports", 10, 10, 0)
@@ -1139,7 +1139,7 @@ def test_ship_editor_app_with_upscaled_sprite_scales_port_markers_with_the_image
     app.draw(screen)
 
     # THEN the marker scales with the image instead of staying at the
-    # 3px floor (round(95.2) = 95 screen pixels):
+    # 9px floor (round(95.2) = 95 screen pixels):
     assert app.marker_size == 95
 
     # THEN the marker covers its full scaled extent, top-left anchored
@@ -1158,7 +1158,7 @@ def test_ship_editor_app_with_upscaled_sprite_scales_port_markers_with_the_image
     assert screen.get_at((marker_x + 95, marker_y + 95)) == (10, 20, 30, 255)
 
 
-def test_ship_editor_app_with_downscaled_sprite_floors_port_marker_at_three_pixels(
+def test_ship_editor_app_with_downscaled_sprite_floors_port_marker_at_nine_pixels(
     pygame_ready: None, font_ready: None
 ) -> None:
     # GIVEN a sprite that must scale down (0.595x) with a gun port at the
@@ -1170,14 +1170,15 @@ def test_ship_editor_app_with_downscaled_sprite_floors_port_marker_at_three_pixe
     screen = _design_screen()
     app.draw(screen)
 
-    # THEN the marker stays at the 3-screen-pixel floor:
+    # THEN the marker stays at the 9-screen-pixel floor (spec 15: Edit
+    # mode, amended 2026-10-27):
     assert app.marker_size == PORT_MARKER_SIZE
 
-    # THEN the drawn marker is exactly 3x3 at the mapped location
+    # THEN the drawn marker is exactly 9x9 at the mapped location
     # (ship rect starts at (205, 64), so image (0, 0) anchors there):
     marker_color = PORT_COLORS["gun_ports"] + (255,)
-    assert screen.get_at((207, 66)) == marker_color
-    assert screen.get_at((208, 67)) == (1, 2, 3, 255)
+    assert screen.get_at((213, 72)) == marker_color
+    assert screen.get_at((214, 73)) == (1, 2, 3, 255)
 
 
 def test_image_to_screen_and_screen_to_image_with_exact_scale_should_round_trip(
@@ -1192,7 +1193,11 @@ def test_image_to_screen_and_screen_to_image_with_exact_scale_should_round_trip(
     )
     app = _make_app(_make_surface((20, 10)), layout=layout)
     assert app.ship_rect == pygame.Rect(64, 64, 120, 60)
-    assert app.marker_size == 6
+    # Marker size is floored at 9 (spec 15 amendment 2026-10-27), which
+    # now dominates at this 6x scale - but only the drawn footprint
+    # grows; the forward/inverse mapping below is image-space and
+    # marker-size independent:
+    assert app.marker_size == PORT_MARKER_SIZE
 
     # THEN forward mapping hits the expected screen anchors:
     assert app.image_to_screen(0, 0) == (64, 64)
