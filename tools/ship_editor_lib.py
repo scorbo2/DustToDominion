@@ -1010,10 +1010,49 @@ class ShipEditorApp:
         self.request_exit(0)
 
     def update(self, events: list[pygame.event.Event]) -> None:
-        """Feed the frame's event batch to the panel widgets (spec 04:
-        Changes to game loop): hover flags, click handling, and hover
-        audio all live in the UIManager/Widget framework."""
+        """Dispatch one frame's event batch (spec 04: Changes to game
+        loop; spec 15: The main interface).
+
+        Display-area input - left click: port editing, right click:
+        background toggle, ``MOUSEWHEEL``: zoom (spec 15: Zoom) - is
+        dispatched first, then the whole batch reaches the panel
+        widgets (hover flags, click handling, and hover audio in the
+        UIManager/Widget framework). The two consumers never fight
+        over one click: port edits ignore everything right of the
+        display area, and the widgets all live inside the control
+        panel.
+        """
+        for event in events:
+            if event.type == pygame.MOUSEBUTTONDOWN:
+                if event.button == 1:
+                    self.handle_left_click(event.pos)
+                elif event.button == 3:
+                    self.handle_right_click(event.pos)
+            elif event.type == pygame.MOUSEWHEEL:
+                self._dispatch_wheel_event(event)
         self.ui.update(events)
+
+    def _dispatch_wheel_event(self, event: pygame.event.Event) -> None:
+        """Map one ``MOUSEWHEEL`` event to at most one zoom step.
+
+        pygame-ce delivers wheel scrolling as ``MOUSEWHEEL``, not as
+        the legacy button 4/5 ``MOUSEBUTTONDOWN`` events: SDL2 still
+        emits those on whole-notch ratcheted wheels, but suppresses
+        them entirely for smooth/precision scroll devices, so the
+        legacy route silently dead-ends on trackpads. One event maps
+        to exactly one quantized step regardless of ``y`` magnitude
+        (the spec 12 house policy from the slider), and horizontal
+        wheel ticks (``y == 0``) do nothing to the zoom.
+
+        ``MOUSEWHEEL.pos`` exists since pygame-ce 2.5.8 (SDL 2.26+);
+        older builds report ``None``, where the current pointer
+        position is the honest stand-in. The handler itself decides
+        whether the position is even inside the display area.
+        """
+        if event.y == 0:
+            return
+        position = getattr(event, "pos", None) or pygame.mouse.get_pos()
+        self.handle_mouse_wheel(position, 1 if event.y > 0 else -1)
 
     def draw(self, screen: pygame.Surface) -> None:
         """Paint the current display and control-panel state to
@@ -1376,9 +1415,10 @@ def _run_display(
     interface).
 
     Fixed 60FPS via ``clock.tick(60)``, game-loop style: drain events,
-    dispatch display-area input (left click: port editing, right click:
-    background toggle, wheel buttons: zoom - spec 15: Zoom), feed the
-    whole batch to the panel widgets (``app.update``),
+    watch for QUIT, hand the whole batch to ``app.update`` (display
+    area input - left click: port editing, right click: background
+    toggle, MOUSEWHEEL: zoom - spec 15: Zoom - plus the panel
+    widgets),
     honor any ``exit_request`` the widgets filed (spec 15: Reset's hard
     errors end the session with the startup message and code), render
     (``app.draw``), flip, tick. Left-clicks reach both handlers, but
@@ -1405,18 +1445,6 @@ def _run_display(
         for event in events:
             if event.type == pygame.QUIT:
                 return 0
-            if event.type == pygame.MOUSEBUTTONDOWN:
-                if event.button == 1:
-                    app.handle_left_click(event.pos)
-                elif event.button == 3:
-                    app.handle_right_click(event.pos)
-                elif event.button in (4, 5):
-                    # Wheel up/down zooms (spec 15: Zoom); the handler
-                    # itself decides whether the pointer is even inside
-                    # the display area.
-                    app.handle_mouse_wheel(
-                        event.pos, 1 if event.button == 4 else -1
-                    )
         app.update(events)
         if app.exit_request is not None:
             code, message = app.exit_request

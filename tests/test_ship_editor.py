@@ -59,6 +59,10 @@ display area):
   while empty-margin clicks stay no-ops and the cell-mapping fallback
   takes over past the zoom crossover (spec 15: Edit mode, amended
   2026-10-27)
+- ``app.update`` dispatches wheel zoom from ``pygame.MOUSEWHEEL``
+  events: one event is one step whatever the ``y`` magnitude,
+  horizontal ticks and legacy button 4/5 events are ignored, and a
+  pos-less event falls back to ``pygame.mouse.get_pos()``
 
 The control-panel contract (spec 15: The control panel, Edit mode):
 
@@ -1705,6 +1709,100 @@ def test_clear_and_save_button_clicks_should_leave_the_zoom_level_untouched(
     assert app.exit_request is None
     saved = json.loads(sidecar_path.read_text())
     assert saved["gun_ports"] == []
+
+
+# ---------------------------------------------------------------------- #
+# wheel event dispatch: MOUSEWHEEL through app.update (pygame-ce
+# convention; the legacy button 4/5 route is deliberately not handled)
+# ---------------------------------------------------------------------- #
+
+
+def test_update_with_mousewheel_event_of_magnitude_three_should_zoom_exactly_one_step(
+    pygame_ready: None,
+) -> None:
+    # GIVEN the exactly-6x setup at the fit view:
+    app = _make_app(_make_surface((20, 10)), layout=_exact_scale_layout())
+
+    # WHEN a fast three-line wheel flick lands as one MOUSEWHEEL event
+    # at (124, 94) (the house policy from spec 12: every event counts
+    # as magnitude 1, direction preserved):
+    app.update(
+        [pygame.event.Event(pygame.MOUSEWHEEL, x=0, y=3, pos=(124, 94))]
+    )
+
+    # THEN exactly one quantized zoom step is applied:
+    assert app.zoom_steps == 1
+    assert app.ship_rect.size == (150, 75)
+
+
+def test_update_with_horizontal_only_mousewheel_event_should_not_change_the_zoom(
+    pygame_ready: None,
+) -> None:
+    # GIVEN the exactly-6x setup at the fit view:
+    app = _make_app(_make_surface((20, 10)), layout=_exact_scale_layout())
+    ship_before = app.ship_rect.copy()
+
+    # WHEN a horizontal wheel tick arrives (x nonzero, y == 0):
+    app.update(
+        [pygame.event.Event(pygame.MOUSEWHEEL, x=2, y=0, pos=(124, 94))]
+    )
+
+    # THEN the zoom is untouched:
+    assert app.zoom_steps == 0
+    assert app.ship_rect == ship_before
+
+
+def test_update_with_legacy_wheel_button_event_should_not_zoom(
+    pygame_ready: None,
+) -> None:
+    # GIVEN the exactly-6x setup at the fit view:
+    app = _make_app(_make_surface((20, 10)), layout=_exact_scale_layout())
+
+    # WHEN a legacy button-4 wheel MOUSEBUTTONDOWN event arrives (SDL2
+    # still emits these on ratcheted wheels alongside the MOUSEWHEEL
+    # twin; handling both would double-step per notch):
+    app.update(
+        [pygame.event.Event(pygame.MOUSEBUTTONDOWN, pos=(124, 94), button=4)]
+    )
+
+    # THEN the legacy event is ignored - MOUSEWHEEL is the sole zoom
+    # source:
+    assert app.zoom_steps == 0
+
+
+def test_update_with_mousewheel_over_the_control_panel_should_ignore_the_wheel(
+    pygame_ready: None,
+) -> None:
+    # GIVEN an app on the design layout (panel at x >= 1600):
+    app = _make_app(_make_surface((20, 10)))
+
+    # WHEN wheeling over the panel:
+    app.update(
+        [pygame.event.Event(pygame.MOUSEWHEEL, x=0, y=1, pos=(1760, 540))]
+    )
+
+    # THEN the zoom level is untouched (spec 15: Zoom):
+    assert app.zoom_steps == 0
+
+
+def test_update_with_posless_mousewheel_event_should_zoom_at_the_current_mouse_position(
+    pygame_ready: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # GIVEN the exactly-6x setup, a pointer parked at (124, 94), and a
+    # MOUSEWHEEL event carrying pos=None (pygame-ce built against an
+    # SDL older than 2.26):
+    app = _make_app(_make_surface((20, 10)), layout=_exact_scale_layout())
+    monkeypatch.setattr(pygame.mouse, "get_pos", lambda: (124, 94))
+
+    # WHEN the posless wheel event is dispatched:
+    app.update(
+        [pygame.event.Event(pygame.MOUSEWHEEL, x=0, y=1, pos=None)]
+    )
+
+    # THEN the current pointer position anchors the zoom:
+    assert app.zoom_steps == 1
+    assert app.ship_rect.size == (150, 75)
+    assert app.image_to_screen(10, 5) == (124, 94)
 
 
 def test_ship_editor_app_with_zero_size_sprite_should_raise_value_error() -> None:
