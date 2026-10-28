@@ -1,20 +1,24 @@
-"""Ship editor tool tests (spec 15, Dev plan stages one, two, and three).
+"""Ship editor tool tests (spec 15).
 
-Covers the stage one contract:
+All dev plan stages are complete, so coverage is grouped by spec 15
+section - sections stay addressable, stage numbers do not.
+
+The command-line contract (spec 15: intro prose, Testing, Script
+structure):
 
 - 0 or 2+ arguments (excluding argparse's ``--help``) exit with code 2
 - a sprite file that does not exist, is not readable, has an unsupported
   extension, or is not a valid image exits with code 1
-- a valid sprite image with no sidecar prints "All good" to stdout and
-  exits code 0
+- a valid sprite image with no sidecar yields a surface and empty ports
+  from ``prepare``, exit code 0, and no success stdout message
 - the injectable loader seam is exercised end to end (spec 15: Script
   structure)
 
-and the stage two contract (spec 15: Load on startup, Json format, Json
-validation):
+The sidecar-loading contract (spec 15: Load on startup, Json format,
+Json validation):
 
-- a valid image with a valid sidecar prints "All good, and the Json is
-  also good" and exits code 0
+- a valid image with a valid sidecar loads every port, exits code 0, and
+  prints no success stdout message
 - a valid image with a malformed/unreadable sidecar exits code 1 with
   "Can't read Json file {file}"
 - a valid image with an invalid sidecar exits code 2 with the
@@ -25,7 +29,8 @@ validation):
 - read and validation failures raise ``SidecarReadError`` /
   ``InvalidSidecarJsonError`` with the spec's messages and codes
 
-and the stage three contract (spec 15: The main interface):
+The ship display contract (spec 15: The main interface, The ship
+display area):
 
 - a valid image with no sidecar prepares an empty-ports display with no
   success stdout message
@@ -43,7 +48,7 @@ and the stage three contract (spec 15: The main interface):
 - ``image_to_screen``/``screen_to_image`` round-trip through the scaled
   ship rect's actual pixel geometry (spec 15: Pixel mapping)
 
-and the stage four contract (spec 15: The control panel, Edit mode):
+The control-panel contract (spec 15: The control panel, Edit mode):
 
 - ``panel_widget_rects`` lays out the two spec groups: fixed (256,40)
   rects, 12 design-px inside-group gaps, 48 design-px between groups
@@ -58,7 +63,7 @@ and the stage four contract (spec 15: The control panel, Edit mode):
 - every Edit mode checkbox renders the normal background, and the
   active one is distinguished only by its check mark
 
-and the stage six contract (spec 15: Edit mode, Pixel mapping):
+The click-editing contract (spec 15: Edit mode, Pixel mapping):
 
 - left-clicking a free image cell adds a level-0 port of the current
   Edit mode, drawn in that mode's color
@@ -69,10 +74,16 @@ and the stage six contract (spec 15: Edit mode, Pixel mapping):
 - clicks that map outside the image (display margin, panel) are no-ops
 - ports land in whichever section the Edit mode checkboxes selected
 - downscale mappings add a port at the cell the click maps back to
-- the "Exit" Button files a clean code-0 exit request on click,
-  immediately and without saving (spec 15 acceptance criteria)
+- ``apply_click_edit`` is the pygame-free collision policy: add,
+  toggle-clear, and reassign-with-level-intact over the dumb store
 
-and the stage seven contract (spec 15: Reset, Clear):
+The exit contract (spec 15: Testing - "Clicking Exit should exit
+immediately, even if unsaved changes exist in-memory"):
+
+- the "Exit" Button files a clean code-0 exit request on click,
+  immediately and without saving
+
+The Reset/Clear contract (spec 15: Reset, Clear):
 
 - a "Clear" click empties every port section in-memory and requests
   no exit, leaving any sidecar file on disk byte-identical
@@ -82,11 +93,9 @@ and the stage seven contract (spec 15: Reset, Clear):
 - a "Reset" onto a malformed sidecar files an exit request (code 1,
   "Can't read Json file {file}"); onto a schema-invalid sidecar, code 2
   with an "Invalid Json:" message - the startup rules, verbatim
-- ``apply_click_edit`` is the pygame-free collision policy: add,
-  toggle-clear, and reassign-with-level-intact over the dumb store
 
-and the stage eight contract (spec 15: Save, Create behavior, Merge
-behavior, Json format):
+The save contract (spec 15: Save, Create behavior, Merge behavior,
+Json format):
 
 - saving without an existing sidecar creates it with name (derived
   from the image filename), mass 0, and all three port lists,
@@ -329,7 +338,7 @@ def test_prepare_valid_image_no_sidecar_should_return_zero_and_empty_ports(
     code, surface, ports = prepare([str(sprite_path)])
 
     # THEN it succeeds, returns a displayable surface and empty ports, and
-    # stage three removes the old success stdout message:
+    # prints no success stdout message (the shipped contract has none):
     assert code == 0
     assert surface is not None
     assert ports is not None
@@ -362,8 +371,9 @@ def test_prepare_valid_image_with_valid_sidecar_should_return_ports_and_no_succe
     # WHEN we prepare the tool:
     code, surface, ports = prepare([str(sprite_path)])
 
-    # THEN it succeeds with ports loaded, no success stdout (stage three
-    # removed the old "All good" message), and the loader saw the file:
+    # THEN it succeeds with ports loaded, no success stdout (the temporary
+    # "All good" message never made it into the shipped contract), and
+    # the loader saw the file:
     assert code == 0
     assert surface is not None
     assert ports is not None
@@ -390,7 +400,7 @@ def test_prepare_valid_image_with_sidecar_missing_name_mass_level_should_warn_an
     code, surface, ports = prepare([str(sprite_path)])
 
     # THEN it still succeeds, with the three warnings on stderr and no
-    # stage-one success message on stdout:
+    # success message on stdout:
     assert code == 0
     assert surface is not None
     result = capsys.readouterr()
@@ -519,7 +529,8 @@ def test_prepare_valid_image_with_invalid_sidecar_should_exit_code_2(
 
 
 # ---------------------------------------------------------------------- #
-# stage two direct: parse/load functions (no 60FPS loop)
+# sidecar parse/load functions, called directly (no 60FPS loop) -
+# spec 15: Load on startup, Json format, Json validation
 # ---------------------------------------------------------------------- #
 
 
@@ -854,8 +865,8 @@ def test_prepare_injected_loader_size_drives_bounds_check(
     assert "out of bounds" in err
 
 # ---------------------------------------------------------------------- #
-# stage three: ship display area (design-space layout, spec 15: "The
-# main interface" - all dimensions except the window are spec 04 design
+# ship display area: design-space layout (spec 15: "The main
+# interface" - all dimensions except the window are spec 04 design
 # space, 1920x1080)
 # ---------------------------------------------------------------------- #
 
@@ -1109,7 +1120,7 @@ def test_ship_editor_app_scales_tall_sprite_down(pygame_ready: None) -> None:
 
 
 # ---------------------------------------------------------------------- #
-# stage three: port marker sizing + pixel mapping (spec 15: Edit mode,
+# port marker sizing + pixel mapping (spec 15: Edit mode,
 # Pixel mapping; acceptance criterion "Do the single-pixel port locations
 # scale up as the ship image scales up?")
 # ---------------------------------------------------------------------- #
@@ -1238,7 +1249,7 @@ def test_ship_editor_app_rejects_zero_sized_layout_rect() -> None:
 
 
 # ---------------------------------------------------------------------- #
-# stage four: control panel widgets + Edit mode radio checkboxes
+# control panel widgets + Edit mode radio checkboxes
 # (spec 15: The control panel, Edit mode)
 # ---------------------------------------------------------------------- #
 
@@ -1430,7 +1441,7 @@ def test_group_header_labels_should_be_transparent_with_visible_text_ink(
 
 
 # ---------------------------------------------------------------------- #
-# stage six: left-click port editing (spec 15: Edit mode, Pixel mapping)
+# left-click port editing (spec 15: Edit mode, Pixel mapping)
 # ---------------------------------------------------------------------- #
 
 
@@ -1594,10 +1605,10 @@ def test_left_click_inside_the_control_panel_should_not_touch_the_port_list(
 def test_left_clicks_should_add_ports_of_the_currently_selected_edit_mode(
     pygame_ready: None, silent_audio_manager: None
 ) -> None:
-    """Acceptance audit (dev plan stage ten): "left-click to add ports
-    of the three types" is proven per type. Gun-mode adds are covered
-    by the free-cell test; this covers the other two modes through the
-    actual checkboxes."""
+    """Acceptance audit (spec 15: Acceptance criteria): "left-click to
+    add ports of the three types" is proven per type. Gun-mode adds are
+    covered by the free-cell test; this covers the other two modes
+    through the actual checkboxes."""
     for section in ("thruster_ports", "collection_ports"):
         # GIVEN a fresh app whose edit mode is switched to ``section``:
         ports = ShipPorts()
@@ -1634,7 +1645,7 @@ def test_left_click_on_a_downscaled_sprite_should_add_a_port_at_the_clicked_cell
 
 
 # ---------------------------------------------------------------------- #
-# stage seven: "Reset" and "Clear" (spec 15: Reset, Clear)
+# "Reset" and "Clear" (spec 15: Reset, Clear)
 # ---------------------------------------------------------------------- #
 
 _THREE_PORT_SIDECAR = {
@@ -1659,8 +1670,8 @@ def _session_with_three_port_sidecar(
     """prepare() a 4x4 image with a sidecar holding one port in each
     section, and wrap it in an app on the design-sized layout.
 
-    The standard stage-agnostic session bed (born for stage seven's
-    Reset tests; pressed into service ever since).
+    The standard three-port session bed, shared by the Reset, Save,
+    and option-button wiring tests ever since it was built.
 
     Returns (ports, app, sidecar_path); the ports object is the very one
     the app mutates, so tests can assert through either end."""
@@ -1856,9 +1867,10 @@ def test_exit_button_click_with_unsaved_changes_should_request_clean_exit_withou
 def test_option_button_clicks_should_all_have_observable_effects(
     pygame_ready: None, silent_audio_manager: None, tmp_path: Path
 ) -> None:
-    """Wiring guard (stage nine): every option label must do something
-    a test can see - a renamed or forgotten label can never again go
-    silently inert with a None callback."""
+    """Wiring guard (spec 15: The control panel option Buttons): every
+    option label must do something a test can see - a renamed or
+    forgotten label can never again go silently inert with a None
+    callback."""
     for label in OPTION_BUTTON_LABELS:
         # GIVEN a sidecar whose three in-memory ports match the sidecar
         # file exactly - then dirtied on demand:
@@ -1927,7 +1939,7 @@ def test_apply_click_edit_over_a_foreign_port_should_reassign_it_keeping_the_lev
 
 
 # ---------------------------------------------------------------------- #
-# stage eight: "Save" - create and merge (spec 15: Save, Create
+# "Save": create and merge (spec 15: Save, Create
 # behavior, Merge behavior, Json format)
 # ---------------------------------------------------------------------- #
 

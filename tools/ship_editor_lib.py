@@ -6,15 +6,16 @@ boilerplate (``sys.path`` bootstrap) and forwards to ``run``. All logic
 lives in this module so the tool is unit-testable in-process (spec 15:
 Script structure).
 
-Dev plan stages one through four: argument handling, input-sprite
-validation, sidecar Json loading (read, validate, populate the in-memory
-port list - spec 15: Load on startup + Json validation), the ship display
-area, and the control panel. The control panel renders its Label,
-Checkbox, and Button widgets (spec 15: The control panel); the Edit mode
-checkboxes already work as a radio group, while the four option buttons
-are render-only until their stages land (six through eight).
-Right-clicking the display area toggles the background between black and
-white.
+The full tool is live: argument handling, input-sprite validation,
+sidecar Json loading (read, validate, populate the in-memory port list -
+spec 15: Load on startup + Json validation), the ship display area, and
+the control panel with its Label, Checkbox, and Button widgets
+(spec 15: The control panel). The Edit mode checkboxes act as a radio
+group, and all four option buttons - Reset, Clear, Save, and Exit -
+carry live handlers (spec 15: The control panel). Left-clicking
+the display area adds, reassigns, or clears ports of the current edit
+mode (spec 15: Edit mode); right-clicking it toggles the background
+between black and white.
 """
 from __future__ import annotations
 
@@ -81,8 +82,8 @@ PORT_COLORS = {
 }
 
 #: Control-panel group contents, in spec 15 order. Group 1 toggles the
-#: Edit mode; group 2's buttons stay inert until dev plan stages six
-#: through eight wire them up.
+#: Edit mode; group 2's option buttons carry their live handlers
+#: (spec 15: The control panel).
 EDIT_MODE_CHECKBOX_LABELS = {
     "gun_ports": "Gun ports",
     "thruster_ports": "Thruster ports",
@@ -237,13 +238,13 @@ class Port:
 class ShipPorts:
     """In-memory ports for the ship under edit, organized exactly like
     the sidecar (one list per section name, spec 15: Json format) so the
-    save-time (stage seven) serialization maps 1:1 to the file layout.
+    save-time serialization (spec 15: Save) maps 1:1 to the file layout.
 
     The per-location uniqueness invariant (no two ports of any section
     at the same x, y) is enforced by load-time validation (spec 15:
-    Json validation) and, since the display click handling landed (dev
-    plan stage six), by the click handler's collision checks, which
-    consult this list rather than pixel colors.
+    Json validation) and by the click handler's collision checks
+    (spec 15: Edit mode), which consult this list rather than pixel
+    colors.
     """
 
     def __init__(self) -> None:
@@ -581,9 +582,9 @@ class ShipEditorApp:
     pixel scaled to match the ship's current scale, floored at 3 screen
     pixels (spec 15: Edit mode). ``image_to_screen``/``screen_to_image``
     are the single pair of forward/inverse mapping helpers - both derived
-    from the actual pixel geometry of the scaled ship rect, so future
-    click hit-testing (dev plan stage five) and marker rendering can
-    never drift apart. Left-clicking inside the display area adds,
+    from the actual pixel geometry of the scaled ship rect, so click
+    hit-testing (spec 15: Pixel mapping) and marker rendering can never
+    drift apart. Left-clicking inside the display area adds,
     clears, or reassigns a port of the current edit mode (spec 15: Edit
     mode); right-clicking inside it toggles the background between black
     and white; clicking anywhere else (including the control panel) does
@@ -595,10 +596,10 @@ class ShipEditorApp:
     checkboxes act as a radio group: exactly one is checked, matching
     ``edit_mode`` (spec 15: Edit mode, amended 2026-10-25 - the checked
     state alone carries the mode; the checkboxes are never selected).
-    "Reset", "Clear", "Save", and "Exit" are all wired (dev plan
-    stages seven through nine); a "Reset" or "Save" click can end the
-    session on a sidecar hard error, and "Exit" ends it immediately,
-    unsaved changes and all (spec 15: acceptance criteria).
+    "Reset", "Clear", "Save", and "Exit" are all live (spec 15: The
+    control panel); a "Reset" or "Save" click can end the session on a
+    sidecar hard error (spec 15: Reset, Save), and "Exit" ends it
+    immediately, unsaved changes and all (spec 15: Testing).
     """
 
     def __init__(
@@ -653,13 +654,14 @@ class ShipEditorApp:
     @property
     def edit_mode(self) -> str:
         """The currently active port section (spec 15: Edit mode): one of
-        ``PORT_SECTIONS``. Left clicks (dev plan stage five) will add,
-        reassign, or clear ports of this type."""
+        ``PORT_SECTIONS``. Left clicks add, reassign, or clear ports of
+        this type."""
         return self._edit_mode
 
     def edit_mode_checkbox(self, section: str) -> Checkbox:
-        """The Edit mode Checkbox for ``section`` (test seam and the
-        stage-five mirror of ``edit_mode``)."""
+        """The Edit mode Checkbox for ``section`` (test seam; its checked
+        state mirrors ``edit_mode`` - spec 15: Edit mode, amended
+        2026-10-25)."""
         return self._edit_checkboxes[section]
 
     def option_button(self, label: str) -> Button:
@@ -807,8 +809,8 @@ class ShipEditorApp:
         """File the session-ending verdict for the event loop.
 
         Button handlers (Reset's hard errors, Save's write failures, and
-        eventually Exit's stage-nine click) all leave through this one
-        door; the loop ends the session between frames.
+        Exit's click) all leave through this one door; the loop ends the
+        session between frames.
         """
         self._exit_request = (code, message)
 
@@ -913,17 +915,17 @@ class ShipEditorApp:
         for index, label_text in enumerate(OPTION_BUTTON_LABELS, start=5):
             if label_text not in option_handlers:
                 # A renamed or newly added label reaching a None
-                # callback would go silently inert - loud now, per the
-                # stage-eight after-action note.
+                # callback would go silently inert - fail loudly
+                # instead.
                 raise KeyError(f"no handler wired for option {label_text!r}")
             button = Button(
                 rects[index],
                 text=label_text,
                 on_click=option_handlers[label_text],
             )
-            # All four options carry live handlers as of dev plan
-            # stage nine; the accept sound on click is the widget's
-            # own contract (spec 09), not our business.
+            # All four options carry live handlers (spec 15: The
+            # control panel); the accept sound on click is the
+            # widget's own contract (spec 09), not our business.
             button.set_font_point_size(WIDGET_FONT_POINT_SIZE)
             self._option_buttons[label_text] = button
             widgets.append(button)
@@ -1098,7 +1100,7 @@ def run(argv: list[str] | None = None, loader: ImageLoader | None = None) -> int
     # prepare() already parsed this argv and accepted it (exit code 0),
     # so this second parse cannot fail; it only recovers the sprite path
     # so the session can derive the sidecar path the same way startup
-    # does - Reset (stage seven) and Save (stage eight) both need it.
+    # does - Reset and Save both need it.
     args = _build_parser().parse_args(argv)
     sidecar_path = Path(args.input_sprite).with_suffix(".json")
     return _run_display(surface, ports, theme, sidecar_path)
