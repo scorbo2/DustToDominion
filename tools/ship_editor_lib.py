@@ -72,14 +72,23 @@ CONTROL_PANEL_COLOR = (64, 64, 64)
 BACKGROUND_BLACK = (0, 0, 0)
 BACKGROUND_WHITE = (255, 255, 255)
 #: Floor for the drawn port marker, in screen pixels (spec 15: Edit mode -
-#: "at least 3 screen pixels (square) regardless of image scale"). The
-#: marker otherwise scales with the image; see ``ShipEditorApp.marker_size``.
-PORT_MARKER_SIZE = 3
+#: "at least 9 screen pixels (square) regardless of image scale", amended
+#: 2026-10-27 for visibility). The marker otherwise scales with the image;
+#: see ``ShipEditorApp.marker_size``.
+PORT_MARKER_SIZE = 9
 PORT_COLORS = {
     "gun_ports": (255, 1, 1),
     "thruster_ports": (1, 255, 1),
     "collection_ports": (1, 1, 255),
 }
+
+#: Mouse-wheel zoom (spec 15: Zoom, amended 2026-10-27): each wheel
+#: notch multiplies the fit scale by ZOOM_STEP_FACTOR, and the step
+#: count is clamped to [0, ZOOM_MAX_STEPS]. 1.25**9 (~7.45) is the
+#: largest quantized step that stays at or under the spec's 8.0x
+#: zoom-in ceiling.
+ZOOM_STEP_FACTOR = 1.25
+ZOOM_MAX_STEPS = 9
 
 #: Control-panel group contents, in spec 15 order. Group 1 toggles the
 #: Edit mode; group 2's option buttons carry their live handlers
@@ -405,6 +414,51 @@ def apply_click_edit(ports: ShipPorts, section: str, x: int, y: int) -> bool:
     return True
 
 
+def resolve_click_port(
+    ports: ShipPorts,
+    image_x: float,
+    image_y: float,
+    marker_half_x: float,
+    marker_half_y: float,
+) -> tuple[str, Port] | None:
+    """Marker-rect preemption pass (spec 15: Edit mode, amended
+    2026-10-27): return ``(section, port)`` for the port whose drawn
+    marker covers the *fractional* image-space click location, or
+    ``None`` if no marker does.
+
+    A marker footprint is the square centered on ``(port.x + 0.5,
+    port.y + 0.5)`` with half-extents ``marker_half_x/y`` already
+    converted into image units by the caller. The hit target is the
+    visible marker, not the cell, so a click a few pixels off-center
+    on a big sprite acts on the port the user was aiming at instead
+    of spawning a stray overlapping port.
+
+    Overlapping footprints resolve to the nearest marker center
+    (Euclidean); exact distance ties resolve deterministically by
+    section order then insertion order, for free: the scan runs in
+    ``PORT_SECTIONS`` order over each section's insertion-ordered
+    list, and only strictly closer candidates replace the incumbent.
+
+    Pure image-space algebra, deliberately: no pygame, no pixel
+    sampling - same testability promise as ``apply_click_edit``, and
+    the mapping operations in ``image_to_screen``/``screen_to_image``
+    stay untouched by this rule.
+    """
+    winner: tuple[str, Port] | None = None
+    best_distance_squared = float("inf")
+    for section in PORT_SECTIONS:
+        for port in ports.section_ports(section):
+            offset_x = image_x - (port.x + 0.5)
+            offset_y = image_y - (port.y + 0.5)
+            if abs(offset_x) > marker_half_x or abs(offset_y) > marker_half_y:
+                continue
+            distance_squared = offset_x * offset_x + offset_y * offset_y
+            if distance_squared < best_distance_squared:
+                best_distance_squared = distance_squared
+                winner = (section, port)
+    return winner
+
+
 def _is_int(value: object) -> bool:
     """True for real integers only.
 
@@ -578,17 +632,21 @@ class ShipEditorApp:
     interface).
 
     Left of the control panel: renders the input sprite scaled to fit the
-    display area and overlays one marker per port - one image-space
-    pixel scaled to match the ship's current scale, floored at 3 screen
-    pixels (spec 15: Edit mode). ``image_to_screen``/``screen_to_image``
+    display area (and mouse-wheel zoomable from there - spec 15: Zoom,
+    amended 2026-10-27) and overlays one marker per port - one image-space
+    pixel scaled to match the ship's current scale, floored at 9 screen
+    pixels and centered on its scaled cell (spec 15: Edit mode, amended
+    2026-10-27).
+    ``image_to_screen``/``screen_to_image``
     are the single pair of forward/inverse mapping helpers - both derived
     from the actual pixel geometry of the scaled ship rect, so click
     hit-testing (spec 15: Pixel mapping) and marker rendering can never
     drift apart. Left-clicking inside the display area adds,
     clears, or reassigns a port of the current edit mode (spec 15: Edit
     mode); right-clicking inside it toggles the background between black
-    and white; clicking anywhere else (including the control panel) does
-    nothing to the display.
+    and white; wheeling inside it zooms the view, anchored under the
+    cursor (spec 15: Zoom); input anywhere else (including the control
+    panel) does nothing to the display.
 
     Right of the divider: the fixed-theme control panel (spec 15: The
     control panel) - header Labels, the three Edit mode Checkboxes, and
@@ -633,6 +691,9 @@ class ShipEditorApp:
         self._scale_x: float
         self._scale_y: float
         self._marker_size: int
+        # Spec 15: Zoom - integer step count on top of the fit view;
+        # 0 is the startup/fit level.
+        self._zoom_steps = 0
         self._build_ship()
 
         self._edit_mode = DEFAULT_EDIT_MODE
@@ -681,6 +742,14 @@ class ShipEditorApp:
         return self._ship_rect
 
     @property
+    def zoom_steps(self) -> int:
+        """Current mouse-wheel zoom step count (spec 15: Zoom, amended
+        2026-10-27): 0 is the fit/startup view; the effective display
+        scale is the fit scale multiplied by ``ZOOM_STEP_FACTOR``
+        raised to this count."""
+        return self._zoom_steps
+
+    @property
     def source_size(self) -> tuple[int, int]:
         """Original sprite size, in pixels."""
         return self._source_size
@@ -698,20 +767,37 @@ class ShipEditorApp:
         return self._marker_size
 
     def image_to_screen(self, image_x: int, image_y: int) -> tuple[int, int]:
-        """Screen position of the marker for image-space location
-        (image_x, image_y), anchored at the marker's top-left.
+        """Screen position of the top-left corner of image-space cell
+        (image_x, image_y) - the pixel-mapping anchor (spec 15: Pixel
+        mapping), deliberately *not* the drawn marker: markers are
+        centered on their cell (spec 15: Edit mode, amended 2026-10-27);
+        see ``marker_center_for_port``.
 
-        Goes through the actual pixel geometry of the scaled ship rect
-        (spec 15: Pixel mapping). The anchor itself always round-trips
-        back through ``screen_to_image``; a marker's far edge may bleed
-        into the neighbouring image cell when scale exceeds 1, which is
-        unavoidable for fixed-size square markers and harmless to
-        hit-testing (clicks are tested in image space via
-        ``screen_to_image``, not against marker pixels).
+        Goes through the actual pixel geometry of the scaled ship rect.
+        The anchor always round-trips back through ``screen_to_image``;
+        marker bleed never enters the mapping algebra. Marker geometry
+        informs click resolution only through the pure
+        ``resolve_click_port`` preemption pass, which consults the same
+        center/scale quantities - marker pixels are never sampled, so
+        the mapping operations above stay untouched (spec 15: Edit
+        mode, amended 2026-10-27).
         """
         return (
             self._ship_rect.x + int(round(image_x * self._scale_x)),
             self._ship_rect.y + int(round(image_y * self._scale_y)),
+        )
+
+    def _fractional_image_at(
+        self, screen_point: tuple[int, int]
+    ) -> tuple[float, float]:
+        """Fractional image-space location under a screen position -
+        the inverse of ``image_to_screen``, and the single home of the
+        click-side mapping algebra. Written exactly once so the wheel
+        anchor capture, the left-click preemption, and
+        ``screen_to_image``'s rounding can never drift apart."""
+        return (
+            (screen_point[0] - self._ship_rect.x) / self._scale_x,
+            (screen_point[1] - self._ship_rect.y) / self._scale_y,
         )
 
     def screen_to_image(self, screen_x: int, screen_y: int) -> tuple[int, int]:
@@ -722,10 +808,10 @@ class ShipEditorApp:
         (in the margin, say) map outside ``[0, width) x [0, height)`` and
         the caller must treat them as no-ops (spec 15: Edit mode).
         """
-        return (
-            int(round((screen_x - self._ship_rect.x) / self._scale_x)),
-            int(round((screen_y - self._ship_rect.y) / self._scale_y)),
+        fractional_x, fractional_y = self._fractional_image_at(
+            (screen_x, screen_y)
         )
+        return int(round(fractional_x)), int(round(fractional_y))
 
     def handle_right_click(self, position: tuple[int, int]) -> bool:
         """Toggle the background if ``position`` is in the display area.
@@ -744,22 +830,80 @@ class ShipEditorApp:
 
     def handle_left_click(self, position: tuple[int, int]) -> bool:
         """Apply the Edit mode click rules to ``position`` (spec 15:
-        Edit mode).
+        Edit mode, amended 2026-10-27).
 
-        The mapping half: inside the display area the click maps to the
-        nearest image cell (spec 15: Pixel mapping), and clicks that map
-        outside the image (margins) are no-ops. The collision policy
-        proper (add / toggle-clear / reassign) lives in the pygame-free
-        ``apply_click_edit``. Returns ``True`` when the in-memory port
-        list changed.
+        Resolution order: the fractional image-space click location
+        first goes through the ``resolve_click_port`` preemption pass -
+        any pixel of a drawn marker (edge-port margin bleed included)
+        acts on that port, nearest marker center winning - and only
+        clicks covered by no marker fall back to the plain cell
+        mapping, where clicks landing outside the image (empty margin)
+        remain no-ops. The collision policy proper (add / toggle-clear
+        / reassign) lives in the pygame-free ``apply_click_edit``.
+        Returns ``True`` when the in-memory port list changed.
         """
         if not self._layout.display_area.collidepoint(position):
             return False
+        fractional_x, fractional_y = self._fractional_image_at(position)
+        preemption = resolve_click_port(
+            self._ports,
+            fractional_x,
+            fractional_y,
+            self._marker_size / (2 * self._scale_x),
+            self._marker_size / (2 * self._scale_y),
+        )
+        if preemption is not None:
+            _, port = preemption
+            return apply_click_edit(
+                self._ports, self._edit_mode, port.x, port.y
+            )
         image_x, image_y = self.screen_to_image(*position)
         image_width, image_height = self._source_size
         if not (0 <= image_x < image_width and 0 <= image_y < image_height):
             return False
         return apply_click_edit(self._ports, self._edit_mode, image_x, image_y)
+
+    def handle_mouse_wheel(
+        self, position: tuple[int, int], direction: int
+    ) -> bool:
+        """Apply one mouse-wheel zoom step at ``position`` (spec 15:
+        Zoom, amended 2026-10-27).
+
+        ``direction`` is ``+1`` (wheel up, zoom in) or ``-1`` (wheel
+        down, zoom out); the step count clamps to
+        ``[0, ZOOM_MAX_STEPS]`` and wheel events outside the display
+        area are no-ops. The zoom is cursor-anchored: the fractional
+        image-space point under the wheel event (taken from the mapping
+        geometry, not the click-rounded cell) is captured before the
+        display is rebuilt, then ``_recenter_view`` re-places the
+        rebuilt ship rect so that point lands back under the very same
+        screen position. That anchoring survives landing on either
+        clamp, including a zoom-out ending at the fit scale but
+        off-center. Returns ``True`` when the zoom step count changed.
+        """
+        if not self._layout.display_area.collidepoint(position):
+            return False
+        new_steps = min(
+            ZOOM_MAX_STEPS,
+            max(0, self._zoom_steps + direction),
+        )
+        if new_steps == self._zoom_steps:
+            return False
+        anchor_x, anchor_y = self._fractional_image_at(position)
+        hold = (anchor_x, anchor_y, position[0], position[1])
+        self._zoom_steps = new_steps
+        self._build_ship()
+        self._recenter_view(hold)
+        return True
+
+    def reset_zoom(self) -> None:
+        """Restore the default zoom level: step 0, the centered fit
+        view (spec 15: Zoom - "Reset" restores it along with the port
+        data; "Clear" and "Save" deliberately never touch zoom)."""
+        if self._zoom_steps == 0:
+            return
+        self._zoom_steps = 0
+        self._build_ship()
 
     @property
     def exit_request(self) -> tuple[int, str | None] | None:
@@ -817,7 +961,13 @@ class ShipEditorApp:
     def _on_reset_click(self) -> None:
         """Reset's Button callback: a reload failure ends the session
         with the startup rules - same stderr message, same exit code
-        (spec 15: Reset, "Load on startup")."""
+        (spec 15: Reset, "Load on startup").
+
+        Reset also restores the default zoom level (spec 15: Zoom) -
+        the view is restored even when the data reload then hard-
+        errors, because that failure ends the session anyway and the
+        user asked for *everything* reset."""
+        self.reset_zoom()
         try:
             self.reset_ports()
         except (SidecarReadError, InvalidSidecarJsonError) as exc:
@@ -860,23 +1010,83 @@ class ShipEditorApp:
         self.request_exit(0)
 
     def update(self, events: list[pygame.event.Event]) -> None:
-        """Feed the frame's event batch to the panel widgets (spec 04:
-        Changes to game loop): hover flags, click handling, and hover
-        audio all live in the UIManager/Widget framework."""
+        """Dispatch one frame's event batch (spec 04: Changes to game
+        loop; spec 15: The main interface).
+
+        Display-area input - left click: port editing, right click:
+        background toggle, ``MOUSEWHEEL``: zoom (spec 15: Zoom) - is
+        dispatched first, then the whole batch reaches the panel
+        widgets (hover flags, click handling, and hover audio in the
+        UIManager/Widget framework). The two consumers never fight
+        over one click: port edits ignore everything right of the
+        display area, and the widgets all live inside the control
+        panel.
+        """
+        for event in events:
+            if event.type == pygame.MOUSEBUTTONDOWN:
+                if event.button == 1:
+                    self.handle_left_click(event.pos)
+                elif event.button == 3:
+                    self.handle_right_click(event.pos)
+            elif event.type == pygame.MOUSEWHEEL:
+                self._dispatch_wheel_event(event)
         self.ui.update(events)
+
+    def _dispatch_wheel_event(self, event: pygame.event.Event) -> None:
+        """Map one ``MOUSEWHEEL`` event to at most one zoom step.
+
+        pygame-ce delivers wheel scrolling as ``MOUSEWHEEL``, not as
+        the legacy button 4/5 ``MOUSEBUTTONDOWN`` events: SDL2 still
+        emits those on whole-notch ratcheted wheels, but suppresses
+        them entirely for smooth/precision scroll devices, so the
+        legacy route silently dead-ends on trackpads. One event maps
+        to exactly one quantized step regardless of ``y`` magnitude
+        (the spec 12 house policy from the slider), and horizontal
+        wheel ticks (``y == 0``) do nothing to the zoom.
+
+        ``MOUSEWHEEL.pos`` exists since pygame-ce 2.5.8 (SDL 2.26+);
+        older builds report ``None``, where the current pointer
+        position is the honest stand-in. The handler itself decides
+        whether the position is even inside the display area.
+        """
+        if event.y == 0:
+            return
+        position = getattr(event, "pos", None) or pygame.mouse.get_pos()
+        self.handle_mouse_wheel(position, 1 if event.y > 0 else -1)
 
     def draw(self, screen: pygame.Surface) -> None:
         """Paint the current display and control-panel state to
-        ``screen``."""
+        ``screen``.
+
+        The ship view (scaled sprite and markers) is clipped to the
+        display area (spec 15: Zoom) - a zoomed sprite grows past the
+        fit margin but must never paint into an inset display area's
+        surround or reach the control panel. pygame's clip rectangle
+        covers blit and draw.rect alike, so one ``set_clip`` brackets
+        both."""
         screen.fill(self._background_color)
+        screen.set_clip(self._layout.display_area)
         screen.blit(self._scaled_surface, self._ship_rect)
         self._draw_port_markers(screen)
+        screen.set_clip(None)
         screen.fill(CONTROL_PANEL_COLOR, self._layout.control_panel)
         self.ui.draw(screen)
 
-    def screen_position_for_port(self, port: Port) -> tuple[int, int]:
-        """Screen position of ``port``'s marker, clamped to the display area."""
-        return self._port_marker_rect(port).topleft
+    def marker_center_for_port(self, port: Port) -> tuple[int, int]:
+        """On-screen center of ``port``'s marker footprint (spec 15:
+        Edit mode, amended 2026-10-27). The center is the authoritative
+        decal position - a centered marker has no meaningful corner
+        coordinates - and it always sits at the on-screen center of the
+        port's scaled image-space cell. ``_port_marker_rect`` merely
+        pads it to ``marker_size``."""
+        return (
+            self._ship_rect.x + int(
+                round((port.x + 0.5) * self._scale_x)
+            ),
+            self._ship_rect.y + int(
+                round((port.y + 0.5) * self._scale_y)
+            ),
+        )
 
     def _build_panel_widgets(self) -> None:
         """Instantiate the control panel's widgets (spec 15: The control
@@ -967,20 +1177,27 @@ class ShipEditorApp:
 
     def _build_ship(self) -> None:
         source_width, source_height = self._source_size
-        display_width, display_height = self._layout.display_area.size
         fit_width = self._layout.ship_fit_area.width
         fit_height = self._layout.ship_fit_area.height
 
+        # Spec 15: Zoom - the fit scale is the step-0 baseline; each
+        # zoom step multiplies it. The fit-area dimension clamp *is*
+        # the fit view, so it applies only at step 0; a zoomed sprite
+        # legitimately grows past the fit area and gets clipped at
+        # draw time instead.
         scale = min(fit_width / source_width, fit_height / source_height)
-        scaled_width = max(1, min(fit_width, round(scale * source_width)))
-        scaled_height = max(1, min(fit_height, round(scale * source_height)))
+        scale *= ZOOM_STEP_FACTOR ** self._zoom_steps
+        scaled_width = max(1, round(scale * source_width))
+        scaled_height = max(1, round(scale * source_height))
+        if self._zoom_steps == 0:
+            scaled_width = min(fit_width, scaled_width)
+            scaled_height = min(fit_height, scaled_height)
 
         self._scaled_surface = pygame.transform.scale(
             self._sprite_surface, (scaled_width, scaled_height)
         )
-        x = self._layout.display_area.x + (display_width - scaled_width) // 2
-        y = self._layout.display_area.y + (display_height - scaled_height) // 2
-        self._ship_rect = pygame.Rect(x, y, scaled_width, scaled_height)
+        self._ship_rect = pygame.Rect(0, 0, scaled_width, scaled_height)
+        self._recenter_view()
         self._scaled_size = (scaled_width, scaled_height)
 
         # Forward/inverse mapping and marker sizing use the ratios of the
@@ -994,13 +1211,55 @@ class ShipEditorApp:
             round(self._scale_y),
         )
 
+    def _recenter_view(
+        self, hold: tuple[float, float, int, int] | None = None
+    ) -> None:
+        """Place the (already-sized) ship rect inside the display area.
+
+        The single home of ship-rect placement. Default (no ``hold``)
+        centers the view - the fit-view layout. With
+        ``hold=(image_x, image_y, screen_x, screen_y)`` the already
+        captured fractional image point lands back under the given
+        screen position instead (cursor-anchored zoom; a future pan
+        mode would capture on press and call this without a rebuild).
+
+        The two placements deliberately use different rounding, and
+        unifying them would be a 1px-behavior change in disguise: the
+        centered view floors the half-offset with integer arithmetic,
+        while anchored placement rounds, and on a ``.5`` tie those
+        disagree (e.g. a 73px-tall sprite in a 188px-tall display:
+        57 vs 58). The pinned fit-view anchors in the tests depend on
+        the floor.
+        """
+        if hold is None:
+            display = self._layout.display_area
+            self._ship_rect.x = (
+                display.x + (display.width - self._ship_rect.width) // 2
+            )
+            self._ship_rect.y = (
+                display.y + (display.height - self._ship_rect.height) // 2
+            )
+            return
+        image_x, image_y, screen_x, screen_y = hold
+        self._ship_rect.x = int(round(screen_x - image_x * self._scale_x))
+        self._ship_rect.y = int(round(screen_y - image_y * self._scale_y))
+
     def _port_marker_rect(self, port: Port) -> pygame.Rect:
-        display_area = self._layout.display_area
-        marker_x, marker_y = self.image_to_screen(port.x, port.y)
-        marker_x = max(display_area.x, min(marker_x, display_area.right - 1))
-        marker_y = max(display_area.y, min(marker_y, display_area.bottom - 1))
+        """Pad ``port``'s marker center to a ``marker_size`` square
+        (spec 15: Edit mode, amended 2026-10-27). Never clamped - below
+        the marker minimum the footprint bleeds symmetrically into
+        neighbouring cells, and an edge port's marker may bleed into
+        the display margin. Even marker sizes cannot center exactly on
+        a pixel coordinate: the extra pixel lands down/right of center,
+        which a decal can afford.
+        """
+        center_x, center_y = self.marker_center_for_port(port)
+        half = self._marker_size // 2
         return pygame.Rect(
-            marker_x, marker_y, self._marker_size, self._marker_size
+            center_x - half,
+            center_y - half,
+            self._marker_size,
+            self._marker_size,
         )
 
     def _draw_port_markers(self, screen: pygame.Surface) -> None:
@@ -1156,8 +1415,10 @@ def _run_display(
     interface).
 
     Fixed 60FPS via ``clock.tick(60)``, game-loop style: drain events,
-    dispatch display-area clicks (left: port editing, right: background
-    toggle), feed the whole batch to the panel widgets (``app.update``),
+    watch for QUIT, hand the whole batch to ``app.update`` (display
+    area input - left click: port editing, right click: background
+    toggle, MOUSEWHEEL: zoom - spec 15: Zoom - plus the panel
+    widgets),
     honor any ``exit_request`` the widgets filed (spec 15: Reset's hard
     errors end the session with the startup message and code), render
     (``app.draw``), flip, tick. Left-clicks reach both handlers, but
@@ -1184,11 +1445,6 @@ def _run_display(
         for event in events:
             if event.type == pygame.QUIT:
                 return 0
-            if event.type == pygame.MOUSEBUTTONDOWN:
-                if event.button == 1:
-                    app.handle_left_click(event.pos)
-                elif event.button == 3:
-                    app.handle_right_click(event.pos)
         app.update(events)
         if app.exit_request is not None:
             code, message = app.exit_request

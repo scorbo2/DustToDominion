@@ -44,9 +44,25 @@ display area):
 - right-clicking inside the display area toggles the background black
   <-> white; right-clicking on the control panel is ignored
 - sidecar ports are drawn as color-coded markers that scale with the
-  image, floored at 3 screen pixels (spec 15: Edit mode)
+  image, floored at 9 screen pixels and centered on their cell (spec 15:
+  Edit mode, amended 2026-10-27)
 - ``image_to_screen``/``screen_to_image`` round-trip through the scaled
   ship rect's actual pixel geometry (spec 15: Pixel mapping)
+- mouse-wheel zoom over the display area: quantized x1.25 steps above
+  the fit view, clamps at both ends, cursor-anchored re-centering,
+  wheel over the panel ignored, "Reset" restores fit zoom, and the
+  zoomed ship view is clipped to the display area (spec 15: Zoom,
+  amended 2026-10-27)
+- marker-rect preemption for left-clicks: clicks on drawn marker
+  pixels act on that port - nearest marker center wins, ties by
+  section then insertion order - edge-port margin bleed included,
+  while empty-margin clicks stay no-ops and the cell-mapping fallback
+  takes over past the zoom crossover (spec 15: Edit mode, amended
+  2026-10-27)
+- ``app.update`` dispatches wheel zoom from ``pygame.MOUSEWHEEL``
+  events: one event is one step whatever the ``y`` magnitude,
+  horizontal ticks and legacy button 4/5 events are ignored, and a
+  pos-less event falls back to ``pygame.mouse.get_pos()``
 
 The control-panel contract (spec 15: The control panel, Edit mode):
 
@@ -137,6 +153,7 @@ from ship_editor_lib import (
     PORT_COLORS,
     Port,
     prepare,
+    resolve_click_port,
     SidecarReadError,
     SidecarWriteError,
     ShipPorts,
@@ -144,6 +161,7 @@ from ship_editor_lib import (
     ToolLayout,
     WINDOW_HEIGHT,
     WINDOW_WIDTH,
+    ZOOM_MAX_STEPS,
     build_layout,
     load_sidecar_ports,
     panel_widget_rects,
@@ -1018,7 +1036,7 @@ def test_ship_editor_app_draws_sidecar_ports_as_colored_markers(
 ) -> None:
     # GIVEN a sprite with one port in each section (the 100x50 sprite in
     # the 1600x1080 design display area scales 14.72x, so markers scale
-    # past the 3px floor):
+    # past the 9px floor):
     surface = _make_surface((100, 50), (10, 20, 30))
     ports = ShipPorts()
     ports.add("gun_ports", 10, 10, 0)
@@ -1039,26 +1057,29 @@ def test_ship_editor_app_draws_sidecar_ports_as_colored_markers(
         ("thruster_ports", ports.section_ports("thruster_ports")[0]),
         ("collection_ports", ports.section_ports("collection_ports")[0]),
     ):
-        x, y = app.screen_position_for_port(port)
+        center_x, center_y = app.marker_center_for_port(port)
         expected_color = PORT_COLORS[section]
+        top_left_x = center_x - app.marker_size // 2
+        top_left_y = center_y - app.marker_size // 2
         for offset_x in range(app.marker_size):
             for offset_y in range(app.marker_size):
-                assert screen.get_at((x + offset_x, y + offset_y)) == (
+                assert screen.get_at((top_left_x + offset_x, top_left_y + offset_y)) == (
                     *expected_color,
                     255,
                 )
-        # The marker's top-left pixel should also be the section color:
-        assert screen.get_at((x, y)) == (*expected_color, 255)
+        # The marker's center pixel should also be the section color:
+        assert screen.get_at((center_x, center_y)) == (*expected_color, 255)
 
-    # THEN the anchors match the expected 14.72x mapping of the ship rect
-    # at (64, 172):
-    assert app.screen_position_for_port(ports.section_ports("gun_ports")[0]) == (211, 319)
-    assert app.screen_position_for_port(
+    # THEN the marker centers match the expected 14.72x mapping of the
+    # ship rect at (64, 172) (cell center = ship_rect + (cell + 0.5) *
+    # 14.72):
+    assert app.marker_center_for_port(ports.section_ports("gun_ports")[0]) == (219, 327)
+    assert app.marker_center_for_port(
         ports.section_ports("thruster_ports")[0]
-    ) == (1389, 761)
-    assert app.screen_position_for_port(
+    ) == (1396, 768)
+    assert app.marker_center_for_port(
         ports.section_ports("collection_ports")[0]
-    ) == (800, 540)
+    ) == (807, 547)
 
 
 def test_prepare_valid_sidecar_ports_are_rendered(
@@ -1087,7 +1108,7 @@ def test_prepare_valid_sidecar_ports_are_rendered(
     screen = _design_screen()
     app.draw(screen)
 
-    # THEN each section's port is drawn at its scaled position (the 4x4
+    # THEN each section's port is drawn at its marker center (the 4x4
     # sprite scales 238x into the design fit area, ship rect (324, 64)):
     for section, expected_color in (
         ("gun_ports", PORT_COLORS["gun_ports"]),
@@ -1095,8 +1116,8 @@ def test_prepare_valid_sidecar_ports_are_rendered(
         ("collection_ports", PORT_COLORS["collection_ports"]),
     ):
         port = ports.section_ports(section)[0]
-        x, y = app.screen_position_for_port(port)
-        assert screen.get_at((x, y)) == (*expected_color, 255)
+        center_x, center_y = app.marker_center_for_port(port)
+        assert screen.get_at((center_x, center_y)) == (*expected_color, 255)
 
 
 def test_ship_editor_app_scales_large_sprite_down(pygame_ready: None) -> None:
@@ -1120,9 +1141,10 @@ def test_ship_editor_app_scales_tall_sprite_down(pygame_ready: None) -> None:
 
 
 # ---------------------------------------------------------------------- #
-# port marker sizing + pixel mapping (spec 15: Edit mode,
-# Pixel mapping; acceptance criterion "Do the single-pixel port locations
-# scale up as the ship image scales up?")
+# port marker sizing/centering + pixel mapping (spec 15: Edit mode,
+# Pixel mapping; acceptance criterion "Do the port markers scale up as
+# the ship image scales up, with a minimum size of 9x9 screen pixels,
+# centered over their port locations?")
 # ---------------------------------------------------------------------- #
 
 
@@ -1139,26 +1161,26 @@ def test_ship_editor_app_with_upscaled_sprite_scales_port_markers_with_the_image
     app.draw(screen)
 
     # THEN the marker scales with the image instead of staying at the
-    # 3px floor (round(95.2) = 95 screen pixels):
+    # 9px floor (round(95.2) = 95 screen pixels):
     assert app.marker_size == 95
 
-    # THEN the marker covers its full scaled extent, top-left anchored
-    # at the mapped port location:
-    marker_x, marker_y = app.screen_position_for_port(
+    # THEN the marker center sits at the mapped cell center, and the
+    # 95px footprint (half = 47) spans 801..895 x 541..635:
+    center_x, center_y = app.marker_center_for_port(
         ports.section_ports("gun_ports")[0]
     )
-    assert (marker_x, marker_y) == (800, 540)
+    assert (center_x, center_y) == (848, 588)
     marker_color = PORT_COLORS["gun_ports"] + (255,)
-    assert screen.get_at((marker_x, marker_y)) == marker_color
-    assert screen.get_at((marker_x + 40, marker_y + 40)) == marker_color
-    assert screen.get_at((marker_x + 94, marker_y + 94)) == marker_color
+    assert screen.get_at((center_x, center_y)) == marker_color
+    assert screen.get_at((center_x - 47, center_y - 47)) == marker_color
+    assert screen.get_at((center_x + 47, center_y + 47)) == marker_color
 
     # THEN the pixel just past the marker's bottom-right corner is plain
     # sprite, proving the marker did not spill arbitrarily far:
-    assert screen.get_at((marker_x + 95, marker_y + 95)) == (10, 20, 30, 255)
+    assert screen.get_at((center_x + 48, center_y + 48)) == (10, 20, 30, 255)
 
 
-def test_ship_editor_app_with_downscaled_sprite_floors_port_marker_at_three_pixels(
+def test_ship_editor_app_with_downscaled_sprite_floors_port_marker_at_nine_pixels(
     pygame_ready: None, font_ready: None
 ) -> None:
     # GIVEN a sprite that must scale down (0.595x) with a gun port at the
@@ -1170,14 +1192,47 @@ def test_ship_editor_app_with_downscaled_sprite_floors_port_marker_at_three_pixe
     screen = _design_screen()
     app.draw(screen)
 
-    # THEN the marker stays at the 3-screen-pixel floor:
+    # THEN the marker stays at the 9-screen-pixel floor (spec 15: Edit
+    # mode, amended 2026-10-27):
     assert app.marker_size == PORT_MARKER_SIZE
 
-    # THEN the drawn marker is exactly 3x3 at the mapped location
-    # (ship rect starts at (205, 64), so image (0, 0) anchors there):
+    # THEN the drawn marker is exactly 9x9, centered on the port's cell
+    # center (ship rect starts at (205, 64), so cell (0, 0) centers at
+    # (205, 64) and the never-clamped marker spans 201..209 x 60..68):
     marker_color = PORT_COLORS["gun_ports"] + (255,)
-    assert screen.get_at((207, 66)) == marker_color
-    assert screen.get_at((208, 67)) == (1, 2, 3, 255)
+    # top-left corner sits in the black margin, up/left of the ship rect
+    # - an edge port's bleed into the margin (spec 15: Edit mode,
+    # amended 2026-10-27):
+    assert screen.get_at((201, 60)) == marker_color
+    assert screen.get_at((209, 68)) == marker_color
+    # THEN the pixel just past the bottom-right corner is plain sprite,
+    # proving the footprint is exactly 9x9 and no further:
+    assert screen.get_at((210, 69)) == (1, 2, 3, 255)
+
+
+def test_ship_editor_app_with_downscaled_sprite_centers_interior_port_marker_symmetrically_over_its_cell(
+    pygame_ready: None, font_ready: None
+) -> None:
+    # GIVEN the same 0.595x downscaled sprite but with an interior gun
+    # port at (1000, 800), whose cell center maps to screen (800, 540):
+    surface = _make_surface((2000, 1600), (1, 2, 3))
+    ports = ShipPorts()
+    ports.add("gun_ports", 1000, 800, 0)
+    app = _make_app(surface, ports)
+    screen = _design_screen()
+    app.draw(screen)
+
+    # THEN the 9x9 marker is centered on the cell: the sub-pixel cell
+    # forces a symmetric +/-4px bleed into the neighbouring image cells
+    # on ALL sides, not just down/right of a top-left anchor (spec 15:
+    # Edit mode, amended 2026-10-27):
+    assert (app.marker_center_for_port(ports.section_ports("gun_ports")[0])
+            == (800, 540))
+    marker_color = PORT_COLORS["gun_ports"] + (255,)
+    assert screen.get_at((796, 536)) == marker_color
+    assert screen.get_at((804, 544)) == marker_color
+    assert screen.get_at((795, 535)) == (1, 2, 3, 255)
+    assert screen.get_at((805, 545)) == (1, 2, 3, 255)
 
 
 def test_image_to_screen_and_screen_to_image_with_exact_scale_should_round_trip(
@@ -1192,7 +1247,11 @@ def test_image_to_screen_and_screen_to_image_with_exact_scale_should_round_trip(
     )
     app = _make_app(_make_surface((20, 10)), layout=layout)
     assert app.ship_rect == pygame.Rect(64, 64, 120, 60)
-    assert app.marker_size == 6
+    # Marker size is floored at 9 (spec 15 amendment 2026-10-27), which
+    # now dominates at this 6x scale - but only the drawn footprint
+    # grows; the forward/inverse mapping below is image-space and
+    # marker-size independent:
+    assert app.marker_size == PORT_MARKER_SIZE
 
     # THEN forward mapping hits the expected screen anchors:
     assert app.image_to_screen(0, 0) == (64, 64)
@@ -1228,6 +1287,522 @@ def test_screen_to_image_with_click_in_the_margin_should_map_outside_the_image(
     assert image_x < 0 or image_y < 0
     image_x, image_y = app.screen_to_image(247, 187)
     assert image_x >= 20 or image_y >= 10
+
+
+# ---------------------------------------------------------------------- #
+# marker-rect preemption (spec 15: Edit mode, amended 2026-10-27)
+# ---------------------------------------------------------------------- #
+
+
+def _marker_preemption_layout() -> ToolLayout:
+    """A 16x16 sprite at fit scale 1.125: 1.125px image cells under
+    9px markers - the 512x512-sprite-at-fit-view shape, 32x smaller."""
+    return ToolLayout(
+        display_area=pygame.Rect(0, 0, 40, 40),
+        ship_fit_area=pygame.Rect(4, 4, 18, 18),
+        control_panel=pygame.Rect(40, 0, 10, 40),
+    )
+
+
+def _scale2_4x4_layout() -> ToolLayout:
+    """A 4x4 sprite at fit scale 2: 2px image cells under 9px
+    markers, with generous display margin around an 8x8 ship rect
+    at (16, 16)."""
+    return ToolLayout(
+        display_area=pygame.Rect(0, 0, 40, 40),
+        ship_fit_area=pygame.Rect(0, 0, 8, 8),
+        control_panel=pygame.Rect(40, 0, 10, 40),
+    )
+
+
+def test_resolve_click_port_with_two_covering_footprints_should_prefer_the_nearest_marker_center() -> None:
+    # GIVEN two gun ports one cell apart, and a fractional image-space
+    # click inside both footprints but closer to the second (offsets
+    # 0.8 versus 0.2 image units):
+    ports = ShipPorts()
+    ports.add("gun_ports", 1, 1)
+    ports.add("gun_ports", 2, 1)
+
+    # THEN the nearest marker center wins:
+    winner = resolve_click_port(ports, 2.3, 1.5, 2.25, 2.25)
+    assert winner == ("gun_ports", Port(x=2, y=1, level=0))
+
+
+def test_resolve_click_port_with_equidistant_footprints_in_different_sections_should_prefer_the_earlier_section() -> None:
+    # GIVEN a thruster port added *first* and a gun port added second,
+    # both exactly 0.5 image units from the click (equidistant):
+    ports = ShipPorts()
+    ports.add("thruster_ports", 1, 1, level=2)
+    ports.add("gun_ports", 2, 1)
+
+    # THEN the tie resolves by section order (gun before thruster),
+    # not insertion order:
+    winner = resolve_click_port(ports, 2.0, 1.5, 2.25, 2.25)
+    assert winner == ("gun_ports", Port(x=2, y=1, level=0))
+
+
+def test_resolve_click_port_with_equidistant_footprints_in_the_same_section_should_prefer_the_first_added() -> None:
+    # GIVEN two gun ports equidistant from the click, the (1, 1) port
+    # added first:
+    ports = ShipPorts()
+    ports.add("gun_ports", 1, 1)
+    ports.add("gun_ports", 2, 1)
+
+    # THEN the tie resolves by insertion order:
+    winner = resolve_click_port(ports, 2.0, 1.5, 2.25, 2.25)
+    assert winner == ("gun_ports", Port(x=1, y=1, level=0))
+
+
+def test_resolve_click_port_outside_every_footprint_should_return_none() -> None:
+    # GIVEN one gun port and a click 2.5 image units off its marker
+    # center, past the 2.25 half-extent:
+    ports = ShipPorts()
+    ports.add("gun_ports", 1, 1)
+
+    # THEN no marker covers the click:
+    assert resolve_click_port(ports, 4.0, 1.5, 2.25, 2.25) is None
+
+
+def test_handle_left_click_a_few_pixels_off_a_tiny_cells_marker_should_clear_the_port_not_create_a_stray(
+    pygame_ready: None,
+) -> None:
+    # GIVEN the 1.125x layout with one gun port at (8, 8) - marker
+    # center at screen (21, 21), footprint half-extent 4.0 image units:
+    ports = ShipPorts()
+    ports.add("gun_ports", 8, 8)
+    app = _make_app(
+        _make_surface((16, 16)), ports, _marker_preemption_layout()
+    )
+    assert app.marker_size == PORT_MARKER_SIZE
+
+    # WHEN left-clicking (22, 21) - inside the drawn marker (1.28
+    # image units off the center) but 2 cells away in mapping terms;
+    # the old cell-mapping rule would have created a stray overlapping
+    # port at cell (10, 9), which is exactly the 512-sprite complaint:
+    assert app.handle_left_click((22, 21)) is True
+
+    # THEN the aimed-at port is cleared and no stray exists anywhere:
+    assert ports.find_at(8, 8) is None
+    assert not ports.section_ports("gun_ports")
+
+
+def test_handle_left_click_off_center_on_another_modes_marker_should_reassign_it_not_create_a_stray(
+    pygame_ready: None,
+) -> None:
+    # GIVEN the same 1.125x layout, a thruster port with hand-edited
+    # level 2 at (8, 8), and the startup gun edit mode:
+    ports = ShipPorts()
+    ports.add("thruster_ports", 8, 8, level=2)
+    app = _make_app(
+        _make_surface((16, 16)), ports, _marker_preemption_layout()
+    )
+
+    # WHEN left-clicking the same off-center marker pixel (22, 21):
+    assert app.handle_left_click((22, 21)) is True
+
+    # THEN the port is reassigned in place, level intact, with no
+    # stray port created on the click's own cell:
+    assert ports.find_at(8, 8) == ("gun_ports", Port(x=8, y=8, level=2))
+    assert not ports.section_ports("thruster_ports")
+
+
+def test_handle_left_click_within_two_overlapping_markers_should_act_on_the_nearest_port(
+    pygame_ready: None,
+) -> None:
+    # GIVEN two adjacent gun ports at (8, 8) and (9, 8) on the 1.125x
+    # layout - their 9px markers overlap heavily at this scale:
+    ports = ShipPorts()
+    ports.add("gun_ports", 8, 8)
+    ports.add("gun_ports", 9, 8)
+    app = _make_app(
+        _make_surface((16, 16)), ports, _marker_preemption_layout()
+    )
+
+    # WHEN left-clicking (22, 21): both markers cover it, but (9, 8)
+    # is far nearer the click (d^2 0.23 versus 1.77):
+    assert app.handle_left_click((22, 21)) is True
+
+    # THEN only the nearer port is cleared; the other survives and no
+    # stray was created:
+    assert ports.find_at(8, 8) == ("gun_ports", Port(x=8, y=8, level=0))
+    assert len(ports.section_ports("gun_ports")) == 1
+
+
+def test_handle_left_click_on_edge_port_marker_bleed_in_the_margin_should_act_on_the_port_while_right_clicks_and_empty_margin_stay_unaffected(
+    pygame_ready: None,
+) -> None:
+    # GIVEN the 4x4 scale-2 layout with one gun port at the image
+    # corner (0, 0) - its marker center is at screen (17, 17) and its
+    # footprint bleeds into the display margin left of the sprite:
+    ports = ShipPorts()
+    ports.add("gun_ports", 0, 0)
+    app = _make_app(_make_surface((4, 4)), ports, _scale2_4x4_layout())
+
+    # WHEN right-clicking the bleed pixel (14, 17):
+    # THEN only the background toggles and the port is untouched:
+    assert app.handle_right_click((14, 17)) is True
+    assert ports.find_at(0, 0) == ("gun_ports", Port(x=0, y=0, level=0))
+
+    # WHEN left-clicking empty margin at (0, 0) - no marker covers it:
+    # THEN nothing happens (spec 15: margin clicks remain no-ops):
+    assert app.handle_left_click((0, 0)) is False
+
+    # WHEN left-clicking the bleed pixel (14, 17) - outside the image
+    # (mapping would report cell (-1, 0)), but squarely on the drawn
+    # marker of the edge port:
+    assert app.handle_left_click((14, 17)) is True
+
+    # THEN the click acts on that port:
+    assert ports.find_at(0, 0) is None
+
+
+def test_handle_left_click_in_a_cell_covered_by_a_neighbouring_marker_should_preempt_at_fit_but_reach_the_cell_past_the_zoom_crossover(
+    pygame_ready: None,
+) -> None:
+    # GIVEN the 4x4 scale-2 layout, a thruster port at (1, 1) with
+    # hand-edited level 2, and the startup gun mode:
+    ports = ShipPorts()
+    ports.add("thruster_ports", 1, 1, level=2)
+    app = _make_app(_make_surface((4, 4)), ports, _scale2_4x4_layout())
+
+    # WHEN left-clicking the center of port-free cell (2, 1) at fit -
+    # screen (21, 19), a mere 1.0 image units from (1, 1)'s marker
+    # center, well inside the 2.25 half-extent:
+    assert app.handle_left_click((21, 19)) is True
+
+    # THEN the click preempted to the neighbour: (1, 1) is reassigned
+    # to gun with its level intact, and cell (2, 1) stayed free:
+    assert ports.find_at(1, 1) == ("gun_ports", Port(x=1, y=1, level=2))
+    assert ports.find_at(2, 1) is None
+
+    # WHEN zooming in to the crossover (step 9: anchor-captured scale
+    # drift lands the 60x60 ship rect at (-13, -7), scale 15, marker
+    # 15 - the cell is at last as large as the marker):
+    for _ in range(ZOOM_MAX_STEPS):
+        assert app.handle_mouse_wheel((21, 19), +1) is True
+    assert app.zoom_steps == ZOOM_MAX_STEPS
+    assert app.marker_size == 15
+
+    # WHEN left-clicking (24, 1) - inside cell (2, 1)'s scaled span
+    # (x 10..24, y 1..15) and ~0.97 image units clear of (1, 1)'s
+    # now-0.5 marker half-extent:
+    assert app.handle_left_click((24, 1)) is True
+
+    # THEN precedence is moot at this scale: the click reaches the
+    # port-free cell it maps to, and the neighbour is untouched:
+    assert ports.find_at(1, 1) == ("gun_ports", Port(x=1, y=1, level=2))
+    assert ports.find_at(2, 1) == ("gun_ports", Port(x=2, y=1, level=0))
+
+
+# ---------------------------------------------------------------------- #
+# mouse-wheel zoom (spec 15: Zoom, amended 2026-10-27)
+# ---------------------------------------------------------------------- #
+
+
+def test_handle_mouse_wheel_up_over_display_area_should_zoom_in_one_step_and_hold_the_marker_floor(
+    pygame_ready: None,
+) -> None:
+    # GIVEN the exactly-6x setup, and a wheel-up notch at the ship
+    # rect's center (124, 94) - the image point under the cursor at
+    # fit is image-space (10, 5):
+    app = _make_app(_make_surface((20, 10)), layout=_exact_scale_layout())
+    assert app.handle_mouse_wheel((124, 94), +1) is True
+
+    # THEN one zoom step is recorded and the scale stepped x1.25
+    # (6 -> 7.5, so the sprite grows to 150x75):
+    assert app.zoom_steps == 1
+    assert app.ship_rect.size == (150, 75)
+
+    # THEN the view is cursor-anchored: the centered rect (49, 56)
+    # keeps image point (10, 5) under the wheel position:
+    assert app.ship_rect.topleft == (49, 56)
+    assert app.image_to_screen(10, 5) == (124, 94)
+
+    # THEN the 9px marker floor still floors at the zoomed 7.5 scale
+    # (spec 15: Zoom - marker rules apply at every zoom level):
+    assert app.marker_size == PORT_MARKER_SIZE
+
+
+def test_handle_mouse_wheel_down_at_the_fit_zoom_should_be_a_no_op(
+    pygame_ready: None,
+) -> None:
+    # GIVEN the exactly-6x setup at the default (fit) zoom:
+    app = _make_app(_make_surface((20, 10)), layout=_exact_scale_layout())
+    ship_before = app.ship_rect.copy()
+
+    # WHEN wheeling down at fit (zoom-out clamp, spec 15: Zoom):
+    assert app.handle_mouse_wheel((124, 94), -1) is False
+
+    # THEN nothing moved: still step 0 with the untouched fit geometry:
+    assert app.zoom_steps == 0
+    assert app.ship_rect == ship_before
+
+
+def test_handle_mouse_wheel_up_past_the_max_step_should_clamp_at_step_nine_and_track_marker_size(
+    pygame_ready: None,
+) -> None:
+    # GIVEN the exactly-6x setup, wheeled up ZOOM_MAX_STEPS notches
+    # (all anchored at (124, 94)):
+    app = _make_app(_make_surface((20, 10)), layout=_exact_scale_layout())
+    for _ in range(ZOOM_MAX_STEPS):
+        assert app.handle_mouse_wheel((124, 94), +1) is True
+
+    # THEN one more notch is refused at the clamp (spec 15: Zoom):
+    assert app.zoom_steps == ZOOM_MAX_STEPS
+    assert app.handle_mouse_wheel((124, 94), +1) is False
+    assert app.zoom_steps == ZOOM_MAX_STEPS
+
+    # THEN the scale is fit x 1.25^9 (~44.7): the sprite rounds to
+    # 894x447, and the marker size tracks that scale (45) instead of
+    # sitting on the 9px floor:
+    assert app.ship_rect.size == (894, 447)
+    assert app.marker_size == 45
+
+
+def test_handle_mouse_wheel_over_the_control_panel_should_not_change_the_zoom_level(
+    pygame_ready: None,
+) -> None:
+    # GIVEN an app on the design layout (panel at x >= 1600):
+    app = _make_app(_make_surface((20, 10)))
+
+    # WHEN wheeling over the control panel (spec 15: Zoom - wheel
+    # events outside the display area are ignored):
+    assert app.handle_mouse_wheel((1760, 540), +1) is False
+
+    # THEN the zoom level and geometry are untouched (20x10 sprite's
+    # design-layout fit rect: scale 73.6, 1472x736 centered):
+    assert app.zoom_steps == 0
+    assert app.ship_rect == pygame.Rect(64, 172, 1472, 736)
+
+
+def test_handle_mouse_wheel_should_keep_the_image_point_under_the_cursor_under_the_same_screen_position(
+    pygame_ready: None,
+) -> None:
+    # GIVEN the exactly-6x setup and a cursor sitting exactly on the
+    # screen position of image point (2, 0):
+    app = _make_app(_make_surface((20, 10)), layout=_exact_scale_layout())
+    cursor = app.image_to_screen(2, 0)
+    assert cursor == (76, 64)
+
+    # WHEN zooming one step in, THEN that image point is still under
+    # the very same screen position:
+    assert app.handle_mouse_wheel(cursor, +1) is True
+    assert app.ship_rect == pygame.Rect(61, 64, 150, 75)
+    assert app.image_to_screen(2, 0) == cursor
+
+    # WHEN zooming one step back out, THEN the anchor still holds and
+    # the clamp lands the scale exactly on the fit size:
+    assert app.handle_mouse_wheel(cursor, -1) is True
+    assert app.zoom_steps == 0
+    assert app.ship_rect.size == (120, 60)
+    assert app.image_to_screen(2, 0) == cursor
+
+
+def test_left_click_at_a_zoomed_level_should_toggle_the_same_image_cell_as_at_fit(
+    pygame_ready: None,
+) -> None:
+    # GIVEN the exactly-6x setup zoomed one step (scale 7.5, rect
+    # (49, 56, 150, 75)):
+    ports = ShipPorts()
+    app = _make_app(_make_surface((20, 10)), ports, _exact_scale_layout())
+    assert app.handle_mouse_wheel((124, 94), +1) is True
+
+    # WHEN left-clicking 3px inside image cell (7, 4)'s scaled cell
+    # (a smaller relative offset than the +2 fit-scale probes use):
+    cell_x, cell_y = app.image_to_screen(7, 4)
+    assert app.handle_left_click((cell_x + 3, cell_y + 3)) is True
+
+    # THEN the port landed on exactly the same image-space cell it
+    # would have at fit zoom (spec 15: Zoom):
+    assert ports.find_at(7, 4) == ("gun_ports", Port(x=7, y=4, level=0))
+
+    # THEN clicking again clears it at the zoomed level too:
+    assert app.handle_left_click((cell_x + 3, cell_y + 3)) is True
+    assert ports.find_at(7, 4) is None
+
+    # THEN the forward/inverse mapping round-trips at the zoomed level:
+    for image_x, image_y in ((0, 0), (7, 4), (19, 9)):
+        screen_x, screen_y = app.image_to_screen(image_x, image_y)
+        assert app.screen_to_image(screen_x, screen_y) == (image_x, image_y)
+
+
+def test_draw_with_a_zoomed_sprite_should_clip_the_ship_view_to_the_display_area(
+    pygame_ready: None, font_ready: None
+) -> None:
+    # GIVEN an inset display area (20,20,208,148) around an exactly-6x
+    # fit (ship rect (64,64,120,60)), one gun port at image (0,0), and
+    # three wheel-up steps at (124, 94) (scale 11.7, ship rect
+    # (7,34,234,117) - it now spills past the display area's left edge):
+    layout = ToolLayout(
+        display_area=pygame.Rect(20, 20, 208, 148),
+        ship_fit_area=pygame.Rect(40, 40, 120, 60),
+        control_panel=pygame.Rect(228, 0, 20, 188),
+    )
+    ports = ShipPorts()
+    ports.add("gun_ports", 0, 0, 0)
+    app = _make_app(_make_surface((20, 10), (10, 20, 30)), ports, layout)
+    for _ in range(3):
+        assert app.handle_mouse_wheel((124, 94), +1) is True
+    assert app.ship_rect == pygame.Rect(7, 34, 234, 117)
+
+    # WHEN drawn over the black background:
+    screen = pygame.Surface((248, 188))
+    app.draw(screen)
+
+    # THEN the display area shows the zoomed sprite (spec 15: Zoom):
+    assert screen.get_at((25, 90)) == (10, 20, 30, 255)
+
+    # THEN the overhang outside the display area never paints the
+    # sprite (or the (0,0) port's marker, which sits at x 7..18) -
+    # those pixels are plain background:
+    assert screen.get_at((10, 90)) == BACKGROUND_BLACK + (255,)
+    assert screen.get_at((10, 40)) == BACKGROUND_BLACK + (255,)
+
+
+def test_reset_button_click_should_restore_the_default_fit_zoom_level(
+    pygame_ready: None, silent_audio_manager: None, tmp_path: Path
+) -> None:
+    # GIVEN a sidecar session (4x4 sprite: fit rect (324,64,952,952))
+    # zoomed two steps in:
+    ports, app, sidecar_path = _session_with_three_port_sidecar(tmp_path)
+    assert app.handle_mouse_wheel((800, 540), +1) is True
+    assert app.handle_mouse_wheel((800, 540), +1) is True
+    assert app.zoom_steps == 2
+
+    # WHEN the user clicks "Reset" (spec 15: Zoom - Reset restores the
+    # default zoom along with the port data):
+    app.update(_left_click_events(app.option_button("Reset").rect.center))
+
+    # THEN the zoom is back at step 0, recentered on the fit view, the
+    # ports reloaded, and no error was filed:
+    assert app.zoom_steps == 0
+    assert app.ship_rect == pygame.Rect(324, 64, 952, 952)
+    assert _port_snapshot(ports) == {
+        section: [(port["x"], port["y"], port["level"])]
+        for section, port in (
+            ("gun_ports", _THREE_PORT_SIDECAR["gun_ports"][0]),
+            ("thruster_ports", _THREE_PORT_SIDECAR["thruster_ports"][0]),
+            ("collection_ports", _THREE_PORT_SIDECAR["collection_ports"][0]),
+        )
+    }
+    assert app.exit_request is None
+
+
+def test_clear_and_save_button_clicks_should_leave_the_zoom_level_untouched(
+    pygame_ready: None, silent_audio_manager: None, tmp_path: Path
+) -> None:
+    # GIVEN a sidecar session zoomed one step in:
+    ports, app, sidecar_path = _session_with_three_port_sidecar(tmp_path)
+    assert app.handle_mouse_wheel((800, 540), +1) is True
+    zoomed_rect = app.ship_rect.copy()
+
+    # WHEN the user clicks "Clear", then "Save" (spec 15: Zoom - both
+    # leave the current zoom level alone):
+    app.update(_left_click_events(app.option_button("Clear").rect.center))
+    assert app.zoom_steps == 1
+    assert app.ship_rect == zoomed_rect
+    app.update(_left_click_events(app.option_button("Save").rect.center))
+
+    # THEN the zoom still holds, and the save kept the sidecar honest:
+    assert app.zoom_steps == 1
+    assert app.ship_rect == zoomed_rect
+    assert app.exit_request is None
+    saved = json.loads(sidecar_path.read_text())
+    assert saved["gun_ports"] == []
+
+
+# ---------------------------------------------------------------------- #
+# wheel event dispatch: MOUSEWHEEL through app.update (pygame-ce
+# convention; the legacy button 4/5 route is deliberately not handled)
+# ---------------------------------------------------------------------- #
+
+
+def test_update_with_mousewheel_event_of_magnitude_three_should_zoom_exactly_one_step(
+    pygame_ready: None,
+) -> None:
+    # GIVEN the exactly-6x setup at the fit view:
+    app = _make_app(_make_surface((20, 10)), layout=_exact_scale_layout())
+
+    # WHEN a fast three-line wheel flick lands as one MOUSEWHEEL event
+    # at (124, 94) (the house policy from spec 12: every event counts
+    # as magnitude 1, direction preserved):
+    app.update(
+        [pygame.event.Event(pygame.MOUSEWHEEL, x=0, y=3, pos=(124, 94))]
+    )
+
+    # THEN exactly one quantized zoom step is applied:
+    assert app.zoom_steps == 1
+    assert app.ship_rect.size == (150, 75)
+
+
+def test_update_with_horizontal_only_mousewheel_event_should_not_change_the_zoom(
+    pygame_ready: None,
+) -> None:
+    # GIVEN the exactly-6x setup at the fit view:
+    app = _make_app(_make_surface((20, 10)), layout=_exact_scale_layout())
+    ship_before = app.ship_rect.copy()
+
+    # WHEN a horizontal wheel tick arrives (x nonzero, y == 0):
+    app.update(
+        [pygame.event.Event(pygame.MOUSEWHEEL, x=2, y=0, pos=(124, 94))]
+    )
+
+    # THEN the zoom is untouched:
+    assert app.zoom_steps == 0
+    assert app.ship_rect == ship_before
+
+
+def test_update_with_legacy_wheel_button_event_should_not_zoom(
+    pygame_ready: None,
+) -> None:
+    # GIVEN the exactly-6x setup at the fit view:
+    app = _make_app(_make_surface((20, 10)), layout=_exact_scale_layout())
+
+    # WHEN a legacy button-4 wheel MOUSEBUTTONDOWN event arrives (SDL2
+    # still emits these on ratcheted wheels alongside the MOUSEWHEEL
+    # twin; handling both would double-step per notch):
+    app.update(
+        [pygame.event.Event(pygame.MOUSEBUTTONDOWN, pos=(124, 94), button=4)]
+    )
+
+    # THEN the legacy event is ignored - MOUSEWHEEL is the sole zoom
+    # source:
+    assert app.zoom_steps == 0
+
+
+def test_update_with_mousewheel_over_the_control_panel_should_ignore_the_wheel(
+    pygame_ready: None,
+) -> None:
+    # GIVEN an app on the design layout (panel at x >= 1600):
+    app = _make_app(_make_surface((20, 10)))
+
+    # WHEN wheeling over the panel:
+    app.update(
+        [pygame.event.Event(pygame.MOUSEWHEEL, x=0, y=1, pos=(1760, 540))]
+    )
+
+    # THEN the zoom level is untouched (spec 15: Zoom):
+    assert app.zoom_steps == 0
+
+
+def test_update_with_posless_mousewheel_event_should_zoom_at_the_current_mouse_position(
+    pygame_ready: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # GIVEN the exactly-6x setup, a pointer parked at (124, 94), and a
+    # MOUSEWHEEL event carrying pos=None (pygame-ce built against an
+    # SDL older than 2.26):
+    app = _make_app(_make_surface((20, 10)), layout=_exact_scale_layout())
+    monkeypatch.setattr(pygame.mouse, "get_pos", lambda: (124, 94))
+
+    # WHEN the posless wheel event is dispatched:
+    app.update(
+        [pygame.event.Event(pygame.MOUSEWHEEL, x=0, y=1, pos=None)]
+    )
+
+    # THEN the current pointer position anchors the zoom:
+    assert app.zoom_steps == 1
+    assert app.ship_rect.size == (150, 75)
+    assert app.image_to_screen(10, 5) == (124, 94)
 
 
 def test_ship_editor_app_with_zero_size_sprite_should_raise_value_error() -> None:

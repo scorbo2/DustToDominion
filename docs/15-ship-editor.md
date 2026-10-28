@@ -99,7 +99,9 @@ are made as to the size or aspect ratio of the input image. The image is scaled
 proportionally to fit into the ship display area, with a fixed margin of 64px
 on each edge. Scaling should be done via `pygame.transform.scale` (nearest-neighbor)
 for pixel-accurate port mapping. The ship image may need to be scaled down
-to fit (if large) or scaled up to fit (if small).
+to fit (if large) or scaled up to fit (if small). This fit view is the tool's
+startup view and its most zoomed-out view; the user can enlarge the view
+beyond fit with the mouse wheel (see the Zoom section).
 
 The ship display area initially has a plain black background. Right-clicking
 anywhere in the ship display area toggles between a plain black background
@@ -166,18 +168,46 @@ three, and the checked state alone carries the mode. (Only the group header
 Labels use the selected style.)
 
 Left-clicking anywhere in the ship display area adds or removes a port
-of the type described by the active edit mode. This draws a single pixel (in image space) marker,
-scaled to match the image's current scale, at the clicked location, in
-a color to represent the current edit mode:
+of the type described by the active edit mode. This draws a marker, in
+a color to represent the current edit mode, centered on the on-screen
+location of the port's image-space cell:
 - Gun ports: RGB (255,1,1)
 - Thruster ports: RGB (1,255,1)
 - Collection ports: RGB (1,1,255)
 
-The drawn marker is at least 3 screen pixels (square) regardless of image scale;
-port hit-testing always uses image-space coordinates.
+The drawn marker is at least 9 screen pixels (square) regardless of image
+scale, and otherwise scales with the image. The marker is always centered
+on its scaled cell: once the image scale reaches the marker minimum, the
+marker aligns with the scaled cell. The marker is never clamped - at
+sub-pixel image scales it may bleed symmetrically into neighbouring image
+cells, and an edge port's marker may bleed into the ship display area's
+margin.
 
-This establishes a new port of the given type at that location, if the
-clicked location matches no in-memory port assignment.
+Marker-rect hit-testing (amended 2026-10-27): a left-click that lands on
+any pixel of an existing port's drawn marker - bleed included, even the
+bleed into the display margin for edge ports - counts as a click on that
+port. The hit target is the visible marker, never the smaller of marker
+and cell. When marker rects overlap, the port whose marker center is
+nearest to the click wins; exact distance ties resolve deterministically,
+first by section order (gun, thruster, collection), then by the order the
+ports were added. This precedence applies at every zoom level, and it
+takes priority over plain cell mapping: a click that would otherwise map
+to a port-free cell sitting under somebody else's marker resolves to the
+marker's port instead. To place ports closer together than one marker
+footprint, the user zooms in until the scaled cell outgrows the marker
+(see "Zoom") - at zoom levels where the cell is at least as large as the
+marker, the marker rect lies entirely inside its own cell, so marker
+precedence and cell mapping agree by construction.
+
+The precedence check is image-space algebra, not pixel sampling: the
+click's fractional image-space location is tested against each port's
+marker center and half-size converted into image units. The
+forward/inverse pixel mapping itself is untouched, still round-trips
+exactly, and marker geometry never enters the mapping operations.
+
+A left-click that resolves (by either rule above) to a location matching
+no in-memory port assignment establishes a new port of the given type at
+that location.
 
 Left-clicking an existing port of the current Edit mode clears that port.
 Use the in-memory list of ports to determine collisions - don't rely on the
@@ -197,8 +227,8 @@ For example, if the current Edit mode is "Gun ports" and the user
 left-clicks on a thruster port, that thruster port is deleted, and
 a gun port is added at that location.
 
-Note: left-clicks that do not map to an image location (for example, clicking
-in the margin) are no-ops.
+Note: left-clicks that map to no image location and land on no port's
+marker (for example, clicking the empty margin) are no-ops.
 
 ### Pixel mapping
 
@@ -208,12 +238,65 @@ space, rounding to the nearest whole number if a fractional location is calculat
 Mapping goes through actual pixel geometry of the scaled image rect, not
 design space, to honor the "pixel-accurate port mapping" promise of this tool.
 
+## Zoom
+
+Scrolling the mouse wheel over the ship display area zooms the ship view
+in and out (amended 2026-10-27). This is a display-only feature: port
+data, pixel mapping and the sidecar Json format are image-space
+constructs and are completely unaffected by the current zoom level.
+Edit-mode marker precedence is the one deliberate interaction: because
+precedence follows the drawn markers, zooming is exactly what makes fine
+and dense port editing possible - at zoom levels where the scaled cell
+outgrows the marker, clicks on a cell under a neighbouring marker reach
+that cell again (see "Edit mode", amended 2026-10-27).
+
+Zoom mechanics:
+
+- The zoom state is an integer step count applied on top of the fit
+  view, never an accumulated float: the effective display scale is
+  always the fit scale multiplied by 1.25^steps. This keeps the
+  pixel-mapping arithmetic deterministic at every zoom level.
+- One wheel notch up advances the step count by one (scale x1.25);
+  one notch down retreats it by one (scale /1.25).
+- Zoom-out clamps at the fit view (step 0): the proportional fit with
+  the 64px margin described in "The ship display area" is also the
+  startup view and the most zoomed-out view the tool offers. Wheeling
+  down at the clamp is a no-op.
+- Zoom-in clamps at step 9 - the largest quantized step that does not
+  exceed 8.0x the fit scale (1.25^9 is approximately 7.45x). Wheeling
+  up at the clamp is a no-op.
+- Zoom is anchored to the cursor: the image-space location under the
+  wheel event's screen position remains under that same screen
+  position after the zoom step is applied.
+- Wheel events outside the ship display area (over the control panel,
+  say) are ignored.
+- The step factor and the step-count ceiling are fixed constants in
+  the tool's code - no new game configuration keys are introduced.
+- The 9x9 marker floor, the marker scaling rule, and the marker
+  centering rule all apply unchanged at every zoom level.
+
+At zoom levels above fit, the scaled sprite extends past the 64px fit
+margin; the ship view (sprite and markers) is clipped to the ship
+display area and must never cover the control panel.
+
+Known limitation - no panning: the tool offers no click-and-drag
+panning and no scrollbars. When zoomed in, only the part of the sprite
+overlapping the display area is visible or editable; to work on a
+different part of the sprite, the user must zoom out (all the way back
+to fit if necessary) and then zoom in on the other area. Panning, if
+ever wanted, will have to come as a future amendment.
+
+The "Reset" button restores the default zoom level (fit, step 0) along
+with reloading the port data - see the "Reset" section. "Clear" and
+"Save" leave the current zoom level untouched.
+
 ## Reset
 
 The "Reset" button clears the in-memory port list and forces a reload of
 the sidecar Json file. If the file does not exist, then "Reset" is functionally
 equivalent to "Clear". If the file exists, load all ports defined there
-and display them.
+and display them. Reset also restores the default zoom level (the fit
+view - see the Zoom section).
 
 Note that the sidecar Json file can be modified by another process (or by the
 user) while the tool is running. Clicking "Reset" may therefore trigger
@@ -357,9 +440,13 @@ The tool's tests should live in `tests/test_ship_editor*.py` alongside the game'
 Add `tools/` to `pytest.ini`'s `pythonpath`. The script will need the packager-style
 `sys.path.insert(0, .../src)` bootstrap (see the existing `packager` tool for an example).
 
-All display-area click handling and port bookkeeping
-should live in a testable ShipEditorApp-style object with methods like `handle_left_click(pos)`,
-drivable from tests without entering the 60FPS loop.
+All display-area click handling, wheel-zoom handling and port bookkeeping
+should live in a testable ShipEditorApp-style object with methods like
+`handle_left_click(pos)` and `handle_mouse_wheel(pos, direction)`,
+drivable from tests without entering the 60FPS loop. Marker precedence
+(amended 2026-10-27) is a pure-algebra preemption pass inside the
+left-click handling, ahead of the `apply_click_edit` cell-mapping
+fallback; `apply_click_edit` itself stays pygame-free.
 
 ## Testing
 
@@ -380,6 +467,20 @@ drivable from tests without entering the 60FPS loop.
 - Clicking "Save" when no sidecar file exists should generate a new sidecar file with the in-memory ports list.
 - Clicking "Save" when a sidecar file exists should merge the in-memory ports into that file (do not overwrite "name", "mass", or "level")
 - Clicking "Exit" should exit immediately, even if unsaved changes exist in-memory.
+- Port markers are drawn at least 9x9 screen pixels regardless of image scale; markers scale up with the image beyond that floor.
+- Port markers are drawn centered on the on-screen center of their image-space cell; below the marker minimum the bleed into adjacent image cells (or the display margin, for edge ports) is symmetric rather than anchored down-and-right of the cell. Recentering must not disturb the forward/inverse mapping round-trip or hit-testing.
+- Wheeling up over the ship display area advances the zoom step by one (scale x1.25); wheeling down retreats it by one; the effective display scale is always the fit scale multiplied by 1.25^steps.
+- Zoom-out clamps at the startup fit view (step 0): wheeling down at fit is a no-op. Zoom-in clamps at step 9, the largest 1.25^steps at or below 8.0x fit: wheeling up beyond the clamp is a no-op.
+- Wheel events outside the ship display area (over the control panel) do not change the zoom level.
+- Cursor anchoring: the image-space location under the wheel event's screen position maps back to that same screen position both before and after the zoom step.
+- At a non-fit zoom level, left-clicks add, clear, and reassign exactly the image-space cells equivalent to the same relative spot at fit zoom, and the forward/inverse mapping round-trips at that zoom level.
+- The 9x9 marker floor still floors markers at small (zoomed-out) display scales, and marker size tracks the scale at deep zoom-in.
+- Clicking "Reset" restores the default (fit) zoom level in addition to reloading port data; "Clear" and "Save" do not change the zoom level.
+- With a 512-scale sprite at fit (sub-pixel cells under 9px markers), a click a few pixels off a port's marker center - a pixel that used to create a stray overlapping port - instead clears that port under the active edit mode, and reassigns it under the other two edit modes; no new port is created either way.
+- Overlapping marker rects: a click covered by two or more markers resolves to the nearest marker center; an exact distance tie resolves deterministically by section order, then by port insertion order.
+- At a zoom level where the cell is at least as large as the marker, a click inside a marker resolves to the same port cell mapping would pick (precedence changes nothing), while a port inside another port's marker footprint becomes addable only at such zoom levels: the same click resolves to the preemption target at fit and to the port-free cell when zoomed past the crossover.
+- Edge-port bleed included: a click in the display margin that lands on an edge port's drawn marker acts on that port, while a margin click that hits no marker remains a no-op; right-click background toggling is unaffected everywhere.
+- The precedence pass is pure image-space algebra (fractional click location versus marker centers and half-sizes in image units): the forward/inverse mapping round-trip tests stay untouched and green, and `apply_click_edit` remains pygame-free.
 
 ## Acceptance criteria
 
@@ -387,7 +488,10 @@ drivable from tests without entering the 60FPS loop.
 - If the input image has a sidecar Json file, are its ports loaded and displayed on startup?
 - Can the user left-click to add ports of the three types anywhere on the image?
 - Are the ports color-coded according to their type for easy visual identification?
-- Do the single-pixel port locations scale up as the ship image scales up?
+- Do the port markers scale up as the ship image scales up, with a minimum size of 9x9 screen pixels, centered over their port locations?
+- Can the user mouse-wheel to zoom from the fit view up to the maximum step and back, anchored under the cursor, and still place and edit ports accurately at any zoom level?
+- When markers are drawn larger than the cells they represent, does clicking any visible pixel of a port's marker act on that port (nearest marker center wins) instead of spawning a stray overlapping port?
+- Can the user still place and edit ports that sit inside one another's marker footprints by zooming in until the scaled cell outgrows the marker?
 - Can the user save changes once ports are defined in-memory?
 
 ## Open questions (all resolved)
@@ -458,4 +562,83 @@ drivable from tests without entering the 60FPS loop.
   acceptance criteria verified against tests; one audit gap closed -
   thruster/collection click-adds now proven per-type through the UI;
   full suite green at 1296 tests; doc status flipped to active.)
-
+11. **Amendment 2026-10-27** Increase the minimum size of markers from
+  3x3 (square) to 9x9 (square), in screen pixels, to make them more visible.
+  Update code and tests as needed. If all is well, flip this doc back to "active".
+  **Completed 2026-10-27** (`PORT_MARKER_SIZE` bumped 3 -> 9; the downscaled-sprite
+  floor test renamed and re-anchored to prove an exact 9x9 footprint; one
+  incidental `marker_size == 6` assertion in the exact-scale round-trip test
+  updated to the now-dominating 9px floor - mapping itself is image-space and
+  unaffected; full suite green at 1296 tests; doc status flipped to active.)
+12. **Amendment 2026-10-27** Draw port markers centered on the on-screen
+  center of their scaled image-space cell, instead of top-left-anchored
+  at the scaled cell corner. This is a render-only change: pixel mapping,
+  image-space hit-testing, and the sidecar format are untouched. Update
+  the marker rect placement in `ShipEditorApp` (and the topleft contract
+  of the `screen_position_for_port` helper), and re-anchor the marker
+  pixel probes in the tests; cover the centered floor footprint and the
+  edge-port margin bleed. Full suite green. If all is well, flip this
+  doc back to "active" - stage 13 is only a placeholder and does not
+  block the flip.
+  **Completed 2026-10-27** (`_port_marker_rect` now centers on the
+  scaled cell center and no longer clamps; `image_to_screen` docstring
+  reworded to make clear it is the mapping anchor, not the marker;
+  three test anchors re-anchored ((212, 320) at 14.72x, (801, 541) at
+  95.2x, and the 0.595x floor probes), the floor test extended with the
+  edge-port margin-bleed probe, and a new interior symmetric-bleed test
+  added; mapping round-trip tests untouched and still green; full suite
+  green at 1297 tests; doc status flipped to active.)
+13. **Amendment 2026-10-27** Mouse-wheel zoom for the ship display area
+  (see the new "Zoom" section): cursor-anchored, quantized x1.25 steps,
+  zoom-out clamp at the fit/startup view (step 0), zoom-in clamp at
+  step 9 (~7.45x, the largest step not exceeding 8.0x fit); wheel
+  events outside the display area ignored; startup at fit zoom;
+  "Reset" also restores fit zoom. Add `handle_mouse_wheel(pos,
+  direction)` to `ShipEditorApp` plus wheel wiring in the tool's event
+  loop, and generalize `_update_display` so the fit clamp applies at
+  the default zoom level only. Clip the ship view (sprite and markers)
+  to the display area - never over the control panel. No panning, no
+  scrollbars (documented limitation). Cover the new Testing-section
+  zoom bullets. Full suite green. If all is well, flip this doc back
+  to "active".
+  **Completed 2026-10-27** (`ZOOM_STEP_FACTOR`/`ZOOM_MAX_STEPS`
+  constants; `handle_mouse_wheel(pos, direction)` with integer step
+  state and cursor-anchored re-centering that survives both clamp
+  landings; `_build_ship` applies the fit-area clamp only at step 0;
+  `draw` clips the ship view to the display area via `set_clip`;
+  wheel buttons 4/5 wired in the event loop; "Reset" restores fit
+  zoom before reloading ports. Nine new tests cover every Testing
+  bullet, including an inset-display-area clipping probe and exact
+   anchor round-trips at (76, 64); full suite green at 1306 tests;
+   doc status flipped to active.)
+14. **Amendment 2026-10-27** Marker-rect hit-testing (see the amended
+   "Edit mode" section): a left-click on any drawn pixel of an existing
+   port's marker - edge-port margin bleed included - acts on that port;
+   overlapping markers resolve to the nearest marker center, ties broken
+   deterministically by section order then insertion order; the rule
+   applies at every zoom level and agrees with cell mapping when the
+   scaled cell is at least as large as the marker. Implement as a pure
+   image-space-algebra preemption pass ahead of the `apply_click_edit`
+   cell-mapping fallback; the mapping operations stay untouched. Reword
+   the `image_to_screen` docstring invariant (clicks are no longer
+   tested solely via `screen_to_image`) and the margin no-op note.
+   Cover the new Testing-section bullets, including the 512-scale
+   fit-view scenario and the zoom crossover. Full suite green. If all
+   is well, flip this doc back to "active".
+   **Completed 2026-10-27** (pygame-free `resolve_click_port(ports,
+   fractional_x, fractional_y, marker_half_x, marker_half_y)`: scans
+   `PORT_SECTIONS` over insertion-ordered lists, nearest marker center
+   wins via strict-less-than, ties resolving by section then insertion
+   order for free; `handle_left_click` captures the fractional image
+   location, runs preemption with half-extents `marker_size /
+   (2 * scale)`, and only uncovered clicks fall back to cell mapping;
+   `apply_click_edit` and the mapping operations untouched;
+   `image_to_screen` and `handle_left_click` docstrings inverted per
+   the amendment. Nine new tests - four of them pygame-free - cover
+   every Testing bullet, including a 1.125x off-center clear, a
+   nearest-center overlap pick, both tie-break orders, edge-port
+   margin-bleed act vs empty-margin no-op, and the fit-vs-step-9
+   crossover (sequential anchor drift lands the probe geometry at
+   (-13, -7) - hand arithmetic verified against the machine before
+   pinning); full suite green at 1315 tests; doc status flipped to
+   active.)
