@@ -181,7 +181,7 @@ def _sidecar_path(sprite_path: Path) -> Path:
 # ---------------------------------------------------------------------- #
 
 
-def test_run_no_arguments_should_exit_code_2(capsys: pytest.Capsys) -> None:
+def test_run_no_arguments_should_exit_code_2(capsys: pytest.CaptureFixture[str]) -> None:
     # WHEN we run the tool without the required input sprite argument:
     code = run([])
 
@@ -193,7 +193,7 @@ def test_run_no_arguments_should_exit_code_2(capsys: pytest.Capsys) -> None:
     assert "error" in err
 
 
-def test_run_too_many_arguments_should_exit_code_2(tmp_path: Path, capsys: pytest.Capsys) -> None:
+def test_run_too_many_arguments_should_exit_code_2(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     image_path = tmp_path / "ship.png"
     _write_png(image_path)
 
@@ -206,7 +206,7 @@ def test_run_too_many_arguments_should_exit_code_2(tmp_path: Path, capsys: pytes
     assert "error" in err
 
 
-def test_run_help_argument_should_print_help_and_exit_code_0(capsys: pytest.Capsys) -> None:
+def test_run_help_argument_should_print_help_and_exit_code_0(capsys: pytest.CaptureFixture[str]) -> None:
     # GIVEN argparse's built-in --help argument:
     code = run(["--help"])
 
@@ -221,7 +221,7 @@ def test_run_help_argument_should_print_help_and_exit_code_0(capsys: pytest.Caps
 # ---------------------------------------------------------------------- #
 
 
-def test_run_missing_sprite_file_should_exit_code_1(tmp_path: Path, capsys: pytest.Capsys) -> None:
+def test_run_missing_sprite_file_should_exit_code_1(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     # GIVEN a sprite path that does not exist:
     sprite_path = tmp_path / "ship.png"
 
@@ -235,7 +235,7 @@ def test_run_missing_sprite_file_should_exit_code_1(tmp_path: Path, capsys: pyte
     assert "does not exist" in err
 
 
-def test_run_sprite_path_is_directory_should_exit_code_1(tmp_path: Path, capsys: pytest.Capsys) -> None:
+def test_run_sprite_path_is_directory_should_exit_code_1(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     # GIVEN a path that exists but is a directory (named like an image):
     sprite_path = tmp_path / "ship.png"
     sprite_path.mkdir()
@@ -254,7 +254,7 @@ def test_run_sprite_path_is_directory_should_exit_code_1(tmp_path: Path, capsys:
     not hasattr(os, "geteuid") or os.geteuid() == 0,
     reason="permission tests are meaningless when running as root (Unix) or on Windows",
 )
-def test_run_unreadable_sprite_file_should_exit_code_1(tmp_path: Path, capsys: pytest.Capsys) -> None:
+def test_run_unreadable_sprite_file_should_exit_code_1(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     # GIVEN a valid PNG that the current user cannot read:
     sprite_path = tmp_path / "ship.png"
     _write_png(sprite_path)
@@ -270,7 +270,7 @@ def test_run_unreadable_sprite_file_should_exit_code_1(tmp_path: Path, capsys: p
     assert "error" in err
 
 
-def test_run_unsupported_extension_should_exit_code_1(tmp_path: Path, capsys: pytest.Capsys) -> None:
+def test_run_unsupported_extension_should_exit_code_1(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     # GIVEN a file whose extension is not PNG/JPEG (spec 15: accepted
     # extensions are .png, .jpg, .jpeg):
     gif_path = tmp_path / "ship.gif"
@@ -286,7 +286,7 @@ def test_run_unsupported_extension_should_exit_code_1(tmp_path: Path, capsys: py
     assert ".png, .jpg, .jpeg" in err
 
 
-def test_run_corrupt_image_should_exit_code_1(tmp_path: Path, capsys: pytest.Capsys) -> None:
+def test_run_corrupt_image_should_exit_code_1(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     # GIVEN a file with an accepted extension but unreadable content:
     png_path = tmp_path / "ship.png"
     png_path.write_bytes(b"this is not a png")
@@ -317,7 +317,7 @@ def test_run_corrupt_image_should_exit_code_1(tmp_path: Path, capsys: pytest.Cap
     ],
 )
 def test_prepare_valid_image_no_sidecar_should_return_zero_and_empty_ports(
-    tmp_path: Path, capsys: pytest.Capsys, extension: str, writer
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], extension: str, writer
 ) -> None:
     # GIVEN a valid image with an accepted extension (case-insensitive)
     # and no sidecar file (spec 15: The main interface - no sidecar means
@@ -340,7 +340,7 @@ def test_prepare_valid_image_no_sidecar_should_return_zero_and_empty_ports(
 
 
 def test_prepare_valid_image_with_valid_sidecar_should_return_ports_and_no_success_stdout(
-    tmp_path: Path, capsys: pytest.Capsys
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     # GIVEN a valid image with a valid sidecar describing ports
     # (spec 15: Load on startup - sidecar present and valid):
@@ -374,7 +374,7 @@ def test_prepare_valid_image_with_valid_sidecar_should_return_ports_and_no_succe
 
 
 def test_prepare_valid_image_with_sidecar_missing_name_mass_level_should_warn_and_no_success_stdout(
-    tmp_path: Path, capsys: pytest.Capsys
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     # GIVEN a valid image and a sidecar with no name, no mass, and a
     # port entry with no level (all warnings, not errors, spec 15:
@@ -407,7 +407,7 @@ def test_prepare_valid_image_with_sidecar_missing_name_mass_level_should_warn_an
 
 
 def test_prepare_valid_image_with_malformed_sidecar_should_exit_code_1(
-    tmp_path: Path, capsys: pytest.Capsys
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     # GIVEN a valid image with a sidecar containing unparseable Json:
     sprite_path = tmp_path / "viper.png"
@@ -431,7 +431,7 @@ def test_prepare_valid_image_with_malformed_sidecar_should_exit_code_1(
     reason="permission tests are meaningless when running as root (Unix) or on Windows",
 )
 def test_prepare_valid_image_with_unreadable_sidecar_should_exit_code_1(
-    tmp_path: Path, capsys: pytest.Capsys
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     # GIVEN a valid image and a sidecar the current user cannot read:
     sprite_path = tmp_path / "viper.png"
@@ -497,7 +497,7 @@ _INVALID_SIDECAR_CASES = pytest.mark.parametrize(
 
 @_INVALID_SIDECAR_CASES
 def test_prepare_valid_image_with_invalid_sidecar_should_exit_code_2(
-    tmp_path: Path, capsys: pytest.Capsys, sidecar_json: str, expect: str
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], sidecar_json: str, expect: str
 ) -> None:
     # GIVEN a valid 4x4 image and a sidecar with one of the spec's
     # enumerated invalid shapes:
@@ -551,7 +551,7 @@ def test_parse_sidecar_populates_sections_with_levels() -> None:
     assert ports.find_at(12, 36) == ("gun_ports", Port(x=12, y=36, level=1))
 
 
-def test_parse_sidecar_missing_sections_and_ports_are_empty(capsys: pytest.Capsys) -> None:
+def test_parse_sidecar_missing_sections_and_ports_are_empty(capsys: pytest.CaptureFixture[str]) -> None:
     # GIVEN a sidecar that defines a name only (no mass, no sections):
     ports = parse_sidecar({"name": "viper"}, (10, 10))
 
@@ -564,7 +564,7 @@ def test_parse_sidecar_missing_sections_and_ports_are_empty(capsys: pytest.Capsy
     assert capsys.readouterr().err == "Warning: ship has no mass!\n"
 
 
-def test_parse_sidecar_empty_port_lists_are_empty(capsys: pytest.Capsys) -> None:
+def test_parse_sidecar_empty_port_lists_are_empty(capsys: pytest.CaptureFixture[str]) -> None:
     # GIVEN a sidecar whose port lists are empty arrays (spec 15: "an
     # empty port list is not a problem"):
     ports = parse_sidecar(
@@ -579,7 +579,7 @@ def test_parse_sidecar_empty_port_lists_are_empty(capsys: pytest.Capsys) -> None
     assert capsys.readouterr().err == ""
 
 
-def test_parse_sidecar_missing_level_defaults_to_zero_and_warns(capsys: pytest.Capsys) -> None:
+def test_parse_sidecar_missing_level_defaults_to_zero_and_warns(capsys: pytest.CaptureFixture[str]) -> None:
     # GIVEN a port entry with no "level" (and no name/mass, for noise
     # isolation via substring):
     ports = parse_sidecar({"gun_ports": [{"x": 1, "y": 1}]}, (10, 10))
@@ -590,7 +590,7 @@ def test_parse_sidecar_missing_level_defaults_to_zero_and_warns(capsys: pytest.C
     assert "Warning: port has no level!" in capsys.readouterr().err
 
 
-def test_parse_sidecar_ignores_unrecognized_keys(capsys: pytest.Capsys) -> None:
+def test_parse_sidecar_ignores_unrecognized_keys(capsys: pytest.CaptureFixture[str]) -> None:
     # GIVEN a sidecar with extra top-level keys and extra keys inside a
     # port entry (spec 15: unrecognized keys ignored):
     ports = parse_sidecar(
@@ -810,7 +810,7 @@ def test_prepare_uses_injected_loader_when_supplied(tmp_path: Path) -> None:
 
 
 def test_prepare_injected_loader_failure_should_exit_code_1(
-    tmp_path: Path, capsys: pytest.Capsys
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     # GIVEN a valid image path and a loader that fails to decode:
     sprite_path = tmp_path / "ship.png"
@@ -831,7 +831,7 @@ def test_prepare_injected_loader_failure_should_exit_code_1(
 
 
 def test_prepare_injected_loader_size_drives_bounds_check(
-    tmp_path: Path, capsys: pytest.Capsys
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     # GIVEN an injected loader reporting a 2x2 surface and a sidecar
     # with a port at (5, 0) - in bounds only for a larger image:
