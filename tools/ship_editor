@@ -1,0 +1,36 @@
+#!/usr/bin/env python3
+"""Thin executable shim for the ship editor tool (spec 15).
+
+Resolves the project root from this file's location and inserts ``src/``
+into ``sys.path`` so that the game code (``dtd.*``) and the tool's logic
+module (``ship_editor_lib``) are importable no matter where the tool is
+launched from (spec 15: Script structure; same pattern as
+``tools/packager``). All logic lives in ``tools/ship_editor_lib``.
+
+Unlike the headless ``tools/packager``, this shim does NOT set dummy SDL
+drivers: the ship editor presents a real window (spec 15: The main
+interface), and ``SDL_VIDEODRIVER=dummy`` would make ``set_mode`` "succeed"
+against an offscreen null driver - window in memory, nothing on screen,
+QUIT never delivered. Run headless? ``_init_pygame`` in ``ship_editor_lib``
+already degrades gracefully with a warning and exit code 1.
+
+Usage::
+
+    tools/ship_editor resources/ships/viper/viper.png
+"""
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+
+# Resolve the project root from this file's location and put src/ on the
+# path so we can import dtd.* regardless of where the script is launched
+# from (spec 15: Script structure).
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(_PROJECT_ROOT / "src"))
+sys.path.insert(0, str(_PROJECT_ROOT / "tools"))
+
+import ship_editor_lib  # noqa: E402  (must come after the path bootstrap)
+
+
+sys.exit(ship_editor_lib.run())
