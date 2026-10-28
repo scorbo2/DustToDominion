@@ -414,6 +414,51 @@ def apply_click_edit(ports: ShipPorts, section: str, x: int, y: int) -> bool:
     return True
 
 
+def resolve_click_port(
+    ports: ShipPorts,
+    image_x: float,
+    image_y: float,
+    marker_half_x: float,
+    marker_half_y: float,
+) -> tuple[str, Port] | None:
+    """Marker-rect preemption pass (spec 15: Edit mode, amended
+    2026-10-27): return ``(section, port)`` for the port whose drawn
+    marker covers the *fractional* image-space click location, or
+    ``None`` if no marker does.
+
+    A marker footprint is the square centered on ``(port.x + 0.5,
+    port.y + 0.5)`` with half-extents ``marker_half_x/y`` already
+    converted into image units by the caller. The hit target is the
+    visible marker, not the cell, so a click a few pixels off-center
+    on a big sprite acts on the port the user was aiming at instead
+    of spawning a stray overlapping port.
+
+    Overlapping footprints resolve to the nearest marker center
+    (Euclidean); exact distance ties resolve deterministically by
+    section order then insertion order, for free: the scan runs in
+    ``PORT_SECTIONS`` order over each section's insertion-ordered
+    list, and only strictly closer candidates replace the incumbent.
+
+    Pure image-space algebra, deliberately: no pygame, no pixel
+    sampling - same testability promise as ``apply_click_edit``, and
+    the mapping operations in ``image_to_screen``/``screen_to_image``
+    stay untouched by this rule.
+    """
+    winner: tuple[str, Port] | None = None
+    best_distance_squared = float("inf")
+    for section in PORT_SECTIONS:
+        for port in ports.section_ports(section):
+            offset_x = image_x - (port.x + 0.5)
+            offset_y = image_y - (port.y + 0.5)
+            if abs(offset_x) > marker_half_x or abs(offset_y) > marker_half_y:
+                continue
+            distance_squared = offset_x * offset_x + offset_y * offset_y
+            if distance_squared < best_distance_squared:
+                best_distance_squared = distance_squared
+                winner = (section, port)
+    return winner
+
+
 def _is_int(value: object) -> bool:
     """True for real integers only.
 
@@ -730,14 +775,29 @@ class ShipEditorApp:
 
         Goes through the actual pixel geometry of the scaled ship rect.
         The anchor always round-trips back through ``screen_to_image``;
-        marker bleed never enters the mapping algebra, so hit-testing
-        can never disagree with what the marker claims (clicks are
-        tested in image space via ``screen_to_image``, not against
-        marker pixels).
+        marker bleed never enters the mapping algebra. Marker geometry
+        informs click resolution only through the pure
+        ``resolve_click_port`` preemption pass, which consults the same
+        center/scale quantities - marker pixels are never sampled, so
+        the mapping operations above stay untouched (spec 15: Edit
+        mode, amended 2026-10-27).
         """
         return (
             self._ship_rect.x + int(round(image_x * self._scale_x)),
             self._ship_rect.y + int(round(image_y * self._scale_y)),
+        )
+
+    def _fractional_image_at(
+        self, screen_point: tuple[int, int]
+    ) -> tuple[float, float]:
+        """Fractional image-space location under a screen position -
+        the inverse of ``image_to_screen``, and the single home of the
+        click-side mapping algebra. Written exactly once so the wheel
+        anchor capture, the left-click preemption, and
+        ``screen_to_image``'s rounding can never drift apart."""
+        return (
+            (screen_point[0] - self._ship_rect.x) / self._scale_x,
+            (screen_point[1] - self._ship_rect.y) / self._scale_y,
         )
 
     def screen_to_image(self, screen_x: int, screen_y: int) -> tuple[int, int]:
@@ -748,10 +808,10 @@ class ShipEditorApp:
         (in the margin, say) map outside ``[0, width) x [0, height)`` and
         the caller must treat them as no-ops (spec 15: Edit mode).
         """
-        return (
-            int(round((screen_x - self._ship_rect.x) / self._scale_x)),
-            int(round((screen_y - self._ship_rect.y) / self._scale_y)),
+        fractional_x, fractional_y = self._fractional_image_at(
+            (screen_x, screen_y)
         )
+        return int(round(fractional_x)), int(round(fractional_y))
 
     def handle_right_click(self, position: tuple[int, int]) -> bool:
         """Toggle the background if ``position`` is in the display area.
@@ -770,17 +830,33 @@ class ShipEditorApp:
 
     def handle_left_click(self, position: tuple[int, int]) -> bool:
         """Apply the Edit mode click rules to ``position`` (spec 15:
-        Edit mode).
+        Edit mode, amended 2026-10-27).
 
-        The mapping half: inside the display area the click maps to the
-        nearest image cell (spec 15: Pixel mapping), and clicks that map
-        outside the image (margins) are no-ops. The collision policy
-        proper (add / toggle-clear / reassign) lives in the pygame-free
-        ``apply_click_edit``. Returns ``True`` when the in-memory port
-        list changed.
+        Resolution order: the fractional image-space click location
+        first goes through the ``resolve_click_port`` preemption pass -
+        any pixel of a drawn marker (edge-port margin bleed included)
+        acts on that port, nearest marker center winning - and only
+        clicks covered by no marker fall back to the plain cell
+        mapping, where clicks landing outside the image (empty margin)
+        remain no-ops. The collision policy proper (add / toggle-clear
+        / reassign) lives in the pygame-free ``apply_click_edit``.
+        Returns ``True`` when the in-memory port list changed.
         """
         if not self._layout.display_area.collidepoint(position):
             return False
+        fractional_x, fractional_y = self._fractional_image_at(position)
+        preemption = resolve_click_port(
+            self._ports,
+            fractional_x,
+            fractional_y,
+            self._marker_size / (2 * self._scale_x),
+            self._marker_size / (2 * self._scale_y),
+        )
+        if preemption is not None:
+            _, port = preemption
+            return apply_click_edit(
+                self._ports, self._edit_mode, port.x, port.y
+            )
         image_x, image_y = self.screen_to_image(*position)
         image_width, image_height = self._source_size
         if not (0 <= image_x < image_width and 0 <= image_y < image_height):
@@ -813,12 +889,8 @@ class ShipEditorApp:
         )
         if new_steps == self._zoom_steps:
             return False
-        hold = (
-            (position[0] - self._ship_rect.x) / self._scale_x,
-            (position[1] - self._ship_rect.y) / self._scale_y,
-            position[0],
-            position[1],
-        )
+        anchor_x, anchor_y = self._fractional_image_at(position)
+        hold = (anchor_x, anchor_y, position[0], position[1])
         self._zoom_steps = new_steps
         self._build_ship()
         self._recenter_view(hold)

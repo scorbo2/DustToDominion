@@ -53,6 +53,12 @@ display area):
   wheel over the panel ignored, "Reset" restores fit zoom, and the
   zoomed ship view is clipped to the display area (spec 15: Zoom,
   amended 2026-10-27)
+- marker-rect preemption for left-clicks: clicks on drawn marker
+  pixels act on that port - nearest marker center wins, ties by
+  section then insertion order - edge-port margin bleed included,
+  while empty-margin clicks stay no-ops and the cell-mapping fallback
+  takes over past the zoom crossover (spec 15: Edit mode, amended
+  2026-10-27)
 
 The control-panel contract (spec 15: The control panel, Edit mode):
 
@@ -143,6 +149,7 @@ from ship_editor_lib import (
     PORT_COLORS,
     Port,
     prepare,
+    resolve_click_port,
     SidecarReadError,
     SidecarWriteError,
     ShipPorts,
@@ -1276,6 +1283,211 @@ def test_screen_to_image_with_click_in_the_margin_should_map_outside_the_image(
     assert image_x < 0 or image_y < 0
     image_x, image_y = app.screen_to_image(247, 187)
     assert image_x >= 20 or image_y >= 10
+
+
+# ---------------------------------------------------------------------- #
+# marker-rect preemption (spec 15: Edit mode, amended 2026-10-27)
+# ---------------------------------------------------------------------- #
+
+
+def _marker_preemption_layout() -> ToolLayout:
+    """A 16x16 sprite at fit scale 1.125: 1.125px image cells under
+    9px markers - the 512x512-sprite-at-fit-view shape, 32x smaller."""
+    return ToolLayout(
+        display_area=pygame.Rect(0, 0, 40, 40),
+        ship_fit_area=pygame.Rect(4, 4, 18, 18),
+        control_panel=pygame.Rect(40, 0, 10, 40),
+    )
+
+
+def _scale2_4x4_layout() -> ToolLayout:
+    """A 4x4 sprite at fit scale 2: 2px image cells under 9px
+    markers, with generous display margin around an 8x8 ship rect
+    at (16, 16)."""
+    return ToolLayout(
+        display_area=pygame.Rect(0, 0, 40, 40),
+        ship_fit_area=pygame.Rect(0, 0, 8, 8),
+        control_panel=pygame.Rect(40, 0, 10, 40),
+    )
+
+
+def test_resolve_click_port_with_two_covering_footprints_should_prefer_the_nearest_marker_center() -> None:
+    # GIVEN two gun ports one cell apart, and a fractional image-space
+    # click inside both footprints but closer to the second (offsets
+    # 0.8 versus 0.2 image units):
+    ports = ShipPorts()
+    ports.add("gun_ports", 1, 1)
+    ports.add("gun_ports", 2, 1)
+
+    # THEN the nearest marker center wins:
+    winner = resolve_click_port(ports, 2.3, 1.5, 2.25, 2.25)
+    assert winner == ("gun_ports", Port(x=2, y=1, level=0))
+
+
+def test_resolve_click_port_with_equidistant_footprints_in_different_sections_should_prefer_the_earlier_section() -> None:
+    # GIVEN a thruster port added *first* and a gun port added second,
+    # both exactly 0.5 image units from the click (equidistant):
+    ports = ShipPorts()
+    ports.add("thruster_ports", 1, 1, level=2)
+    ports.add("gun_ports", 2, 1)
+
+    # THEN the tie resolves by section order (gun before thruster),
+    # not insertion order:
+    winner = resolve_click_port(ports, 2.0, 1.5, 2.25, 2.25)
+    assert winner == ("gun_ports", Port(x=2, y=1, level=0))
+
+
+def test_resolve_click_port_with_equidistant_footprints_in_the_same_section_should_prefer_the_first_added() -> None:
+    # GIVEN two gun ports equidistant from the click, the (1, 1) port
+    # added first:
+    ports = ShipPorts()
+    ports.add("gun_ports", 1, 1)
+    ports.add("gun_ports", 2, 1)
+
+    # THEN the tie resolves by insertion order:
+    winner = resolve_click_port(ports, 2.0, 1.5, 2.25, 2.25)
+    assert winner == ("gun_ports", Port(x=1, y=1, level=0))
+
+
+def test_resolve_click_port_outside_every_footprint_should_return_none() -> None:
+    # GIVEN one gun port and a click 2.5 image units off its marker
+    # center, past the 2.25 half-extent:
+    ports = ShipPorts()
+    ports.add("gun_ports", 1, 1)
+
+    # THEN no marker covers the click:
+    assert resolve_click_port(ports, 4.0, 1.5, 2.25, 2.25) is None
+
+
+def test_handle_left_click_a_few_pixels_off_a_tiny_cells_marker_should_clear_the_port_not_create_a_stray(
+    pygame_ready: None,
+) -> None:
+    # GIVEN the 1.125x layout with one gun port at (8, 8) - marker
+    # center at screen (21, 21), footprint half-extent 4.0 image units:
+    ports = ShipPorts()
+    ports.add("gun_ports", 8, 8)
+    app = _make_app(
+        _make_surface((16, 16)), ports, _marker_preemption_layout()
+    )
+    assert app.marker_size == PORT_MARKER_SIZE
+
+    # WHEN left-clicking (22, 21) - inside the drawn marker (1.28
+    # image units off the center) but 2 cells away in mapping terms;
+    # the old cell-mapping rule would have created a stray overlapping
+    # port at cell (10, 9), which is exactly the 512-sprite complaint:
+    assert app.handle_left_click((22, 21)) is True
+
+    # THEN the aimed-at port is cleared and no stray exists anywhere:
+    assert ports.find_at(8, 8) is None
+    assert not ports.section_ports("gun_ports")
+
+
+def test_handle_left_click_off_center_on_another_modes_marker_should_reassign_it_not_create_a_stray(
+    pygame_ready: None,
+) -> None:
+    # GIVEN the same 1.125x layout, a thruster port with hand-edited
+    # level 2 at (8, 8), and the startup gun edit mode:
+    ports = ShipPorts()
+    ports.add("thruster_ports", 8, 8, level=2)
+    app = _make_app(
+        _make_surface((16, 16)), ports, _marker_preemption_layout()
+    )
+
+    # WHEN left-clicking the same off-center marker pixel (22, 21):
+    assert app.handle_left_click((22, 21)) is True
+
+    # THEN the port is reassigned in place, level intact, with no
+    # stray port created on the click's own cell:
+    assert ports.find_at(8, 8) == ("gun_ports", Port(x=8, y=8, level=2))
+    assert not ports.section_ports("thruster_ports")
+
+
+def test_handle_left_click_within_two_overlapping_markers_should_act_on_the_nearest_port(
+    pygame_ready: None,
+) -> None:
+    # GIVEN two adjacent gun ports at (8, 8) and (9, 8) on the 1.125x
+    # layout - their 9px markers overlap heavily at this scale:
+    ports = ShipPorts()
+    ports.add("gun_ports", 8, 8)
+    ports.add("gun_ports", 9, 8)
+    app = _make_app(
+        _make_surface((16, 16)), ports, _marker_preemption_layout()
+    )
+
+    # WHEN left-clicking (22, 21): both markers cover it, but (9, 8)
+    # is far nearer the click (d^2 0.23 versus 1.77):
+    assert app.handle_left_click((22, 21)) is True
+
+    # THEN only the nearer port is cleared; the other survives and no
+    # stray was created:
+    assert ports.find_at(8, 8) == ("gun_ports", Port(x=8, y=8, level=0))
+    assert len(ports.section_ports("gun_ports")) == 1
+
+
+def test_handle_left_click_on_edge_port_marker_bleed_in_the_margin_should_act_on_the_port_while_right_clicks_and_empty_margin_stay_unaffected(
+    pygame_ready: None,
+) -> None:
+    # GIVEN the 4x4 scale-2 layout with one gun port at the image
+    # corner (0, 0) - its marker center is at screen (17, 17) and its
+    # footprint bleeds into the display margin left of the sprite:
+    ports = ShipPorts()
+    ports.add("gun_ports", 0, 0)
+    app = _make_app(_make_surface((4, 4)), ports, _scale2_4x4_layout())
+
+    # WHEN right-clicking the bleed pixel (14, 17):
+    # THEN only the background toggles and the port is untouched:
+    assert app.handle_right_click((14, 17)) is True
+    assert ports.find_at(0, 0) == ("gun_ports", Port(x=0, y=0, level=0))
+
+    # WHEN left-clicking empty margin at (0, 0) - no marker covers it:
+    # THEN nothing happens (spec 15: margin clicks remain no-ops):
+    assert app.handle_left_click((0, 0)) is False
+
+    # WHEN left-clicking the bleed pixel (14, 17) - outside the image
+    # (mapping would report cell (-1, 0)), but squarely on the drawn
+    # marker of the edge port:
+    assert app.handle_left_click((14, 17)) is True
+
+    # THEN the click acts on that port:
+    assert ports.find_at(0, 0) is None
+
+
+def test_handle_left_click_in_a_cell_covered_by_a_neighbouring_marker_should_preempt_at_fit_but_reach_the_cell_past_the_zoom_crossover(
+    pygame_ready: None,
+) -> None:
+    # GIVEN the 4x4 scale-2 layout, a thruster port at (1, 1) with
+    # hand-edited level 2, and the startup gun mode:
+    ports = ShipPorts()
+    ports.add("thruster_ports", 1, 1, level=2)
+    app = _make_app(_make_surface((4, 4)), ports, _scale2_4x4_layout())
+
+    # WHEN left-clicking the center of port-free cell (2, 1) at fit -
+    # screen (21, 19), a mere 1.0 image units from (1, 1)'s marker
+    # center, well inside the 2.25 half-extent:
+    assert app.handle_left_click((21, 19)) is True
+
+    # THEN the click preempted to the neighbour: (1, 1) is reassigned
+    # to gun with its level intact, and cell (2, 1) stayed free:
+    assert ports.find_at(1, 1) == ("gun_ports", Port(x=1, y=1, level=2))
+    assert ports.find_at(2, 1) is None
+
+    # WHEN zooming in to the crossover (step 9: anchor-captured scale
+    # drift lands the 60x60 ship rect at (-13, -7), scale 15, marker
+    # 15 - the cell is at last as large as the marker):
+    for _ in range(ZOOM_MAX_STEPS):
+        assert app.handle_mouse_wheel((21, 19), +1) is True
+    assert app.zoom_steps == ZOOM_MAX_STEPS
+    assert app.marker_size == 15
+
+    # WHEN left-clicking (24, 1) - inside cell (2, 1)'s scaled span
+    # (x 10..24, y 1..15) and ~0.97 image units clear of (1, 1)'s
+    # now-0.5 marker half-extent:
+    assert app.handle_left_click((24, 1)) is True
+
+    # THEN precedence is moot at this scale: the click reaches the
+    # port-free cell it maps to, and the neighbour is untouched:
+    assert ports.find_at(1, 1) == ("gun_ports", Port(x=1, y=1, level=2))
+    assert ports.find_at(2, 1) == ("gun_ports", Port(x=2, y=1, level=0))
 
 
 # ---------------------------------------------------------------------- #
