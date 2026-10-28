@@ -136,7 +136,53 @@ become irrelevant after startup). The game must be restarted for on-disk changes
 
 The resource loader exposes functions to retrieve specific resource types:
 
-- `get_image_resource(id)` - returns a `pygame.Surface` object containing image data.
+- `get_image_resource(id)` - returns a `pygame.Surface` object containing image data. The surface is
+  exactly as the image decoder produced it; it is NOT converted to the display's pixel format (see
+  `get_converted_image` below for blit-ready surfaces).
+- `get_converted_image(id)` - returns a blit-ready copy of the image resource in the current *display*
+  pixel format: `Surface.convert_alpha()` when the loaded surface has per-pixel alpha (blend semantics
+  preserved), `Surface.convert()` for opaque sources. Returns `None` under the same rules as
+  `get_image_resource`. Converted copies are cached per id (unbounded, same policy as the font cache);
+  `get_image_resource` keeps returning the untouched original surface, so the two accessors never
+  interfere. (Added 2026-10-28, centralizing the spec 08 Background performance follow-up: a surface
+  in a foreign pixel format makes SDL convert every pixel on every blit - measured at ~9x the per-frame
+  cost for a full-screen background image, one core pinned at 100%. Screens do this today; every future
+  sprite blit will need it too, so the policy lives in the loader instead of per-screen.) Example:
+
+  ```python
+  background = resource_loader.get_converted_image("graphics/screens/title_screen.png")
+  if background is not None:
+      window_surface.blit(background, (0, 0))
+  ```
+
+  - Gotcha: pygame's `convert()`/`convert_alpha()` require an active video mode, and the startup order
+    in this spec loads resources *before* the window exists. The absence of a video mode is probed up
+    front - `pygame.display.get_surface() is None` covers both the uninitialized module and the
+    initialized-but-no-mode case - and must not raise: it logs at debug level and returns the raw
+    surface (correct, just not fast). The raw fallback is not cached, so a later request once the
+    window is open gets a converted copy. A conversion that fails *with* a video mode active is a
+    different animal and is never misdiagnosed as the startup case: the actual SDL error is logged at
+    warning level and the raw surface is likewise returned, uncached - a degraded blit beats a
+    crashed game. (Error-handling diagnosis refined 2026-10-28, spec 03 dev stage 11.)
+  - Gotcha: the cache assumes the display's pixel format is stable for the process lifetime. The windowed/
+    fullscreen switches allowed by spec 02 keep the desktop's 32-bit format; if a future feature can
+    change the display *format* at runtime (mixed-format multi-monitor setups, for example), the
+    converted-image cache must be invalidated at that point.
+  - Gotcha (ownership): the returned surface is a cache entry **owned by the loader** and every consumer
+    must treat it as **read-only**. Sharing one cached copy across many consumers is the point, and it is
+    safe: pygame's transform operations (`scale`, `smoothscale`, `rotate`, `rotozoom`, `flip`) return *new*
+    surfaces and never touch the source, blits from the surface (including `pygame.sprite.Group.draw`)
+    only read it, and transform outputs inherit the source's display format, so derived sprite surfaces
+    blit just as fast. What breaks everyone at once is an *in-place* operation on the shared entry:
+    `fill()` (with or without blend flags), `blit` **onto** it, `set_at()`, `set_alpha()`, `set_colorkey()`
+    (the sneaky fade/clicky hazards), and `surfarray.pixels3d`/`pixels2d` (writes through a pixel view).
+    A consumer that needs any of those must take a private copy at the call site with `Surface.copy()` -
+    verified to preserve the converted display format, so private copies blit at full speed too. Note that
+    `pygame.sprite.Sprite` copies *nothing*: assigning a cached surface to `sprite.image` deliberately
+    shares it, so the read-only discipline lives with the game code, not the Sprite base class.
+    (Related, deliberately out of scope here: caching per-instance rotate/scale results by
+    `(source, angle, scale)` is a sprite/render-layer concern - the loader cache is keyed by resource id
+    only. It gets its own spec doc when sprites land.)
 - `get_sfx_resource(id)` - returns a `pygame.mixer.Sound` object containing audio data.
 - `get_music_resource(id)` - returns raw audio bytes that can be used with `mixer.music.load(io.BytesIO(...))`. This is a client concern, and not something that the resource loader will do. The resource loader simply loads and caches the raw audio bytes.
 - `get_text_resource(id)` - returns a string.
@@ -497,6 +543,22 @@ Notes for font validation:
 - A required resource that is present in both `resources/` and also in a named `.pak` file does not cause an error - the `.pak` version is used.
 - If more than one required resource is not present, the text of the raised error contains a listing of them in alphabetical order.
 - The shipped `REQUIRED_RESOURCE_IDS` constant equals the master list above (a pin test), so ad-hoc edits to the constant fail the suite. A further canary that every id in the shipped list actually ships as an asset (loose file or `.pak`) is deferred until required-resource packaging is finalized.
+- `get_converted_image` (added 2026-10-28, spec 03 dev stage 9):
+  - unknown id, or an id whose resource is not an image: returns None (same rules as `get_image_resource`).
+  - with a video mode active: the returned surface is in the display's pixel format (masks/bpp match the
+    display), pixel colors are preserved, and the source surface must have been provably foreign to the
+    display format for the test to be meaningful.
+  - with a video mode active and a per-pixel-alpha source: the returned surface keeps SRCALPHA and blends
+    identically to the raw source.
+  - a second request for the same id returns the identical cached object; `get_image_resource` still
+    returns the original raw surface (the raw store is never mutated).
+  - with no video mode: no raise; the raw surface is returned, twice in a row (the fallback is not cached).
+  - a request that falls back before any window exists is superseded later: once a video mode is active,
+    the next request for the same id returns a converted copy.
+  - with a video mode active but the conversion itself raising a `pygame.error` (a wedged SDL
+    allocation, say): no raise; the raw surface is returned uncached, and the log records the actual
+    SDL error at warning level rather than the "no video mode" startup diagnosis (added 2026-10-28,
+    spec 03 dev stage 11).
 
 ## Acceptance criteria
 
@@ -512,6 +574,8 @@ Notes for font validation:
 - If the game is started with empty/missing `resources` config, is the game's `resources/` subdirectory still scanned?
 - Does `get_font_resource(id,size)` return a Font object, given a valid resource id?
 - Does the game refuse to start if at least one required resource is missing?
+- Does `get_converted_image(id)` serve display-pixel-format surfaces once a window exists, and a usable
+  raw surface (without raising) before it does? (Added 2026-10-28.)
 
 ## Dev plan
 
@@ -554,4 +618,31 @@ The spec is too large to implement all at once. The following staged dev plan is
    that still refer to all resources being optional. For example, the `game_constants.py` comment about
    UI resources. If all tests (including any new ones) pass, flip this document back to `active` status.
    **Completed 2026-10-19** (all 1032 tests pass; document flipped back to `active`)
+9. Amendment on 2026-10-28: add `get_converted_image(id)` to the consumer API (see the Consumer API
+   bullet for the full contract), centralizing the display-pixel-format conversion that spec 08
+   dev stage 12 landed locally in the shared `dtd/screens/background.py` helper. Point
+   `Background._find_image` at the new accessor and delete the helper's private conversion function:
+   pygame's scaling preserves the source pixel format, so a pre-converted source keeps the per-size
+   scaled copy on SDL's fast blit path. The four pixel-format pins in `tests/test_title_screen.py`
+   stay where they are (they now guard the end-to-end behavior); new loader-level pins live in
+   this spec's test file. **Completed 2026-10-28** (seven new `TestConvertedImages` pins;
+   all 1331 tests pass; windowed background draw measured 0.82 ms/frame, fullscreen
+   1920x1080 at 2.08 ms/frame - the pinned-core scenario is gone)
+10. Documentation-only amendment on 2026-10-28: describe the ownership contract for
+   `get_converted_image` (the loader owns the cached surface; consumers treat it as
+   read-only; in-place operations require a call-site `Surface.copy()`), per the Consumer
+   API ownership gotcha added above. No code or test changes: the contract guards future
+   sprite consumers; the loader side (raw store never mutated, cached copy identity) is
+   already pinned by stage 9's tests. The per-instance rotation/scale cache discussed
+   alongside this amendment is deferred to the future sprite spec. **Completed 2026-10-28**
+11. Code-review follow-up on 2026-10-28 to stage 9's error handling: the bare
+   `except pygame.error` around the convert calls asserted a cause it never observed -
+   any conversion failure (wedged SDL allocation, driver weirdness) was logged at
+   *debug* level as "no video mode active" and silently served the slow path forever.
+   The startup case is now probed up front with `pygame.display.get_surface() is None`
+   (debug log, raw surface returned uncached - contract unchanged); a conversion that
+   raises *with* a video mode up logs the actual SDL error at warning level and also
+   returns the raw surface uncached. One new pin in `tests/test_resource_loader.py`
+   (`TestConvertedImages`, poison `pygame.Surface` subclass whose `convert` raises).
+   **Completed 2026-10-28** (all 1332 tests pass)
 

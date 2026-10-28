@@ -13,7 +13,11 @@ is generated exactly once and survives resolution changes; only the
 draw-time conversion depends on the current surface size. The scaled
 image copy is cached per surface size - scaling a full-screen image
 every frame is pure waste, and the only thing that invalidates it is a
-resolution switch (F11).
+resolution switch (F11). The source image comes from
+``ResourceLoader.get_converted_image`` (spec 03: Consumer API), and
+pygame's scaling preserves pixel format, so the cached copy stays in
+the display's format and its blit stays on SDL's fast path
+(spec 08: Background implementation note, 2026-10-28).
 """
 from __future__ import annotations
 
@@ -62,7 +66,10 @@ class Background:
             # "Scaled and stretched as needed to fill": the image is
             # forced to the exact surface size, aspect ratio included.
             # The scaled copy is cached per size; only a surface resize
-            # invalidates it.
+            # invalidates it. The source is already in the display's
+            # pixel format (spec 03: get_converted_image) and scale
+            # preserves pixel format, so the copy blits on SDL's fast
+            # path without any conversion of its own.
             target_size = surface.get_size()
             if self._scaled is None or self._scaled[0] != target_size:
                 self._scaled = (
@@ -80,9 +87,16 @@ class Background:
     def _find_image(
         resource_loader: ResourceLoader, image_ids: Iterable[str]
     ) -> pygame.Surface | None:
-        """The first background image resource that resolves, in order."""
+        """The first background image resource that resolves, in order.
+
+        Requests the display-format copy (spec 03: Consumer API): scaling
+        preserves pixel format, so a pre-converted source keeps every
+        per-size scaled copy on SDL's fast blit path, and the conversion
+        policy stays in the loader where every future blit consumer
+        shares it.
+        """
         for resource_id in image_ids:
-            image = resource_loader.get_image_resource(resource_id)
+            image = resource_loader.get_converted_image(resource_id)
             if image is not None:
                 return image
         return None

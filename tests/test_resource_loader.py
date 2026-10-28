@@ -67,6 +67,16 @@ def _write_png(
     pygame.image.save(surface, str(path))
 
 
+def _write_translucent_png(
+    path: Path, rgba: tuple[int, int, int, int] = (255, 0, 0, 128)
+) -> None:
+    """A PNG with a genuine alpha channel (per-pixel alpha 128)."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    surface = pygame.Surface((4, 4), pygame.SRCALPHA)
+    surface.fill(rgba)
+    pygame.image.save(surface, str(path))
+
+
 def _png_color(surface: pygame.Surface) -> pygame.Color:
     """The fill color of a surface written by ``_write_png``."""
     return surface.get_at((0, 0))
@@ -1094,3 +1104,184 @@ class TestRequiredResources:
             < message.index("graphics/alpha.png")
             < message.index("graphics/zebra.png")
         )
+
+
+class TestConvertedImages:
+    """``get_converted_image`` (spec 03: Consumer API, dev stage 9): the
+    loader centralizes the display-pixel-format copies that keep every
+    window-bound blit on SDL's fast path, while ``get_image_resource``
+    keeps handing out the raw decoder surface. Formats are exercised
+    with real PNG files written into the temp project - the same decode
+    path production uses."""
+
+    def _loadedImageLoader(self, project: Path) -> ResourceLoader:
+        """A loader over an image-only implicit ``resources/`` dir
+        (opaque ``graphics/opaque.png`` + alpha ``graphics/alpha.png``)."""
+        _write_png(project / "resources" / "graphics" / "opaque.png", (10, 20, 30))
+        _write_translucent_png(
+            project / "resources" / "graphics" / "alpha.png", (255, 0, 0, 128)
+        )
+        loader = ResourceLoader()
+        loader.load(ResourcesConfig())
+        return loader
+
+    def test_get_converted_image_withUnknownId_shouldReturnNone(self) -> None:
+        # GIVEN a loader that has never loaded anything:
+        loader = ResourceLoader()
+
+        # THEN an absent image id returns None, exactly like
+        # get_image_resource (spec 03: Consumer API):
+        assert loader.get_image_resource("graphics/nope.png") is None
+        assert loader.get_converted_image("graphics/nope.png") is None
+
+    def test_get_converted_image_withTextResourceId_shouldReturnNone(
+        self, project: Path
+    ) -> None:
+        # GIVEN a loaded text resource and no image under that id:
+        _make_text_file(project / "resources", "data/notes.txt", "no image here")
+        loader = ResourceLoader()
+        loader.load(ResourcesConfig())
+
+        # THEN the wrong-type lookup returns None here too (spec 03):
+        assert loader.get_converted_image("data/notes.txt") is None
+
+    def test_get_converted_image_withNoVideoMode_shouldReturnRawSurfaceUncachedAndNotRaise(
+        self, project: Path
+    ) -> None:
+        # GIVEN a loaded image and no video mode anywhere (the startup
+        # window of time: resources load before the window opens):
+        loader = self._loadedImageLoader(project)
+        raw = loader.get_image_resource("graphics/opaque.png")
+
+        # WHEN converted copies are requested twice, the call must not
+        # raise (pygame's convert would),
+        first = loader.get_converted_image("graphics/opaque.png")
+        second = loader.get_converted_image("graphics/opaque.png")
+
+        # THEN both calls return the raw surface, and the fallback is
+        # NOT cached (a later window must still get a converted copy):
+        assert first is raw
+        assert second is raw
+
+    def test_get_converted_image_withOpaqueForeignImageAndVideoMode_shouldReturnDisplayFormatCopy(
+        self, project: Path
+    ) -> None:
+        # GIVEN an open window and a loaded opaque PNG:
+        display = pygame.display.set_mode((16, 16))
+        loader = self._loadedImageLoader(project)
+        raw = loader.get_image_resource("graphics/opaque.png")
+        assert raw.get_masks()[:3] != display.get_masks()[:3], (
+            "the dummy driver surface already matches the PNG format; "
+            "this test cannot detect the regression it guards"
+        )
+
+        # WHEN a converted copy is requested,
+        converted = loader.get_converted_image("graphics/opaque.png")
+
+        # THEN it is a copy in the display's exact format, colors
+        # preserved, and the raw store is untouched:
+        assert converted is not raw
+        assert converted.get_bitsize() == display.get_bitsize()
+        assert converted.get_masks() == display.get_masks()
+        assert converted.get_at((0, 0))[:3] == (10, 20, 30)
+        assert loader.get_image_resource("graphics/opaque.png") is raw
+
+    def test_get_converted_image_withPerPixelAlphaSourceAndVideoMode_shouldKeepAlphaAndBlendIdentically(
+        self, project: Path
+    ) -> None:
+        # GIVEN an open window and a loaded PNG with per-pixel alpha 128:
+        display = pygame.display.set_mode((16, 16))
+        loader = self._loadedImageLoader(project)
+        raw = loader.get_image_resource("graphics/alpha.png")
+        assert raw.get_flags() & pygame.SRCALPHA, (
+            "the PNG round trip lost its alpha channel; the test setup is broken"
+        )
+
+        # WHEN a converted copy is requested,
+        converted = loader.get_converted_image("graphics/alpha.png")
+
+        # THEN it took the convert_alpha() path (SRCALPHA kept, display
+        # RGB masks) and blends onto black exactly like the raw source:
+        assert converted.get_flags() & pygame.SRCALPHA
+        assert converted.get_masks()[:3] == display.get_masks()[:3]
+
+        def blend(surface: pygame.Surface) -> tuple[int, int, int]:
+            target = pygame.Surface((4, 4))
+            target.fill((0, 0, 0))
+            target.blit(surface, (0, 0))
+            return target.get_at((0, 0))[:3]
+
+        assert blend(converted) == blend(raw) == (128, 0, 0)
+
+    def test_get_converted_image_withSecondRequestOfSameIdAndVideoMode_shouldReturnIdenticalCachedCopy(
+        self, project: Path
+    ) -> None:
+        # GIVEN an open window and a loaded image:
+        pygame.display.set_mode((16, 16))
+        loader = self._loadedImageLoader(project)
+
+        # WHEN the same id is requested twice,
+        first = loader.get_converted_image("graphics/opaque.png")
+        second = loader.get_converted_image("graphics/opaque.png")
+
+        # THEN the cache serves the identical object (spec 03: cached
+        # per id, like the font cache):
+        assert second is first
+
+    def test_get_converted_image_withVideoModeAppearingAfterAFallbackRequest_shouldServeConvertedCopyAfterwards(
+        self, project: Path
+    ) -> None:
+        # GIVEN a first request made before any window exists (raw
+        # fallback, uncached),
+        loader = self._loadedImageLoader(project)
+        raw = loader.get_image_resource("graphics/opaque.png")
+        assert loader.get_converted_image("graphics/opaque.png") is raw
+
+        # WHEN a video mode shows up and the same id is requested again,
+        display = pygame.display.set_mode((16, 16))
+        converted = loader.get_converted_image("graphics/opaque.png")
+
+        # THEN the converted copy finally takes over:
+        assert converted is not raw
+        assert converted.get_masks() == display.get_masks()
+
+    def test_get_converted_image_withConversionErrorAndVideoModeActive_shouldWarnWithActualErrorAndReturnRawSurfaceUncached(
+        self, project: Path
+    ) -> None:
+        class _ConvertAlwaysFails(pygame.Surface):
+            """A surface whose conversion fails the way a wedged SDL
+            allocation would - a real failure with a video mode up,
+            which the startup diagnosis must not mask (spec 03 dev
+            stage 11)."""
+
+            # convert_alpha exists so an SRCALPHA store entry would
+            # fail the same way; this test's poison is opaque.
+            def convert(self) -> pygame.Surface:
+                raise pygame.error("simulated SDL convert failure")
+
+            def convert_alpha(self) -> pygame.Surface:
+                raise pygame.error("simulated SDL convert_alpha failure")
+
+        # GIVEN an open window and a store entry whose convert raises,
+        pygame.display.set_mode((16, 16))
+        loader = self._loadedImageLoader(project)
+        poison = _ConvertAlwaysFails((4, 4))
+        loader._store.images["graphics/opaque.png"] = poison
+
+        # WHEN a converted copy is requested, the call must still not
+        # raise,
+        records, sink_id = _log_records("WARNING")
+        try:
+            result = loader.get_converted_image("graphics/opaque.png")
+        finally:
+            logger.remove(sink_id)
+
+        # THEN the raw surface is handed back uncached (a later request
+        # can still succeed), and the single warning tells the truth -
+        # the actual SDL error, not the "no video mode" startup line:
+        assert result is poison
+        assert loader._converted_image_cache.get("graphics/opaque.png") is None
+        assert len(records) == 1
+        assert "graphics/opaque.png" in records[0]
+        assert "simulated SDL convert failure" in records[0]
+        assert "no video mode" not in records[0]

@@ -36,6 +36,25 @@ background is cached per surface size and re-scaled only when the target size ch
 Not observable behavior - it just keeps the per-frame cost flat. Future screens that scale
 assets should follow this pattern.*
 
+*Implementation note (2026-10-28, CPU-regression follow-up): the 2026-10-07 note above was
+necessary but not sufficient - the cached copy inherits the loader's pixel format, and every
+frame's blit of a foreign-format surface makes SDL re-convert every pixel again. Measured on
+the dev machine: 7.5 ms/frame for an unconverted 1280x720 background (one core pinned at
+100% in fullscreen mode, where the frame cost exceeds the 16.7 ms budget and the frame
+limiter never sleeps) versus 0.8 ms/frame for a display-format copy. The cached scaled copy
+is therefore converted once per surface size: `convert_alpha()` for translucent sources
+(per-pixel alpha and blend behavior are preserved), `convert()` for opaque ones. Conversion
+requires an active video mode, which the real game always has by draw time (screens draw
+through the main loop, after the window opens); without one - headless test draws - the
+unconverted copy is kept and the draw stays correct. Rendered output is unchanged.*
+
+*Implementation note addendum (2026-10-28, later the same day): the conversion moved out of
+the Background helper and into the loader as `ResourceLoader.get_converted_image` (spec 03:
+Consumer API, dev stage 9), so every current and future blit consumer shares one policy instead
+of each screen re-deriving it. The Background helper now requests a display-format image and
+relies on pygame's scaling preserving pixel format - the per-size scaled copy inherits the
+display format from its pre-converted source. Same observable behavior, same test pins.*
+
 If no such image resource exists, a random starfield will be generated. The starfield consists
 of a random number between 150 and 300 (inclusive) of single pixel "stars" in random locations,
 displayed in grayscale colors ranging randomly from (0,0,0) to (192,192,192). These stars do not move,
@@ -202,6 +221,12 @@ New tests specifically for Title Screen behavior (these stay in this doc):
 - Draw caching (added 2026-10-07, performance follow-up; title-text caching
   removed 2026-10-11 per spec 10 - the Label-based title renders per frame):
   - a background image is scaled exactly once per surface size, and re-scaled when the size changes.
+  - with a video mode active, the cached scaled copy is in the display's pixel format
+    (added 2026-10-28, CPU-regression follow-up): a foreign-format image yields a cached
+    copy with the display's RGB channel masks, a translucent image yields a cached copy
+    that keeps SRCALPHA (and blends correctly), an opaque foreign-format image yields a
+    cached copy in the display's full format, and a headless draw (no video mode) keeps
+    the unconverted copy without raising while still drawing correctly.
 - An Options button appears above the Exit Game button. (Added 2026-10-14 per spec 13.)
 - Only two Buttons are created and displayed. (Added 2026-10-14 per spec 13.)
 - Clicking the Options button triggers a transition to the Options screen. (Added 2026-10-14 per spec 13.)
@@ -288,4 +313,20 @@ staged implementation plan is suggested (each stage should include tests):
       gained `_SCREEN_FACTORIES`/`_create_screen` and builds a fresh `Theme` from the
       latest config for every screen, including the startup Title screen. Full suite:
       941 passed.
+  12. CPU regression follow-up (2026-10-28): with a background image configured, the game
+       pinned one CPU core at 100% (not reproducible on the starfield fallback). Cause: the
+       scaled background cache (stage 7) survives, but its surface inherits the loader's
+       pixel format, so every frame's blit re-converts every pixel. Fix in the shared
+       `dtd/screens/background.py`: convert the scaled copy to the display format once per
+       surface size (`convert_alpha()` for translucent sources, `convert()` for opaque),
+       with a graceful unconverted fallback when no video mode is active. Tests pin the
+       cached copy's pixel format under an open window and the headless fallback. This
+       applies to the Options screen too (shared helper; see spec 13 stage 9).
+       **Completed 2026-10-28**: measured 7.56 ms/frame (image background) -> 1.10
+       ms/frame on the dev machine; four new pins in `TestTitleScreenBackgroundDisplayFormat`
+       (display-format copy, alpha preserved and blending, opaque convert() path,
+       headless fallback). Full suite: 1324 passed.
+       Follow-up the same day: the conversion policy was centralized as
+       `ResourceLoader.get_converted_image` (spec 03 dev stage 9); the pins above now
+       guard the behavior end-to-end.
 
