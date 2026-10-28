@@ -99,7 +99,9 @@ are made as to the size or aspect ratio of the input image. The image is scaled
 proportionally to fit into the ship display area, with a fixed margin of 64px
 on each edge. Scaling should be done via `pygame.transform.scale` (nearest-neighbor)
 for pixel-accurate port mapping. The ship image may need to be scaled down
-to fit (if large) or scaled up to fit (if small).
+to fit (if large) or scaled up to fit (if small). This fit view is the tool's
+startup view and its most zoomed-out view; the user can enlarge the view
+beyond fit with the mouse wheel (see the Zoom section).
 
 The ship display area initially has a plain black background. Right-clicking
 anywhere in the ship display area toggles between a plain black background
@@ -216,12 +218,61 @@ space, rounding to the nearest whole number if a fractional location is calculat
 Mapping goes through actual pixel geometry of the scaled image rect, not
 design space, to honor the "pixel-accurate port mapping" promise of this tool.
 
+## Zoom
+
+Scrolling the mouse wheel over the ship display area zooms the ship view
+in and out (amended 2026-10-27). This is a display-only feature: port
+data, hit-testing, pixel mapping and the sidecar Json format are
+image-space constructs and are completely unaffected by the current
+zoom level.
+
+Zoom mechanics:
+
+- The zoom state is an integer step count applied on top of the fit
+  view, never an accumulated float: the effective display scale is
+  always the fit scale multiplied by 1.25^steps. This keeps the
+  pixel-mapping arithmetic deterministic at every zoom level.
+- One wheel notch up advances the step count by one (scale x1.25);
+  one notch down retreats it by one (scale /1.25).
+- Zoom-out clamps at the fit view (step 0): the proportional fit with
+  the 64px margin described in "The ship display area" is also the
+  startup view and the most zoomed-out view the tool offers. Wheeling
+  down at the clamp is a no-op.
+- Zoom-in clamps at step 9 - the largest quantized step that does not
+  exceed 8.0x the fit scale (1.25^9 is approximately 7.45x). Wheeling
+  up at the clamp is a no-op.
+- Zoom is anchored to the cursor: the image-space location under the
+  wheel event's screen position remains under that same screen
+  position after the zoom step is applied.
+- Wheel events outside the ship display area (over the control panel,
+  say) are ignored.
+- The step factor and the step-count ceiling are fixed constants in
+  the tool's code - no new game configuration keys are introduced.
+- The 9x9 marker floor, the marker scaling rule, and the marker
+  centering rule all apply unchanged at every zoom level.
+
+At zoom levels above fit, the scaled sprite extends past the 64px fit
+margin; the ship view (sprite and markers) is clipped to the ship
+display area and must never cover the control panel.
+
+Known limitation - no panning: the tool offers no click-and-drag
+panning and no scrollbars. When zoomed in, only the part of the sprite
+overlapping the display area is visible or editable; to work on a
+different part of the sprite, the user must zoom out (all the way back
+to fit if necessary) and then zoom in on the other area. Panning, if
+ever wanted, will have to come as a future amendment.
+
+The "Reset" button restores the default zoom level (fit, step 0) along
+with reloading the port data - see the "Reset" section. "Clear" and
+"Save" leave the current zoom level untouched.
+
 ## Reset
 
 The "Reset" button clears the in-memory port list and forces a reload of
 the sidecar Json file. If the file does not exist, then "Reset" is functionally
 equivalent to "Clear". If the file exists, load all ports defined there
-and display them.
+and display them. Reset also restores the default zoom level (the fit
+view - see the Zoom section).
 
 Note that the sidecar Json file can be modified by another process (or by the
 user) while the tool is running. Clicking "Reset" may therefore trigger
@@ -365,8 +416,9 @@ The tool's tests should live in `tests/test_ship_editor*.py` alongside the game'
 Add `tools/` to `pytest.ini`'s `pythonpath`. The script will need the packager-style
 `sys.path.insert(0, .../src)` bootstrap (see the existing `packager` tool for an example).
 
-All display-area click handling and port bookkeeping
-should live in a testable ShipEditorApp-style object with methods like `handle_left_click(pos)`,
+All display-area click handling, wheel-zoom handling and port bookkeeping
+should live in a testable ShipEditorApp-style object with methods like
+`handle_left_click(pos)` and `handle_mouse_wheel(pos, direction)`,
 drivable from tests without entering the 60FPS loop.
 
 ## Testing
@@ -390,6 +442,13 @@ drivable from tests without entering the 60FPS loop.
 - Clicking "Exit" should exit immediately, even if unsaved changes exist in-memory.
 - Port markers are drawn at least 9x9 screen pixels regardless of image scale; markers scale up with the image beyond that floor; hit-testing remains image-space-only.
 - Port markers are drawn centered on the on-screen center of their image-space cell; below the marker minimum the bleed into adjacent image cells (or the display margin, for edge ports) is symmetric rather than anchored down-and-right of the cell. Recentering must not disturb the forward/inverse mapping round-trip or hit-testing.
+- Wheeling up over the ship display area advances the zoom step by one (scale x1.25); wheeling down retreats it by one; the effective display scale is always the fit scale multiplied by 1.25^steps.
+- Zoom-out clamps at the startup fit view (step 0): wheeling down at fit is a no-op. Zoom-in clamps at step 9, the largest 1.25^steps at or below 8.0x fit: wheeling up beyond the clamp is a no-op.
+- Wheel events outside the ship display area (over the control panel) do not change the zoom level.
+- Cursor anchoring: the image-space location under the wheel event's screen position maps back to that same screen position both before and after the zoom step.
+- At a non-fit zoom level, left-clicks add, clear, and reassign exactly the image-space cells equivalent to the same relative spot at fit zoom, and the forward/inverse mapping round-trips at that zoom level.
+- The 9x9 marker floor still floors markers at small (zoomed-out) display scales, and marker size tracks the scale at deep zoom-in.
+- Clicking "Reset" restores the default (fit) zoom level in addition to reloading port data; "Clear" and "Save" do not change the zoom level.
 
 ## Acceptance criteria
 
@@ -398,6 +457,7 @@ drivable from tests without entering the 60FPS loop.
 - Can the user left-click to add ports of the three types anywhere on the image?
 - Are the ports color-coded according to their type for easy visual identification?
 - Do the port markers scale up as the ship image scales up, with a minimum size of 9x9 screen pixels, centered over their port locations?
+- Can the user mouse-wheel to zoom from the fit view up to the maximum step and back, anchored under the cursor, and still place and edit ports accurately at any zoom level?
 - Can the user save changes once ports are defined in-memory?
 
 ## Open questions (all resolved)
@@ -494,9 +554,26 @@ drivable from tests without entering the 60FPS loop.
   edge-port margin-bleed probe, and a new interior symmetric-bleed test
   added; mapping round-trip tests untouched and still green; full suite
   green at 1297 tests; doc status flipped to active.)
-13. Placeholder (2026-10-27): zoom in/zoom out controls for the ship
-  display area, so sub-pixel image scales stop hiding placement detail.
-  Not yet specified: before starting this stage, flip this doc back to
-  "proposed" and expand it with the full zoom spec (controls and key
-  bindings, scale limits, interaction with the 64px display margin, the
-  9px marker floor, and the pixel mapping) plus a staged plan.
+13. **Amendment 2026-10-27** Mouse-wheel zoom for the ship display area
+  (see the new "Zoom" section): cursor-anchored, quantized x1.25 steps,
+  zoom-out clamp at the fit/startup view (step 0), zoom-in clamp at
+  step 9 (~7.45x, the largest step not exceeding 8.0x fit); wheel
+  events outside the display area ignored; startup at fit zoom;
+  "Reset" also restores fit zoom. Add `handle_mouse_wheel(pos,
+  direction)` to `ShipEditorApp` plus wheel wiring in the tool's event
+  loop, and generalize `_update_display` so the fit clamp applies at
+  the default zoom level only. Clip the ship view (sprite and markers)
+  to the display area - never over the control panel. No panning, no
+  scrollbars (documented limitation). Cover the new Testing-section
+  zoom bullets. Full suite green. If all is well, flip this doc back
+  to "active".
+  **Completed 2026-10-27** (`ZOOM_STEP_FACTOR`/`ZOOM_MAX_STEPS`
+  constants; `handle_mouse_wheel(pos, direction)` with integer step
+  state and cursor-anchored re-centering that survives both clamp
+  landings; `_build_ship` applies the fit-area clamp only at step 0;
+  `draw` clips the ship view to the display area via `set_clip`;
+  wheel buttons 4/5 wired in the event loop; "Reset" restores fit
+  zoom before reloading ports. Nine new tests cover every Testing
+  bullet, including an inset-display-area clipping probe and exact
+  anchor round-trips at (76, 64); full suite green at 1306 tests;
+  doc status flipped to active.)

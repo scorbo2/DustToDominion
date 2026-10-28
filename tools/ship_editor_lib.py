@@ -82,6 +82,14 @@ PORT_COLORS = {
     "collection_ports": (1, 1, 255),
 }
 
+#: Mouse-wheel zoom (spec 15: Zoom, amended 2026-10-27): each wheel
+#: notch multiplies the fit scale by ZOOM_STEP_FACTOR, and the step
+#: count is clamped to [0, ZOOM_MAX_STEPS]. 1.25**9 (~7.45) is the
+#: largest quantized step that stays at or under the spec's 8.0x
+#: zoom-in ceiling.
+ZOOM_STEP_FACTOR = 1.25
+ZOOM_MAX_STEPS = 9
+
 #: Control-panel group contents, in spec 15 order. Group 1 toggles the
 #: Edit mode; group 2's option buttons carry their live handlers
 #: (spec 15: The control panel).
@@ -579,7 +587,8 @@ class ShipEditorApp:
     interface).
 
     Left of the control panel: renders the input sprite scaled to fit the
-    display area and overlays one marker per port - one image-space
+    display area (and mouse-wheel zoomable from there - spec 15: Zoom,
+    amended 2026-10-27) and overlays one marker per port - one image-space
     pixel scaled to match the ship's current scale, floored at 9 screen
     pixels and centered on its scaled cell (spec 15: Edit mode, amended
     2026-10-27).
@@ -590,8 +599,9 @@ class ShipEditorApp:
     drift apart. Left-clicking inside the display area adds,
     clears, or reassigns a port of the current edit mode (spec 15: Edit
     mode); right-clicking inside it toggles the background between black
-    and white; clicking anywhere else (including the control panel) does
-    nothing to the display.
+    and white; wheeling inside it zooms the view, anchored under the
+    cursor (spec 15: Zoom); input anywhere else (including the control
+    panel) does nothing to the display.
 
     Right of the divider: the fixed-theme control panel (spec 15: The
     control panel) - header Labels, the three Edit mode Checkboxes, and
@@ -636,6 +646,9 @@ class ShipEditorApp:
         self._scale_x: float
         self._scale_y: float
         self._marker_size: int
+        # Spec 15: Zoom - integer step count on top of the fit view;
+        # 0 is the startup/fit level.
+        self._zoom_steps = 0
         self._build_ship()
 
         self._edit_mode = DEFAULT_EDIT_MODE
@@ -682,6 +695,14 @@ class ShipEditorApp:
     def ship_rect(self) -> pygame.Rect:
         """Rect of the scaled sprite inside the display area."""
         return self._ship_rect
+
+    @property
+    def zoom_steps(self) -> int:
+        """Current mouse-wheel zoom step count (spec 15: Zoom, amended
+        2026-10-27): 0 is the fit/startup view; the effective display
+        scale is the fit scale multiplied by ``ZOOM_STEP_FACTOR``
+        raised to this count."""
+        return self._zoom_steps
 
     @property
     def source_size(self) -> tuple[int, int]:
@@ -766,6 +787,49 @@ class ShipEditorApp:
             return False
         return apply_click_edit(self._ports, self._edit_mode, image_x, image_y)
 
+    def handle_mouse_wheel(
+        self, position: tuple[int, int], direction: int
+    ) -> bool:
+        """Apply one mouse-wheel zoom step at ``position`` (spec 15:
+        Zoom, amended 2026-10-27).
+
+        ``direction`` is ``+1`` (wheel up, zoom in) or ``-1`` (wheel
+        down, zoom out); the step count clamps to
+        ``[0, ZOOM_MAX_STEPS]`` and wheel events outside the display
+        area are no-ops. The zoom is cursor-anchored: the fractional
+        image-space point under the wheel event (taken from the mapping
+        geometry, not the click-rounded cell) is captured before the
+        display is rebuilt, then the freshly centered ship rect is
+        shifted so that point lands back under the very same screen
+        position. That anchoring survives landing on either clamp,
+        including a zoom-out that ends at the fit scale but off-center.
+        Returns ``True`` when the zoom step count changed.
+        """
+        if not self._layout.display_area.collidepoint(position):
+            return False
+        new_steps = min(
+            ZOOM_MAX_STEPS,
+            max(0, self._zoom_steps + direction),
+        )
+        if new_steps == self._zoom_steps:
+            return False
+        anchor_x = (position[0] - self._ship_rect.x) / self._scale_x
+        anchor_y = (position[1] - self._ship_rect.y) / self._scale_y
+        self._zoom_steps = new_steps
+        self._build_ship()
+        self._ship_rect.x = int(round(position[0] - anchor_x * self._scale_x))
+        self._ship_rect.y = int(round(position[1] - anchor_y * self._scale_y))
+        return True
+
+    def reset_zoom(self) -> None:
+        """Restore the default zoom level: step 0, the centered fit
+        view (spec 15: Zoom - "Reset" restores it along with the port
+        data; "Clear" and "Save" deliberately never touch zoom)."""
+        if self._zoom_steps == 0:
+            return
+        self._zoom_steps = 0
+        self._build_ship()
+
     @property
     def exit_request(self) -> tuple[int, str | None] | None:
         """A pending ``(exit_code, stderr_message)`` pair, or ``None``.
@@ -822,7 +886,13 @@ class ShipEditorApp:
     def _on_reset_click(self) -> None:
         """Reset's Button callback: a reload failure ends the session
         with the startup rules - same stderr message, same exit code
-        (spec 15: Reset, "Load on startup")."""
+        (spec 15: Reset, "Load on startup").
+
+        Reset also restores the default zoom level (spec 15: Zoom) -
+        the view is restored even when the data reload then hard-
+        errors, because that failure ends the session anyway and the
+        user asked for *everything* reset."""
+        self.reset_zoom()
         try:
             self.reset_ports()
         except (SidecarReadError, InvalidSidecarJsonError) as exc:
@@ -872,10 +942,19 @@ class ShipEditorApp:
 
     def draw(self, screen: pygame.Surface) -> None:
         """Paint the current display and control-panel state to
-        ``screen``."""
+        ``screen``.
+
+        The ship view (scaled sprite and markers) is clipped to the
+        display area (spec 15: Zoom) - a zoomed sprite grows past the
+        fit margin but must never paint into an inset display area's
+        surround or reach the control panel. pygame's clip rectangle
+        covers blit and draw.rect alike, so one ``set_clip`` brackets
+        both."""
         screen.fill(self._background_color)
+        screen.set_clip(self._layout.display_area)
         screen.blit(self._scaled_surface, self._ship_rect)
         self._draw_port_markers(screen)
+        screen.set_clip(None)
         screen.fill(CONTROL_PANEL_COLOR, self._layout.control_panel)
         self.ui.draw(screen)
 
@@ -988,9 +1067,18 @@ class ShipEditorApp:
         fit_width = self._layout.ship_fit_area.width
         fit_height = self._layout.ship_fit_area.height
 
+        # Spec 15: Zoom - the fit scale is the step-0 baseline; each
+        # zoom step multiplies it. The fit-area dimension clamp *is*
+        # the fit view, so it applies only at step 0; a zoomed sprite
+        # legitimately grows past the fit area and gets clipped at
+        # draw time instead.
         scale = min(fit_width / source_width, fit_height / source_height)
-        scaled_width = max(1, min(fit_width, round(scale * source_width)))
-        scaled_height = max(1, min(fit_height, round(scale * source_height)))
+        scale *= ZOOM_STEP_FACTOR ** self._zoom_steps
+        scaled_width = max(1, round(scale * source_width))
+        scaled_height = max(1, round(scale * source_height))
+        if self._zoom_steps == 0:
+            scaled_width = min(fit_width, scaled_width)
+            scaled_height = min(fit_height, scaled_height)
 
         self._scaled_surface = pygame.transform.scale(
             self._sprite_surface, (scaled_width, scaled_height)
@@ -1182,8 +1270,9 @@ def _run_display(
     interface).
 
     Fixed 60FPS via ``clock.tick(60)``, game-loop style: drain events,
-    dispatch display-area clicks (left: port editing, right: background
-    toggle), feed the whole batch to the panel widgets (``app.update``),
+    dispatch display-area input (left click: port editing, right click:
+    background toggle, wheel buttons: zoom - spec 15: Zoom), feed the
+    whole batch to the panel widgets (``app.update``),
     honor any ``exit_request`` the widgets filed (spec 15: Reset's hard
     errors end the session with the startup message and code), render
     (``app.draw``), flip, tick. Left-clicks reach both handlers, but
@@ -1215,6 +1304,13 @@ def _run_display(
                     app.handle_left_click(event.pos)
                 elif event.button == 3:
                     app.handle_right_click(event.pos)
+                elif event.button in (4, 5):
+                    # Wheel up/down zooms (spec 15: Zoom); the handler
+                    # itself decides whether the pointer is even inside
+                    # the display area.
+                    app.handle_mouse_wheel(
+                        event.pos, 1 if event.button == 4 else -1
+                    )
         app.update(events)
         if app.exit_request is not None:
             code, message = app.exit_request
