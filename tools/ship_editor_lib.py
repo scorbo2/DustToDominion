@@ -799,11 +799,11 @@ class ShipEditorApp:
         area are no-ops. The zoom is cursor-anchored: the fractional
         image-space point under the wheel event (taken from the mapping
         geometry, not the click-rounded cell) is captured before the
-        display is rebuilt, then the freshly centered ship rect is
-        shifted so that point lands back under the very same screen
-        position. That anchoring survives landing on either clamp,
-        including a zoom-out that ends at the fit scale but off-center.
-        Returns ``True`` when the zoom step count changed.
+        display is rebuilt, then ``_recenter_view`` re-places the
+        rebuilt ship rect so that point lands back under the very same
+        screen position. That anchoring survives landing on either
+        clamp, including a zoom-out ending at the fit scale but
+        off-center. Returns ``True`` when the zoom step count changed.
         """
         if not self._layout.display_area.collidepoint(position):
             return False
@@ -813,12 +813,15 @@ class ShipEditorApp:
         )
         if new_steps == self._zoom_steps:
             return False
-        anchor_x = (position[0] - self._ship_rect.x) / self._scale_x
-        anchor_y = (position[1] - self._ship_rect.y) / self._scale_y
+        hold = (
+            (position[0] - self._ship_rect.x) / self._scale_x,
+            (position[1] - self._ship_rect.y) / self._scale_y,
+            position[0],
+            position[1],
+        )
         self._zoom_steps = new_steps
         self._build_ship()
-        self._ship_rect.x = int(round(position[0] - anchor_x * self._scale_x))
-        self._ship_rect.y = int(round(position[1] - anchor_y * self._scale_y))
+        self._recenter_view(hold)
         return True
 
     def reset_zoom(self) -> None:
@@ -1063,7 +1066,6 @@ class ShipEditorApp:
 
     def _build_ship(self) -> None:
         source_width, source_height = self._source_size
-        display_width, display_height = self._layout.display_area.size
         fit_width = self._layout.ship_fit_area.width
         fit_height = self._layout.ship_fit_area.height
 
@@ -1083,9 +1085,8 @@ class ShipEditorApp:
         self._scaled_surface = pygame.transform.scale(
             self._sprite_surface, (scaled_width, scaled_height)
         )
-        x = self._layout.display_area.x + (display_width - scaled_width) // 2
-        y = self._layout.display_area.y + (display_height - scaled_height) // 2
-        self._ship_rect = pygame.Rect(x, y, scaled_width, scaled_height)
+        self._ship_rect = pygame.Rect(0, 0, scaled_width, scaled_height)
+        self._recenter_view()
         self._scaled_size = (scaled_width, scaled_height)
 
         # Forward/inverse mapping and marker sizing use the ratios of the
@@ -1098,6 +1099,39 @@ class ShipEditorApp:
             round(self._scale_x),
             round(self._scale_y),
         )
+
+    def _recenter_view(
+        self, hold: tuple[float, float, int, int] | None = None
+    ) -> None:
+        """Place the (already-sized) ship rect inside the display area.
+
+        The single home of ship-rect placement. Default (no ``hold``)
+        centers the view - the fit-view layout. With
+        ``hold=(image_x, image_y, screen_x, screen_y)`` the already
+        captured fractional image point lands back under the given
+        screen position instead (cursor-anchored zoom; a future pan
+        mode would capture on press and call this without a rebuild).
+
+        The two placements deliberately use different rounding, and
+        unifying them would be a 1px-behavior change in disguise: the
+        centered view floors the half-offset with integer arithmetic,
+        while anchored placement rounds, and on a ``.5`` tie those
+        disagree (e.g. a 73px-tall sprite in a 188px-tall display:
+        57 vs 58). The pinned fit-view anchors in the tests depend on
+        the floor.
+        """
+        if hold is None:
+            display = self._layout.display_area
+            self._ship_rect.x = (
+                display.x + (display.width - self._ship_rect.width) // 2
+            )
+            self._ship_rect.y = (
+                display.y + (display.height - self._ship_rect.height) // 2
+            )
+            return
+        image_x, image_y, screen_x, screen_y = hold
+        self._ship_rect.x = int(round(screen_x - image_x * self._scale_x))
+        self._ship_rect.y = int(round(screen_y - image_y * self._scale_y))
 
     def _port_marker_rect(self, port: Port) -> pygame.Rect:
         """Pad ``port``'s marker center to a ``marker_size`` square
