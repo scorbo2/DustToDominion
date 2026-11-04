@@ -11,16 +11,19 @@ sidecar Json loading (read, validate, populate the in-memory port list -
 spec 15: Load on startup + Json validation), the ship display area, and
 the control panel with its Label, Checkbox, and Button widgets
 (spec 15: The control panel). The Edit mode checkboxes act as a radio
-group, and all four option buttons - Reset, Clear, Save, and Exit -
-carry live handlers (spec 15: The control panel). Left-clicking
+group, and all five option buttons - Rotate, Reset, Clear, Save, and
+Exit - carry live handlers (spec 15: The control panel). Left-clicking
 the display area adds, reassigns, or clears ports of the current edit
 mode (spec 15: Edit mode); right-clicking it toggles the background
-between black and white.
+between black and white. "Rotate" enters a read-only rotation mode
+(spec 15: Rotation, added 2026-11-02) where the sprite and port markers
+slowly turn without changing the port list.
 """
 from __future__ import annotations
 
 import argparse
 import json
+import math
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -90,15 +93,31 @@ PORT_COLORS = {
 ZOOM_STEP_FACTOR = 1.25
 ZOOM_MAX_STEPS = 9
 
+#: Rotation mode (spec 15: Rotation, added 2026-11-02): one frame advances
+#: 0.375 degrees clockwise, which is one full revolution every 16 seconds
+#: at the tool's 60FPS frame rate. ``rotation_angle`` itself is positive
+#: clockwise, because that is what the user sees; ``pygame.transform.rotate``
+#: treats positive angles as counter-clockwise, so the draw path supplies
+#: the negative of this value to pygame.
+ROTATION_ADVANCE_PER_FRAME = 0.375
+ROTATION_MODE_BUTTON_LABEL = "Rotate"
+
 #: Control-panel group contents, in spec 15 order. Group 1 toggles the
 #: Edit mode; group 2's option buttons carry their live handlers
-#: (spec 15: The control panel).
+#: (spec 15: The control panel). "Rotate" leads the option group because
+#: the spec lists it first (amended 2026-11-02).
 EDIT_MODE_CHECKBOX_LABELS = {
     "gun_ports": "Gun ports",
     "thruster_ports": "Thruster ports",
     "collection_ports": "Collection ports",
 }
-OPTION_BUTTON_LABELS = ("Reset", "Clear", "Save", "Exit")
+OPTION_BUTTON_LABELS = (
+    ROTATION_MODE_BUTTON_LABEL,
+    "Reset",
+    "Clear",
+    "Save",
+    "Exit",
+)
 DEFAULT_EDIT_MODE = PORT_SECTIONS[0]
 
 # The loader decodes a sprite path into a pygame.Surface. Injectable so
@@ -152,14 +171,15 @@ def build_layout(window_size: tuple[int, int]) -> ToolLayout:
 
 
 def panel_widget_rects() -> list[pygame.Rect]:
-    """The nine control-panel widget rects in design space, back-to-front
+    """The ten control-panel widget rects in design space, back-to-front
     (spec 15: The control panel layout).
 
     Groups start at the top margin, each group fills the panel minus its
     side margins (320 - 2*32 = 256, matching the fixed widget width),
     with 12 design px between widgets and 48 design px between groups.
     Order: "Edit mode" label, the three Edit mode checkboxes, "Options"
-    label, the four option buttons.
+    label, then the five option buttons ("Rotate", "Reset", "Clear",
+    "Save", "Exit").
     """
     x = PANEL_X_DESIGN + PANEL_MARGIN_DESIGN
     groups = (
@@ -650,14 +670,15 @@ class ShipEditorApp:
 
     Right of the divider: the fixed-theme control panel (spec 15: The
     control panel) - header Labels, the three Edit mode Checkboxes, and
-    the four option Buttons, all 256x40 at a pinned 18pt. The Edit mode
+    the five option Buttons, all 256x40 at a pinned 18pt. The Edit mode
     checkboxes act as a radio group: exactly one is checked, matching
     ``edit_mode`` (spec 15: Edit mode, amended 2026-10-25 - the checked
     state alone carries the mode; the checkboxes are never selected).
-    "Reset", "Clear", "Save", and "Exit" are all live (spec 15: The
-    control panel); a "Reset" or "Save" click can end the session on a
-    sidecar hard error (spec 15: Reset, Save), and "Exit" ends it
-    immediately, unsaved changes and all (spec 15: Testing).
+    "Rotate", "Reset", "Clear", "Save", and "Exit" are all live (spec 15:
+    The control panel); a "Reset" or "Save" click can end the session on a
+    sidecar hard error (spec 15: Reset, Save), "Exit" ends it immediately,
+    unsaved changes and all (spec 15: Testing), and "Rotate" toggles the
+    spec 15 rotation mode (added 2026-11-02).
     """
 
     def __init__(
@@ -694,6 +715,11 @@ class ShipEditorApp:
         # Spec 15: Zoom - integer step count on top of the fit view;
         # 0 is the startup/fit level.
         self._zoom_steps = 0
+        # Spec 15: Rotation (added 2026-11-02) - positive means clockwise
+        # from the user's point of view. The angle resets whenever rotation
+        # mode is entered or exited.
+        self._rotation_mode = False
+        self._rotation_angle = 0.0
         self._build_ship()
 
         self._edit_mode = DEFAULT_EDIT_MODE
@@ -765,6 +791,19 @@ class ShipEditorApp:
         scaled size of one image pixel, floored at ``PORT_MARKER_SIZE``
         (spec 15: Edit mode)."""
         return self._marker_size
+
+    @property
+    def rotation_mode(self) -> bool:
+        """Whether rotation mode is active (spec 15: Rotation, added
+        2026-11-02). While active, edit-mode port assignment input is
+        ignored and the sprite/marker view turns slowly."""
+        return self._rotation_mode
+
+    @property
+    def rotation_angle(self) -> float:
+        """Current rotation angle in degrees, positive clockwise, wrapped
+        into ``[0, 360)`` (spec 15: Rotation)."""
+        return self._rotation_angle
 
     def image_to_screen(self, image_x: int, image_y: int) -> tuple[int, int]:
         """Screen position of the top-left corner of image-space cell
@@ -841,7 +880,12 @@ class ShipEditorApp:
         remain no-ops. The collision policy proper (add / toggle-clear
         / reassign) lives in the pygame-free ``apply_click_edit``.
         Returns ``True`` when the in-memory port list changed.
+
+        Rotation mode turns this whole path off (spec 15: Rotation,
+        added 2026-11-02): the rotation view is deliberately read-only.
         """
+        if self._rotation_mode:
+            return False
         if not self._layout.display_area.collidepoint(position):
             return False
         fractional_x, fractional_y = self._fractional_image_at(position)
@@ -880,7 +924,13 @@ class ShipEditorApp:
         screen position. That anchoring survives landing on either
         clamp, including a zoom-out ending at the fit scale but
         off-center. Returns ``True`` when the zoom step count changed.
+
+        Rotation mode disables zoom input (spec 15: Rotation, added
+        2026-11-02); entering rotation mode already reset the view to
+        fit, and the rotating view must not be editable.
         """
+        if self._rotation_mode:
+            return False
         if not self._layout.display_area.collidepoint(position):
             return False
         new_steps = min(
@@ -904,6 +954,47 @@ class ShipEditorApp:
             return
         self._zoom_steps = 0
         self._build_ship()
+
+    def toggle_rotation(self) -> None:
+        """Enter or exit rotation mode (spec 15: Rotation, added
+        2026-11-02).
+
+        Entering resets the angle to 0 and restores the default zoom, but
+        never touches the port list. Exiting also resets the angle; the
+        zoom is *not* restored to whatever it was before entering, because
+        the rotating view starts from fit and stays there until the user
+        leaves rotation mode.
+        """
+        self._rotation_mode = not self._rotation_mode
+        self._rotation_angle = 0.0
+        if self._rotation_mode:
+            self.reset_zoom()
+        self._set_controls_enabled_for_rotation()
+
+    def advance_rotation(self) -> None:
+        """Advance one 60FPS frame's worth of clockwise rotation while in
+        rotation mode (spec 15: Rotation, added 2026-11-02). This is a
+        no-op otherwise, so tests can pump frames without accidentally
+        starting a rotation."""
+        if not self._rotation_mode:
+            return
+        self._rotation_angle = round(
+            (self._rotation_angle + ROTATION_ADVANCE_PER_FRAME) % 360.0,
+            6,
+        )
+
+    def _set_controls_enabled_for_rotation(self) -> None:
+        """Apply the rotation-mode UI lock (spec 15: Rotation, added
+        2026-11-02): every Edit mode Checkbox and the Reset/Clear/Save
+        option Buttons are disabled, while Rotate and Exit stay enabled so
+        the user can leave the mode."""
+        controls_enabled = not self._rotation_mode
+        for checkbox in self._edit_checkboxes.values():
+            checkbox.enabled = controls_enabled
+        for label, button in self._option_buttons.items():
+            button.enabled = (
+                label in (ROTATION_MODE_BUTTON_LABEL, "Exit") or controls_enabled
+            )
 
     @property
     def exit_request(self) -> tuple[int, str | None] | None:
@@ -1021,7 +1112,13 @@ class ShipEditorApp:
         over one click: port edits ignore everything right of the
         display area, and the widgets all live inside the control
         panel.
+
+        Rotation advances at the top of the frame (spec 15: Rotation,
+        added 2026-11-02), not after the event batch: clicking "Rotate"
+        therefore leaves the angle at 0 until the next frame, rather than
+        advancing it on the same click that entered rotation mode.
         """
+        self.advance_rotation()
         for event in events:
             if event.type == pygame.MOUSEBUTTONDOWN:
                 if event.button == 1:
@@ -1066,7 +1163,7 @@ class ShipEditorApp:
         both."""
         screen.fill(self._background_color)
         screen.set_clip(self._layout.display_area)
-        screen.blit(self._scaled_surface, self._ship_rect)
+        self._draw_sprite(screen)
         self._draw_port_markers(screen)
         screen.set_clip(None)
         screen.fill(CONTROL_PANEL_COLOR, self._layout.control_panel)
@@ -1074,18 +1171,54 @@ class ShipEditorApp:
 
     def marker_center_for_port(self, port: Port) -> tuple[int, int]:
         """On-screen center of ``port``'s marker footprint (spec 15:
-        Edit mode, amended 2026-10-27). The center is the authoritative
-        decal position - a centered marker has no meaningful corner
-        coordinates - and it always sits at the on-screen center of the
-        port's scaled image-space cell. ``_port_marker_rect`` merely
-        pads it to ``marker_size``."""
+        Edit mode, amended 2026-10-27; rotation amended 2026-11-02). The
+        center is the authoritative decal position - a centered marker
+        has no meaningful corner coordinates - and it sits at the
+        on-screen center of the port's scaled image-space cell. In
+        rotation mode, that center first follows the same clockwise
+        rotation as the sprite image around the sprite's center; the
+        marker itself remains an axis-aligned square.
+        ``_port_marker_rect`` merely pads it to ``marker_size``."""
+        center_x = (
+            self._ship_rect.x + int(round((port.x + 0.5) * self._scale_x))
+        )
+        center_y = (
+            self._ship_rect.y + int(round((port.y + 0.5) * self._scale_y))
+        )
+        if self._rotation_mode and self._rotation_angle != 0.0:
+            center_x, center_y = self._rotated_port_center(center_x, center_y)
+            return (int(round(center_x)), int(round(center_y)))
+        return (center_x, center_y)
+
+    def _sprite_center(self) -> tuple[float, float]:
+        """Continuous center of the *unrotated* scaled sprite on the
+        screen (spec 15: Rotation). The rotated sprite is blitted around
+        this point, and marker centers rotate around it too."""
+        scaled_width, scaled_height = self._scaled_size
         return (
-            self._ship_rect.x + int(
-                round((port.x + 0.5) * self._scale_x)
-            ),
-            self._ship_rect.y + int(
-                round((port.y + 0.5) * self._scale_y)
-            ),
+            self._ship_rect.x + scaled_width / 2.0,
+            self._ship_rect.y + scaled_height / 2.0,
+        )
+
+    def _rotated_port_center(
+        self, center_x: float, center_y: float
+    ) -> tuple[float, float]:
+        """Rotate an unrotated marker center clockwise around the sprite
+        center by ``rotation_angle`` (spec 15: Rotation).
+
+        Screen coordinates point down, so the visual-clockwise transform
+        differs from the usual y-up math rotation matrix: a point to the
+        right moves down, and a point below the center moves left.
+        """
+        sprite_center_x, sprite_center_y = self._sprite_center()
+        rel_x = center_x - sprite_center_x
+        rel_y = center_y - sprite_center_y
+        angle_radians = math.radians(self._rotation_angle)
+        cosine = math.cos(angle_radians)
+        sine = math.sin(angle_radians)
+        return (
+            sprite_center_x + rel_x * cosine - rel_y * sine,
+            sprite_center_y + rel_x * sine + rel_y * cosine,
         )
 
     def _build_panel_widgets(self) -> None:
@@ -1095,7 +1228,7 @@ class ShipEditorApp:
         Rects come from ``panel_widget_rects`` in order: the two header
         Labels (not opaque, selected, per the spec's group headers), the
         three Edit mode Checkboxes (the active mode checked; never
-        selected, per spec 15 as amended 2026-10-25), and the four option
+        selected, per spec 15 as amended 2026-10-25), and the five option
         Buttons. All widgets pin the spec's 18pt point size.
         """
         rects = panel_widget_rects()
@@ -1117,6 +1250,7 @@ class ShipEditorApp:
         header = self._make_header_label(rects[4], "Options")
         widgets.append(header)
         option_handlers: dict[str, Callable[[], None]] = {
+            "Rotate": self.toggle_rotation,
             "Reset": self._on_reset_click,
             "Clear": self.clear_ports,
             "Save": self._on_save_click,
@@ -1133,7 +1267,7 @@ class ShipEditorApp:
                 text=label_text,
                 on_click=option_handlers[label_text],
             )
-            # All four options carry live handlers (spec 15: The
+            # All five options carry live handlers (spec 15: The
             # control panel); the accept sound on click is the
             # widget's own contract (spec 09), not our business.
             button.set_font_point_size(WIDGET_FONT_POINT_SIZE)
@@ -1261,6 +1395,28 @@ class ShipEditorApp:
             self._marker_size,
             self._marker_size,
         )
+
+    def _draw_sprite(self, screen: pygame.Surface) -> None:
+        """Blit the current sprite (spec 15: Rotation, added 2026-11-02).
+
+        Rotation always starts from the original fitted/scaled surface and
+        rotates it by the accumulated clockwise angle; it never rotates
+        the previous frame's rotated output. Pygame uses positive angles
+        for counter-clockwise, so the positive clockwise
+        ``rotation_angle`` is negated at the pygame boundary. The bounding
+        box grows as the rectangle turns; corners may be clipped by the
+        display-area clip, which the spec explicitly accepts.
+        """
+        if not self._rotation_mode or self._rotation_angle == 0.0:
+            screen.blit(self._scaled_surface, self._ship_rect)
+            return
+        center_x, center_y = self._sprite_center()
+        rotated = pygame.transform.rotate(
+            self._scaled_surface, -self._rotation_angle
+        )
+        rotated_rect = rotated.get_rect()
+        rotated_rect.center = (int(round(center_x)), int(round(center_y)))
+        screen.blit(rotated, rotated_rect)
 
     def _draw_port_markers(self, screen: pygame.Surface) -> None:
         for section in PORT_SECTIONS:
