@@ -870,6 +870,60 @@ class TestThemeAndFontIdListing:
         ]
 
 
+class TestLanguageIdListing:
+    """The language id accessor (spec 03: Consumer API, added by
+    spec 16: Language support) - non-recursive, lowercase-only, and
+    deliberately WITHOUT the sentinel the theme/font listers lead with.
+    """
+
+    def test_getLanguageResourceIds_withNoLanguageResources_shouldReturnEmptyList(
+        self, project: Path
+    ) -> None:
+        # GIVEN a resource tree with no languages/ directory at all:
+        _make_text_file(project / "resources", "note.txt", "no languages here")
+
+        loader = ResourceLoader()
+        loader.load(None)
+
+        # THEN an EMPTY list - unlike themes/fonts there is no leading
+        # sentinel (spec 03): the shipped game always ships
+        # languages/en-us.json as a required resource, and
+        # LanguageManager.get_languages guarantees the default itself
+        # (spec 16):
+        assert loader.get_language_resource_ids() == []
+
+    def test_getLanguageResourceIds_withMixedTree_shouldReturnFlatLowercaseJsonSorted(
+        self, project: Path
+    ) -> None:
+        # GIVEN valid languages written out of order, plus every class
+        # of entry the spec excludes:
+        resources = project / "resources"
+        _make_text_file(resources, "languages/fr-be.json", "{}")
+        _make_text_file(resources, "languages/en-us.json", "{}")
+        _make_text_file(resources, "languages/de-at.json", "{}")
+        # Non-recursive: a nested candidate is NOT a language:
+        _make_text_file(resources, "languages/long/path/de-ch.json", "{}")
+        # Uppercase filenames are silently rejected (spec 03):
+        _make_text_file(resources, "languages/de-AT.json", "{}")
+        _make_text_file(resources, "languages/EN-us.json", "{}")
+        # Case-variant extension never even becomes a resource:
+        _make_text_file(resources, "languages/spice.Json", "{}")
+        # Decoys: Json elsewhere, non-Json under languages/:
+        _make_text_file(resources, "data/ship_stats.json", '{"hull": 100}')
+        _make_text_file(resources, "languages/notes.txt", "not a language")
+
+        loader = ResourceLoader()
+        loader.load(None)
+
+        # THEN only the flat, all-lowercase, .json entries remain,
+        # sorted by full id (casefold), no sentinel:
+        assert loader.get_language_resource_ids() == [
+            "languages/de-at.json",
+            "languages/en-us.json",
+            "languages/fr-be.json",
+        ]
+
+
 class TestExtensionFiltering:
     def test_withUnsupportedExtensions_shouldSkipThemSilently(
         self, project: Path

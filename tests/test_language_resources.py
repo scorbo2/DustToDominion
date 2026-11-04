@@ -18,7 +18,7 @@ from typing import Any
 
 import pytest
 
-from dtd import game_constants
+from dtd import game_constants, language
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 SHIPPED_EN_US_RESOURCE = PROJECT_ROOT / "resources" / "languages" / "en-us.json"
@@ -107,3 +107,21 @@ class TestShippedEnUsLanguageResource:
         # metadata section is reserved but well-formed):
         decoded = _shipped_en_us()
         assert _resolve_dotted_key(decoded, "language_metadata.name") == "US English"
+
+    def test_defaultLanguageCode_withUiDefaultLanguageResourceId_shouldStayConsistent(
+        self,
+    ) -> None:
+        # The LanguageManager derives every fallback lookup id from
+        # DEFAULT_LANGUAGE_CODE, while the spec 03 required-resources
+        # gate pins UI_DEFAULT_LANGUAGE. If the two drift apart, every
+        # lookup bottoms out at a table that is NOT the required
+        # resource - so the relationship is pinned, not assumed:
+        assert (
+            language.language_resource_id(game_constants.DEFAULT_LANGUAGE_CODE)
+            == game_constants.UI_DEFAULT_LANGUAGE
+        )
+        # And the shipped file is that very resource:
+        assert (
+            SHIPPED_EN_US_RESOURCE.relative_to(PROJECT_ROOT / "resources").as_posix()
+            == game_constants.UI_DEFAULT_LANGUAGE
+        )

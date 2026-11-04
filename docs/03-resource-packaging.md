@@ -1,6 +1,6 @@
 ---
 description: Describes how the game loads resources (images, sound effects, music, etc.)
-status: proposed
+status: active
 ---
 
 # Resource packaging
@@ -676,4 +676,11 @@ The spec is too large to implement all at once. The following staged dev plan is
     the `LanguageManager` implementation (spec 16 dev stages 3-4), and
     their tests (see Testing above) land with them. Flip this document
     back to `active` at that point, if the full suite passes.
+    **Completed 2026-11-03** (spec 16 stage 3): `get_language_resource_ids()`
+    (non-recursive, lowercase-filenames-only, no sentinel -
+    `ResourceLoader`, pinned in `TestLanguageIdListing`), the
+    `init_language_manager(resource_loader, config.language)` startup
+    insertion after the AudioManager in `dtd/main.py`, and the full
+    language test suite (`tests/test_language.py`) all landed; doc
+    flipped back to `active` with the full suite green at 1411 tests.
 

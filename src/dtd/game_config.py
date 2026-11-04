@@ -18,6 +18,7 @@ from dtd import config, persistence
 from dtd.errors import ConfigError
 from dtd.game_constants import (
     DEFAULT_FONT_VALUE,
+    DEFAULT_LANGUAGE_CODE,
     DEFAULT_THEME_VALUE,
     VOLUME_MAX_PERCENT,
     VOLUME_MIN_PERCENT,
@@ -123,7 +124,7 @@ class GameConfig(BaseModel):
     # consume-time normalization the theme/font values above get from
     # Theme. Never fatal: a non-string fails validation and becomes a
     # warning plus whole-config defaults (spec 01).
-    language: str = "en-us"
+    language: str = DEFAULT_LANGUAGE_CODE
 
 
 def game_config_path() -> Path:
@@ -179,6 +180,17 @@ def set_font(font: str | None) -> None:
     ``DEFAULT_FONT_VALUE`` as the sentinel.
     """
     _set_config_string("font", font, DEFAULT_FONT_VALUE)
+
+
+def set_language(language: str | None) -> None:
+    """Persist the ``language`` config key (spec 16: LanguageManager).
+
+    Same never-raises rules as :func:`set_theme`, but the blank/None
+    normalization target is ``DEFAULT_LANGUAGE_CODE`` ("en-us"), not a
+    "default" sentinel: the language system has no second sentinel
+    meaning (spec 16: Configuration).
+    """
+    _set_config_string("language", language, DEFAULT_LANGUAGE_CODE)
 
 
 def _set_config_string(key: str, value: str | None, default_value: str) -> None:

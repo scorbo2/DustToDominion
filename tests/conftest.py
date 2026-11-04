@@ -9,13 +9,16 @@ Guarantees required by spec 00:
   cannot leak initialized display/mixer state into one another
 - the dtd.audio module-level AudioManager singleton is unset before and after
   every test, so tests cannot leak a (possibly mutated) singleton into one another
+- the dtd.language module-level LanguageManager singleton is unset before and
+  after every test, same rule (spec 16: Test impact)
 - the spec 03 required-resources gate (``game_constants.REQUIRED_RESOURCE_IDS``)
   is neutralized around every test, so unrelated tests do not depend on the
   shipped master list; tests that exercise the gate reassign the constant
 - seeded RNG and an injected (fake) clock available to tests
 - opt-in audio helpers for widget tests: ``silent_audio_manager`` (an
   initialized singleton over a nothing-resolves loader) and the
-  ``record_play_ui_sfx`` recorder factory
+  ``record_play_ui_sfx`` recorder factory; the analogous opt-in for
+  language tests is ``silent_language_manager`` (spec 16)
 """
 from __future__ import annotations
 
@@ -44,6 +47,7 @@ import pygame
 # review).
 from dtd import audio
 from dtd import game_constants
+from dtd import language
 from dtd.game_config import AudioConfig
 from dtd.resource_loader import ResourceLoader
 
@@ -93,6 +97,25 @@ def clean_audio_singleton() -> Iterator[None]:
     audio._audio_manager = None
     yield
     audio._audio_manager = None
+
+
+@pytest.fixture(autouse=True)
+def clean_language_manager() -> Iterator[None]:
+    """Reset the module-level LanguageManager singleton around every test
+    (spec 16: Test impact).
+
+    ``dtd.language._language_manager`` is process-wide state exactly like
+    the AudioManager's singleton: without this, a test that calls
+    ``init_language_manager()`` would leak a real (and possibly mutated)
+    instance into every later test.
+
+    Plain assignment, not ``monkeypatch.setattr``: the issue #23 rule -
+    monkeypatch's undo runs *after* this fixture's finalizer and would
+    restore the very instance we are trying to discard.
+    """
+    language._language_manager = None
+    yield
+    language._language_manager = None
 
 
 @pytest.fixture(autouse=True)
@@ -195,6 +218,29 @@ def silent_audio_manager(mixer_ready: None) -> Iterator[audio.AudioManager]:
         # Keep the module global clean (issue #23 convention); the
         # autouse clean_audio_singleton is the backstop, not the fix.
         audio._audio_manager = None
+
+
+@pytest.fixture
+def silent_language_manager() -> Iterator[language.LanguageManager]:
+    """The global LanguageManager singleton, initialized but resolving nothing.
+
+    Screens look their text up through ``get_language_manager()`` (spec 16:
+    Test impact), so screen tests need the singleton to exist even when
+    they assert nothing about languages - this mirrors the startup
+    pattern over a bare loader. Nothing resolves, so
+    ``get_languages()`` still guarantees the default code, and
+    ``get_string()`` answers with the raw key: exactly what the spec's
+    fallback chain prescribes for a resource-starved build. Tests that
+    need real language documents build their own manager over a
+    synthesized loader instead (see test_language.py).
+    """
+    manager = language.init_language_manager(ResourceLoader())
+    try:
+        yield manager
+    finally:
+        # Keep the module global clean (issue #23 convention); the
+        # autouse clean_language_manager is the backstop, not the fix.
+        language._language_manager = None
 
 
 @pytest.fixture

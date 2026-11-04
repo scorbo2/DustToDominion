@@ -81,6 +81,14 @@ UI_DEFAULT_FONT = "fonts/Audiowide-Regular.ttf"
 #: (spec 03: Required resources) and as the fallback lookup table for
 #: every key missing from a non-default language (spec 16: LanguageManager).
 UI_DEFAULT_LANGUAGE = "languages/en-us.json"
+#: The config value - and stripped resource filename - of the default
+#: language (spec 16: Default language): the silent config default, the
+#: revert target for unrecognized codes, and the code of the fallback
+#: lookup table. Kept as a literal because the config model uses it as a
+#: plain field default; ``tests/test_language_resources.py`` pins that it
+#: stays consistent with ``UI_DEFAULT_LANGUAGE`` - if either drifts, the
+#: pin fires instead of the fallback chain silently missing its table.
+DEFAULT_LANGUAGE_CODE = "en-us"
 #: Sound effect for widgets that support mouse hover, played through
 #: ``AudioManager.play_ui_sfx`` (spec 04: Core UI Resources).
 UI_SFX_HOVER = "audio/ui/hover.ogg"
@@ -265,6 +273,11 @@ THEME_RESOURCE_ID_PREFIX = "themes/"
 #: starts with this prefix is offered by ``get_font_resource_ids`` as an
 #: available font.
 FONT_RESOURCE_ID_PREFIX = "fonts/"
+#: By convention (spec 03, added by spec 16), a JSON resource whose ID
+#: starts with this prefix is offered by ``get_language_resource_ids``
+#: as an available language. The listing under this prefix is
+#: NON-recursive and lowercase-filenames-only (spec 03: Consumer API).
+LANGUAGE_RESOURCE_ID_PREFIX = "languages/"
 #: The master list of resource ids that must resolve at startup
 #: (spec 03: Required resources). Spec 03 owns this list; future spec docs
 #: amend it via spec doc amendment, never by editing this constant ad hoc.

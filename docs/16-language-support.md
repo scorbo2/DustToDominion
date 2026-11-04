@@ -349,8 +349,24 @@ Tests should use a `silent_language_manager` fixture, following the pattern of
   specs do not bring them into the language system.
 3. Implement the LanguageManager class. The `get_languages()` method should
   report all languages detected on startup. The `get_string()` method should
-  return actual data from loaded language Json files, with the fallback mechanism
-  described in this document.
+  return actual data from loaded language Json files, with the fallback
+  mechanism described in this document.
+  **Completed 2026-11-03**: `dtd/language.py` ships the `LanguageManager`
+  class (`get_languages`/`get_string`/`get_current_language`/
+  `set_current_language`, cold-start cache with once-per-key failure
+  warnings, startup and runtime code validation reverting to `en-us`),
+  the pure `resolve_json_path()` helper, and the
+  `init_language_manager()`/`get_language_manager()` singleton seam
+  wired into startup after the AudioManager (spec 03 step 6). The
+  spec 03 amendment half landed here too: `get_language_resource_ids()`
+  (non-recursive, lowercase-only, no sentinel) and its tests, which
+  flipped doc 03 back to `active`. conftest gained the autouse
+  `clean_language_manager` and opt-in `silent_language_manager`
+  fixtures; `game_config.set_language()` persists the `language` key
+  (never raising). Caption refresh on language change is deliberately
+  deferred to stage 4 with the rest of the UI wiring. New tests:
+  `tests/test_language.py` plus `TestLanguageIdListing` in
+  `test_resource_loader.py` (full suite green at 1411 tests).
 4. Migrate all UI code to use `get_string()` to look up text rather than
   use the raw string value from the constants. After this stage, all UI
   elements should once again display their actual text.
