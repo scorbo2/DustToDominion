@@ -336,6 +336,17 @@ Tests should use a `silent_language_manager` fixture, following the pattern of
   like `options.audio_options` instead of "Audio options", because the
   code still references the constants directly for text. This is acceptable
   until stage 4 is completed.
+  **Completed 2026-11-03**: `resources/languages/en-us.json` now carries every
+  shipped UI string under the `main_window.caption`, `title_screen.*` and
+  `options.*` key groups named in the spec 02/08/13 amendments, and the
+  twelve UI-text constants in `game_constants.py` (`WINDOW_TITLE`,
+  `TITLE_SCREEN_TITLE_TEXT`, `EXIT_GAME_LABEL` and the `OPTIONS_LABEL*` set)
+  now hold those dotted keys instead of display text. New pin tests in
+  `tests/test_language_resources.py` keep the shipped resource and the key
+  constants in lockstep (full suite green at 1363 tests). The font/theme
+  chooser sentinels (`DEFAULT_THEME_DISPLAY_VALUE`,
+  `DEFAULT_FONT_DISPLAY_VALUE`) are deliberately untouched - the amended
+  specs do not bring them into the language system.
 3. Implement the LanguageManager class. The `get_languages()` method should
   report all languages detected on startup. The `get_string()` method should
   return actual data from loaded language Json files, with the fallback mechanism

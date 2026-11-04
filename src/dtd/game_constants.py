@@ -12,7 +12,11 @@ from typing import Final
 SIM_STEP = 1 / 60
 
 # --- Window handling (spec 02) -------------------------------------------
-WINDOW_TITLE = "Dust to Dominion"
+#: Language key for the game window's caption (spec 02: Window title, as
+#: amended by spec 16: Language support). The value lives in
+#: ``languages/en-us.json`` as ``main_window.caption``; the caption is
+#: resolved through ``LanguageManager.get_string`` (spec 16).
+WINDOW_TITLE = "main_window.caption"
 WINDOWED_WIDTH = 1280
 WINDOWED_HEIGHT = 720
 #: The only resolutions the game supports in fullscreen mode (spec 02).
@@ -102,8 +106,11 @@ TITLE_SCREEN_BACKGROUND_IMAGE_IDS = (
     "graphics/screens/title_screen.jpg",
     "graphics/screens/title_screen.jpeg",
 )
-#: The game title shown on the Title Screen (spec 08: Title).
-TITLE_SCREEN_TITLE_TEXT = "Dust to Dominion"
+#: Language key for the game title shown on the Title Screen (spec 08:
+#: Title, as amended by spec 16: Language support) - the name of the game
+#: itself is subject to translation, so it lives in the language
+#: resources, not in code.
+TITLE_SCREEN_TITLE_TEXT = "title_screen.title"
 #: Title font size in points, in design space (spec 08: Title) - like every
 #: other design-space value, it scales with the window scale factor.
 TITLE_SCREEN_TITLE_FONT_PT = 80
@@ -140,32 +147,44 @@ OPTIONS_SCREEN_TEST_UI_SFX = "audio/sfx/test_ui_sfx.wav"
 #: Sample speech clip played while adjusting the speech volume slider
 #: (spec 13: Interactions and persistence).
 OPTIONS_SCREEN_TEST_SPEECH = "audio/sfx/test_speech.wav"
-#: Label of the Title Screen's Options button (spec 08: Buttons and options,
-#: added by spec 13). Clicking it transitions to the Options screen; it also
-#: labels the Options screen's title Label (spec 13: Exit control and title).
-OPTIONS_LABEL = "Options"
-#: Label of the Options screen's "< Back" button (spec 13: Exit control and
-#: title). Clicking it - or pressing ESC on the Options screen - transitions
-#: back to the Title screen.
-OPTIONS_LABEL_BACK = "< Back"
-#: Label of the Options screen's "Audio options" section title (spec 13:
+#: Language keys for every Button/Label/Checkbox text on the game's
+#: screens (spec 13: New constants, as amended by spec 16: Language
+#: support - these were display strings until 2026-11-03; the values
+#: moved to ``languages/en-us.json``). The calling screen resolves each
+#: key to display text via ``LanguageManager.get_string`` ("Caller
+#: decides", spec 16) - the Widget itself never knows where its text
+#: came from.
+#:
+#: Language key for the Title Screen's Options button (spec 08: Buttons
+#: and options, added by spec 13). Clicking it transitions to the
+#: Options screen; the same key also labels the Options screen's title
+#: Label (spec 13: Exit control and title), so the pair stays consistent
+#: across languages.
+OPTIONS_LABEL = "title_screen.options"
+#: Language key for the Options screen's Back button (spec 13: Exit
+#: control and title). Clicking it - or pressing ESC on the Options
+#: screen - transitions back to the Title screen.
+OPTIONS_LABEL_BACK = "options.back"
+#: Language key for the Options screen's audio section title (spec 13:
 #: UI controls - group 1).
-OPTIONS_LABEL_AUDIO_OPTIONS = "Audio options"
-#: Label of every Options screen volume Slider (spec 13: UI controls -
-#: group 1).
-OPTIONS_LABEL_VOLUME = "Volume:"
-#: Checkbox labels for the four audio categories (spec 13: UI controls -
-#: group 1). Each Checkbox drives the matching AudioManager enabled flag.
-OPTIONS_LABEL_GAME_SFX_ENABLED = "Game sound effects enabled"
-OPTIONS_LABEL_UI_SFX_ENABLED = "UI sound effects enabled"
-OPTIONS_LABEL_SPEECH_ENABLED = "Speech enabled"
-OPTIONS_LABEL_MUSIC_ENABLED = "Music enabled"
-#: Label of the Options screen's "UI options" section title (spec 13:
+OPTIONS_LABEL_AUDIO_OPTIONS = "options.audio_options"
+#: Language key for every Options screen volume Slider (spec 13: UI
+#: controls - group 1).
+OPTIONS_LABEL_VOLUME = "options.volume"
+#: Language keys for the four audio-category Checkboxes (spec 13: UI
+#: controls - group 1). Each Checkbox drives the matching AudioManager
+#: enabled flag.
+OPTIONS_LABEL_GAME_SFX_ENABLED = "options.game_sfx_enabled"
+OPTIONS_LABEL_UI_SFX_ENABLED = "options.ui_sfx_enabled"
+OPTIONS_LABEL_SPEECH_ENABLED = "options.speech_enabled"
+OPTIONS_LABEL_MUSIC_ENABLED = "options.music_enabled"
+#: Language key for the Options screen's UI section title (spec 13:
 #: UI controls - group 2).
-OPTIONS_LABEL_UI_OPTIONS = "UI options"
-#: Label of the Title Screen's Exit Game button (spec 08: Buttons and
-#: options). ESC on the Title Screen is equivalent to clicking it.
-EXIT_GAME_LABEL = "Exit Game"
+OPTIONS_LABEL_UI_OPTIONS = "options.ui_options"
+#: Language key for the Title Screen's Exit Game button (spec 08:
+#: Buttons and options, as amended by spec 16). ESC on the Title Screen
+#: is equivalent to clicking it.
+EXIT_GAME_LABEL = "title_screen.exit"
 #: Menu option geometry in design space (spec 08: Buttons and options):
 #: each option's size, its border width, and the empty space between
 #: options in the single centered vertical column.

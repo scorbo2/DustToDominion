@@ -1,5 +1,23 @@
 {
   "language_metadata": {
     "name": "US English"
+  },
+  "main_window": {
+    "caption": "Dust to Dominion"
+  },
+  "title_screen": {
+    "title": "Dust to Dominion",
+    "options": "Options",
+    "exit": "Exit Game"
+  },
+  "options": {
+    "back": "< Back",
+    "audio_options": "Audio options",
+    "ui_options": "UI options",
+    "volume": "Volume:",
+    "game_sfx_enabled": "Game sound effects enabled",
+    "ui_sfx_enabled": "UI sound effects enabled",
+    "speech_enabled": "Speech enabled",
+    "music_enabled": "Music enabled"
   }
 }
