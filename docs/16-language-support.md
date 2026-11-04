@@ -33,13 +33,18 @@ No new dependencies.
 
 ## Configuration
 
-This spec doc introduces one new top-level language key:
+This spec doc introduces one new top-level `language` key:
 
 - `language`: a string with a default value of `en-us`
 
 Silent default of `en-us` will be applied if the key is missing, or its value is blank.
 
 ## Amendments to previous spec docs
+
+### Changes to the 02 spec
+
+- "The window title is always the full name of the game" should be modified to
+  state that the title of the game is read from the language key `main_window.caption`.
 
 ### Changes to the 04 spec
 
@@ -62,20 +67,29 @@ Silent default of `en-us` will be applied if the key is missing, or its value is
   Also note that the country/region filename format is encouraged but not enforced. A user could
   supply `languages/hello_there_my_darling.json`, and it will be loaded and displayed as such.
 
+### Changes to the 08 spec
+
+- the "Title" section needs changing to specify that the game title should come from
+  a language key `title_screen.title` instead of hard-coding "Dust to Dominion".
+  The intention is that the name of the game itself is also subject to translation.
+- button labels (currently "Options" and "Exit Game") should also be driven from
+  language keys: `title_screen.options` and `title_screen.exit`.
+
 ### Changes to the 13 spec
 
-- add a new ChoiceList control to the UI Options group: `Language`. The options for this
+- add a new language ChoiceList control to the UI Options group. The options for this
   ChoiceList will be driven from the available language list returned by `LanguageManager`.
   There is always at least one option: `en-us` (ensured by LanguageManager).
   This new ChoiceList can be added after (beneath) the existing options in that group.
   The ChoiceList has the same size and cosmetic attributes as the Font and Theme choosers.
-
-### Changes to the 15 spec
-
-- the "ship editor" tool re-uses the game's Widgets, so it will have to be updated
-  slightly to specify that UI element text must come from LanguageManager via keys
-  in the language file. Suggested grouping: `ship_editor.reset_button`, `ship_editor.clear_button`,
-  and so on. This allows the ship editor to also gain the benefits of translation.
+- add a note somewhere in the document that it is a known issue that changing the language
+  setting on the Options screen only takes effect *on the next screen transition*, and not
+  immediately as with the other controls on that screen. This is a byproduct of the
+  "Caller decides" approach, where widgets store raw text and not lookup keys.
+- the "New constants" section currently lists string values. These need to be
+  changed as needed to language keys. For example: `OPTIONS_LABEL` should
+  have value `title_screen.options` (re-using title-screen label), `OPTIONS_LABEL_BACK`
+  should have value `options.back`, and so on.
 
 ## LanguageManager
 
@@ -88,13 +102,13 @@ The LanguageManager class offers the following facilities:
   language resource that points to it. For example, `languages/en-us.json`
   is returned as `en-us`. This method always returns at least `en-us`, as
   that is a required resource.
-- `get_string(self, key: str)`: given a key `s`, and the currently-configured
+- `get_string(self, key: str)`: given a key `key`, and the currently-configured
   Language value, attempts to return the matching value string from the
   correct language file. For example, if Language is `de-at` and a
-  `languages/de-at.json` file exists, look up `s` in that file and return
-  its value. If `s` is not present in that resource, or if that resource
-  does not exist, look up `s` in the default language resource (`en-us`).
-  If it does not exist there, return `s` and log a warning ("Unknown language key...")
+  `languages/de-at.json` file exists, look up `key` in that file and return
+  its value. If `key` is not present in that resource, or if that resource
+  does not exist, look up `key` in the default language resource (`en-us`).
+  If it does not exist there, return `key` and log a warning ("Unknown language key...")
 - `get_current_language(self)`: returns the currently-configured language,
   using the same stripped filename as returned by `get_languages()`. For
   example, this returns `en-us` if the current language is `en-us`.
@@ -116,9 +130,9 @@ lookups should occur once per key until cache reset).
 
 LanguageManager should reject invalid configuration values on startup,
 and `set_current_language()` should behave the same way: if an unrecognized
-code is given (does not resolve to any actual resource), revert to `en-us`
-with a log warning. If `set_current_language()` is given such an invalid
-value, do NOT persist it.
+code is given (not present in `get_languages()`), revert to `en-us` with a
+log warning. If `set_current_language()` is given such an invalid value,
+do NOT persist it.
 
 Giving a blank string or None to `set_current_language()` is treated
 the same as `en-us`, as this is our default value.
@@ -141,7 +155,7 @@ For example:
 OPTIONS_LABEL_AUDIO_OPTIONS = "Audio options"
 
 # Proposed change:
-OPTIONS_LABEL_AUDIO_OPTIONS = "options.label_audio_options"
+OPTIONS_LABEL_AUDIO_OPTIONS = "options.audio_options"
 ```
 
 And the calling code should change to look up the value of the string:
@@ -158,7 +172,12 @@ section = self._build_section_label(label)
 This is a one-time migration of UI code that predates this spec doc.
 Going forward, all new UI code should follow this pattern. Note that it's not just
 Widgets that are affected: window captions are also affected and should
-also be covered by this migration.
+also be covered by this migration. Implementation note: currently, the main window
+caption is only set once when the window opens. The implementation of this spec
+doc should update the caption as needed when the current language changes (via
+`pygame.display.set_caption(get_string(...))`). This also requires the creation
+of a `main_window.caption` language key. Caption update is best-effort, and
+should not raise on failure.
 
 ### Explicitly out of scope
 
@@ -172,6 +191,10 @@ Non-Latin-script languages (Russian, Greek, Mandarin) are not officially support
 
 Some other internationalization mechanisms support the concept of plurals. Our
 implementation does not.
+
+External tools (for example, the Ship Editor from the 15 spec) typically do not
+load the game configuration, so they are exempt from translation. These tools
+can remain English-only, with hard-coded or constant-driven user-facing strings.
 
 ## Caller decides
 
@@ -195,7 +218,7 @@ Very simple example:
     "name": "US English"
   },
   "options": {
-    "label_audio_options": "Audio options"
+    "audio_options": "Audio options"
   },
   "custom_grouping": {
     "example1": "This is example 1",
@@ -204,7 +227,7 @@ Very simple example:
 }
 ```
 
-In the above example, calling code could query for `options.label_audio_options` to
+In the above example, calling code could query for `options.audio_options` to
 retrieve the string "Audio options" (or whatever value the currently-selected Json
 file offers for that key). As the codebase grows, new keys can be added to the
 language files, using whatever grouping makes sense for the new code in question.
@@ -232,6 +255,37 @@ will return correctly from `get_string()`:
 }
 ```
 
+### Key format
+
+Key names are split on period (`.`) characters, which resolve to nested dicts in the json.
+At least one period is required for the key to be valid (keys with no period are always treated as missing).
+For example, given the following keys:
+
+```
+group1.key1
+group1.subgroup.key2
+```
+
+The following Json would be expected:
+
+```json
+{
+  "group1": {
+    "key1": "This is the value for key1",
+    "subgroup": {
+      "key2": "This is the value for key2"
+    }
+  }
+}
+```
+
+Keys that don't resolve to a string value in the Json (for example, in the snippet above, if
+"subgroup" was anything other than an object) are treated as missing.
+
+Implementation note: dotted-key resolution should be a small pure function,
+like `resolve_json_path(decoded: Any, key: str) -> str | None` or similar, to keep
+the fallback chain and the cache testable in isolation.
+
 ## Test impact
 
 A `clean_language_manager` autouse fixture should be introduced, following the
@@ -240,9 +294,11 @@ Every test that constructs a screen needs the new singleton initialized.
 
 ## Open questions
 
+All resolved! Maintained here for historical reasons.
+
 1. Should the game use Python's builtin `gettext` support?
   **Resolved**: No, it's overengineered for what we need. Also, the `.mo` format is binary,
-  not hand-editable, while themes (the closes existing analog) are human-editable Json.
+  not hand-editable, while themes (the closest existing analog) are human-editable Json.
   Compiling `.po` to `.mo` would require an external system toolchain, which is hostile
   to this project's hermetic, minimal-dependencies-exactly-pinned philosophy.
 2. Should the game use the `python-i18n` library? (https://github.com/danhper/python-i18n).
@@ -265,6 +321,9 @@ Every test that constructs a screen needs the new singleton initialized.
 
 ## Testing
 
+Tests should use a `silent_language_manager` fixture, following the pattern of
+`silent_audio_manager`, to avoid hand-patching dozens of tests.
+
 - `languages/en-us.json` is a required resource: the game fails to start if it is missing.
 - non-string values in any language Json file are treated as missing values (examples: 42, `[]`, `{...}`, null).
 - `get_languages()` enumerates and returns a sorted list of all discovered `languages/*.json` resources,
@@ -273,14 +332,16 @@ Every test that constructs a screen needs the new singleton initialized.
   For example, if `languages/en-us.json` is selected, should return `en-us`.
 - `set_current_language()` can be used to change the current language. Changes take effect on next screen transition.
 - `set_current_language()` rejects invalid/unrecognized languages with a log warning, and reverts to `en-us`. The value is not persisted.
-- `set_current_language()` with a language other than the current one resets LanguageManager's in-memory cache.
-- `set_current_language(None)`, `set_current_language("")`, and `set_current_language("en-us")` are all treated the same.
+- `set_current_language()` with a valid language other than the current one resets LanguageManager's in-memory cache.
+- `set_current_language(None)`, `set_current_language("")`, and `set_current_language("en-us")` are all treated the same (but persisted as "en-us").
 - `set_current_language()` with the current language is a no-op and does NOT reset the in-memory cache.
+- `set_current_language()` updates the main window caption on a successful language change.
 - LanguageManager rejects invalid/unrecognized configured language on startup with a log warning, and reverts to `en-us`.
 - The Options screen's language ChoiceList initializes from `get_current_language()` and is populated via `get_languages()`.
 - Changing languages in the Options screen persists across game restarts.
 - Language resources with uppercase characters are silently excluded (example: `languages/de-AT.json`).
 - A configured language resource file that cannot be parsed as Json is fatal on startup.
+- A language key like `group.subgroup.key1` where "subgroup" is not an object in the Json: treat as missing.
 - `get_string()` given a key that does not exist in any resource files returns the given key as-is.
 - `get_string()` failed lookups are logged once per key until cache reset.
 - `get_string()` given a key that is found in `en-us` returns the matching value when the language is `en-us`.
@@ -292,13 +353,13 @@ Every test that constructs a screen needs the new singleton initialized.
 
 ## Acceptance criteria
 
-- Does every widget-text call site in `dtd/screens/` and `tools/` pass a `game_constants` key and not a literal?
-- Are window captions (game window, Ship Editor window) also driven from language keys?
+- Are user-facing widgets in existing screens provided text from the current language file? (External tools such as the Ship Editor are exempt from this).
+- Is the game window caption also driven from language keys?
 - Does the game start in English when no language configuration is specified?
 - Does the game fall back to English if given a partial language file for another language?
 - Does the game fall back to the raw key names if `en-us` is incomplete?
 - Can the user change languages in the Options screen if more than one language is available in resources? Is the change persisted? Does the change take effect on the next screen transition?
-- Does the Ship Editor also respect the configured language?
+- Do external tools such as the Ship Editor remain English-only (hard-coded/constant-driven user-facing strings)?
 
 ## Dev plan
 
@@ -308,11 +369,12 @@ Every test that constructs a screen needs the new singleton initialized.
   with today's date. When all amendments have been carried out, remove the "Amendments to previous
   spec docs" section from this document. Note: bundle a simple placeholder
   `languages/en-us.json` file as part of this stage to avoid failing tests.
-  This file will be properly filled in as part of stage 2.
+  This file will be properly filled in as part of stage 2. Add `language: str` to
+  GameConfig as part of this stage.
 2. Create the `resources/languages/en-us.json` file using values from
   all existing UI components. Add key constants as needed to `game_constants.py`.
   At this point, all UI elements in the game should display the raw key values
-  like `options.label_audio_options` instead of "Audio options", because the
+  like `options.audio_options` instead of "Audio options", because the
   code still references the constants directly for text. This is acceptable
   until stage 4 is completed.
 3. Implement the LanguageManager class. The `get_languages()` method should
