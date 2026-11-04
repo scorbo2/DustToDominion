@@ -69,7 +69,9 @@ a lower resolution.
 
 ### Title
 
-The game title "Dust to Dominion" should be displayed using a `Label` widget
+The game title - read from the language key `title_screen.title` via the
+`LanguageManager` (spec 16: Language support; "Dust to Dominion" in the
+shipped `en-us` resource) - is displayed using a `Label` widget
 (spec 10) placed in the upper half of the screen, with the following
 characteristics (amended 2026-10-11 per spec 10):
 
@@ -82,6 +84,11 @@ characteristics (amended 2026-10-11 per spec 10):
 - border width of 0
 
 Use the Title Screen's currently-configured font.
+
+*Amended 2026-11-03 per spec 16 (Language support): the title text was
+previously hard-coded to "Dust to Dominion" (constant
+`TITLE_SCREEN_TITLE_TEXT`). Driving it from a language key is
+deliberate - the name of the game itself is subject to translation.*
 
 *Note (2026-10-11, spec 10): the previous title-text caching implementation
 note (2026-10-07) has been removed. The initial Label widget does not cache
@@ -106,12 +113,18 @@ now live on the Options screen (spec 13), where their changes are persisted. The
 between options was reduced from 35px to 24px and the button border width from 4 to 2
 (both via the `game_constants.py` constants).*
 
-The Options button is labeled `OPTIONS_LABEL` and appears above the Exit Game button.
+The Options button is labeled from the language key `title_screen.options`
+(constant `OPTIONS_LABEL`, spec 13: New constants; amended 2026-11-03 per
+spec 16: Language support - the same key labels the Options screen's
+title Label, so the pair stays consistent across languages) and appears
+above the Exit Game button.
 When clicked, it triggers a screen transition to the Options screen (spec 13). Any
 playing music is stopped as part of that transition (see Integration with the main
 game loop).
 
-The Exit Game button has a callback that triggers a screen transition to exit the game.
+The Exit Game button is labeled from the language key `title_screen.exit`
+(constant `EXIT_GAME_LABEL`; amended 2026-11-03 per spec 16: Language
+support). It has a callback that triggers a screen transition to exit the game.
 
 All widgets use the Title Screen's currently-configured font.
 
@@ -234,6 +247,12 @@ New tests specifically for Title Screen behavior (these stay in this doc):
 - An "Exit Game" button is centered in the lower half of the screen.
 - Clicking the "Exit Game" button triggers a screen transition to exit the game.
 - Hitting ESC on the title screen is equivalent to clicking the Exit Game button.
+- Language-driven text (added 2026-11-03 per spec 16: Language support):
+  - the title Label's text is looked up from the `title_screen.title`
+    language key, and the two menu Buttons' texts from
+    `title_screen.options` and `title_screen.exit`, via
+    `LanguageManager.get_string` (falling back to the raw key when the
+    lookup misses, spec 16).
 
 ## Acceptance criteria
 
@@ -329,4 +348,23 @@ staged implementation plan is suggested (each stage should include tests):
        Follow-up the same day: the conversion policy was centralized as
        `ResourceLoader.get_converted_image` (spec 03 dev stage 9); the pins above now
        guard the behavior end-to-end.
+ 13. Amendment 2026-11-03 per spec 16 (Language support): the game title
+     and both menu button labels are no longer hard-coded English - the
+     Title Screen looks them up from the language keys
+     `title_screen.title`, `title_screen.options`, and
+     `title_screen.exit`. Doc amended and marked `proposed` 2026-11-03;
+     the code half is carried out under spec 16's dev plan (the keys
+     land in `languages/en-us.json` and `game_constants.py` in spec 16
+     stages 2, and the `get_string()` wiring in stage 4). Flip this
+     document back to `active`, and mark this stage complete, once that
+     code lands and the full suite passes.
+     **Completed 2026-11-04**: landed under spec 16 dev stage 4. The
+     title `Label` and both menu `Button`s now take their text from
+     `LanguageManager.get_string` on the keys above, falling back per
+     key to `en-us` and then to the raw key. Pinned by
+     `TestTitleScreenLanguageText` in `tests/test_title_screen.py`
+     (full-`en-us` resolved text, partial-`de-at` per-key fallback) and
+     by the full-game round trip in `tests/test_main.py` (the Title
+     screen built after a language change shows the new language). Doc
+     flipped back to `active`; full suite green at 1426 tests.
 

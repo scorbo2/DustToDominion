@@ -37,7 +37,15 @@ If the game requests a resolution that is not supported, the display mode is not
 and a log warning is issued. Successful programmatic mode switches also cause an immediate
 config save with the new mode/resolution/display. Config save failure is logged and the game continues.
 
-The window title is always the full name of the game ("Dust to Dominion").
+The title of the game window is read from the language key
+`main_window.caption` via the `LanguageManager` (spec 16: Language
+support) - "Dust to Dominion" when the `en-us` language resource is in
+effect. When the current language changes, the caption is updated via
+`pygame.display.set_caption(get_string("main_window.caption"))`; the
+update is best-effort and must not raise on failure (spec 16: Default
+language, implementation note).
+*Amended 2026-11-03 per spec 16 (Language support): the title was
+previously hard-coded to the full name of the game.*
 
 When the game exits, closing the main window shuts down all initialized pygame
 modules (not just the display) - the shutdown mirrors the full pygame
@@ -99,6 +107,11 @@ Unit tests should cover reading the configuration:
   - For example: `mainWindow` is present but does not specify `mode`: `InvalidConfigError`
 - closing the window should shut down all initialized pygame modules
   (not just the display)
+- window caption (amended 2026-11-03 per spec 16: Language support):
+  - opening the window sets the caption from the `main_window.caption`
+    language key (via `LanguageManager.get_string`).
+  - a successful language change updates the caption; a caption-update
+    failure is logged and never raises.
 
 From windowed mode:
 - programmatically triggering an `F11` should attempt a mode switch.
@@ -115,9 +128,30 @@ From fullscreen mode:
 
 ## Acceptance criteria
 
-- Starting the game with no `game.json` displays a non-resizable 1280x720 window with a title "Dust to Dominion".
+- Starting the game with no `game.json` displays a non-resizable 1280x720
+  window with the title read from the `main_window.caption` language key
+  ("Dust to Dominion" from the shipped `en-us` resource; amended
+  2026-11-03 per spec 16).
 - Hitting F11 at runtime on a display set to any of our supported resolutions should switch to fullscreen mode in that resolution.
 - Hitting F11 at runtime on a display set to some other resolution should attempt to enter fullscreen mode at 1920x1080 (default).
 - Hitting F11 in windowed mode when the current display supports none of our resolutions should be a no-op (with log warning)
 - Hitting F11 and triggering a successful mode switch should update `game.json` with the new setting.
+
+## Dev plan
+
+1. Amendment 2026-11-03 per spec 16 (Language support): the window title
+   is no longer hard-coded to the game's full name - it is read from the
+   `main_window.caption` language key, and refreshed whenever the current
+   language changes (best-effort, never raising). Doc amended and marked
+   `proposed`; the code half is carried out under spec 16's own dev plan
+   (key lands in spec 16 stage 2, caption wiring in spec 16 stage 4).
+   Flip this document back to `active` once that code lands and the full
+   suite passes.
+   **Completed 2026-11-04**: landed under spec 16 dev stage 4.
+   `MainWindow.open` resolves the caption from `main_window.caption`
+   through the `LanguageManager` (warning-logged, never raising - pinned
+   in `TestOpenCaption`), and the manager re-applies the caption on every
+   real language change (pinned in `TestWindowCaptionRefresh` and the
+   full-game round trip in `tests/test_main.py`). Doc flipped back to
+   `active`; full suite green at 1426 tests.
 

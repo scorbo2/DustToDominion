@@ -207,6 +207,49 @@ class TestUiConfig:
         assert game_config.load_game_config() == GameConfig()
 
 
+class TestLanguageConfig:
+    """The ``language`` key of game.json (spec 16: Configuration)."""
+
+    def test_with_missing_language_key_should_default_to_en_us(self) -> None:
+        # Spec 16: the default language is en-us; a missing key means the
+        # model default "en-us" is used.
+        assert GameConfig().language == "en-us"
+
+    def test_with_language_key_absent_from_written_file_should_default_to_en_us(
+        self, hermetic_persistence: Path
+    ) -> None:
+        # Spec 16: a written file without a language key still loads with
+        # the en-us default.
+        _write_game_json(hermetic_persistence, {"theme": "themes/blue.json"})
+        result = game_config.load_game_config()
+        assert result.language == "en-us"
+
+    def test_with_valid_language_value_should_parse_verbatim(
+        self, hermetic_persistence: Path
+    ) -> None:
+        # Spec 16: a configured language is read back verbatim.
+        _write_game_json(hermetic_persistence, {"language": "de-at"})
+        assert game_config.load_game_config().language == "de-at"
+
+    def test_with_blank_language_value_should_parse_as_blank(
+        self, hermetic_persistence: Path
+    ) -> None:
+        # Spec 16: the model keeps the raw value; the blank-to-en-us
+        # normalization is the LanguageManager's job (spec 16: Validating
+        # language codes), not the config model's - same consumer-side
+        # pattern as the blank theme/font values in TestUiConfig.
+        _write_game_json(hermetic_persistence, {"language": "   "})
+        assert game_config.load_game_config().language == "   "
+
+    def test_with_non_string_language_value_should_return_defaults(
+        self, hermetic_persistence: Path
+    ) -> None:
+        # Spec 01: a non-string fails validation and becomes a warning
+        # plus whole-config defaults.
+        _write_game_json(hermetic_persistence, {"language": 42})
+        assert game_config.load_game_config() == GameConfig()
+
+
 class TestAudioConfig:
     """The ``audio`` section of game.json (spec 05: Configuration)."""
 

@@ -10,8 +10,11 @@ Startup order per spec 03 as amended by specs 04, 05, and 13:
    fatal).
 5. Initialize the AudioManager (spec 05, amending spec 03 step 5): sets
    the mixer channel budget and applies the persisted audio settings.
-6. Initialize and display the main window (spec 03 step 6 / spec 02).
-7. Create the startup screen through the transition dispatch table
+6. Initialize the LanguageManager (spec 16, amending spec 03 step 5):
+   validates the configured language against the loaded language
+   resources and gates every user-facing string from here on.
+7. Initialize and display the main window (spec 03 step 6 / spec 02).
+8. Create the startup screen through the transition dispatch table
    (spec 08, as amended by spec 13) and enter the loop. The screen's
    ``Theme`` is built fresh from the latest config by the factory -
    no longer once up front (spec 04, as amended by spec 13).
@@ -36,7 +39,7 @@ from typing import Final
 import pygame
 from loguru import logger
 
-from dtd import audio, game_config, persistence
+from dtd import audio, game_config, language, persistence
 from dtd.errors import ResourceError
 from dtd.game_config import GameConfig
 from dtd.main_window import MainWindow
@@ -87,6 +90,14 @@ def run() -> int:
     # applies the persisted audio settings; a missing/null audio section means
     # defaults (spec 05).
     audio.init_audio_manager(resource_loader, config.audio)
+
+    # Spec 16 (amending spec 03 step 5): LanguageManager initialization
+    # right after the AudioManager and before the window opens. Needs the
+    # loaded resources (the languages/ listing) and the config's language
+    # value; an unrecognized configured language warns and reverts to the
+    # default rather than aborting startup (spec 16: Validating language
+    # codes). Everything from here on can look up strings.
+    language.init_language_manager(resource_loader, config.language)
 
     # Spec 03 step 6: main window initialization and display.
     window = MainWindow()

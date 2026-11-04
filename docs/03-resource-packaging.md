@@ -31,7 +31,12 @@ be executed before the resource loader is invoked. So, the game's startup order 
 3. ResourceLoader is invoked.
 4. UI/Theme initialization is invoked (see `04-ui-widgets.md`)
 5. AudioManager is initialized (see `05-audio-manager.md`)
-6. Main window initialization and display (assuming previous steps did not stop on error).
+6. LanguageManager is initialized (see `16-language-support.md`):
+   `init_language_manager(resource_loader, config.language)`. (Added
+   2026-11-03 per spec 16: Language support; the LanguageManager needs
+   the loaded resources and the config's language value, and everything
+   after it may look up strings.)
+7. Main window initialization and display (assuming previous steps did not stop on error).
 
 ### Resource types and formats
 
@@ -190,9 +195,11 @@ The resource loader exposes functions to retrieve specific resource types:
 - `get_font_resource(id, size)` - returns a `pygame.font.Font` object containing the named font at the specified point size (clamped to `max(size,1)`). Note that the loader should cache the raw font bytes, and create a Font object as this function is invoked (similar to music handling). The resource loader should cache generated Font objects so that client code that repeatedly requests the same Font at the same size multiple times is served a cached copy for every request after the first. The cache can be unbounded.
 - `get_theme_resource_ids()` - returns a list of all theme resource ids: every loaded resource whose id begins with `themes/` and ends in `.json`. The search is recursive: both `themes/blue.json` and `themes/long/path/matrix.json` are found. The list is sorted alphabetically by full resource id (casefold). A sentinel display value `(Default theme)` is always added as the first item, so the returned list is never empty. The sentinel display value lives in `game_constants.py` and must not be hard-coded. (Added 2026-10-06 per spec 08: Title Screen.)
 - `get_font_resource_ids()` - returns a list of all font resource ids: every loaded resource whose id begins with `fonts/` and ends in `.ttf`. The search is recursive: both `fonts/iceland.ttf` and `fonts/long/path/sahara.ttf` are found. Sorted and sentinel rules are identical to `get_theme_resource_ids()`, except the sentinel display value is `(Default font)`, also living in `game_constants.py`. (Added 2026-10-06 per spec 08: Title Screen.)
+- `get_language_resource_ids()` - returns a list of all language resource ids: every loaded resource whose id begins with `languages/` and ends in `.json`. Unlike the theme and font listers, this search is NOT recursive: if both `languages/fr-ca.json` and `languages/long/path/fr-ca.json` are loaded, only the non-nested one is returned. The list is sorted alphabetically by full resource id (casefold). There is NO leading sentinel value - the shipped game always lists at least `languages/en-us.json`, because it is a required resource (see Required resources below). Filenames must be all lowercase: ids whose filename contains any uppercase characters (`languages/EN-US.json`, `languages/En-us.json`) are silently rejected from the listing, just like nested-subdirectory files. (`languages/en-us.Json` never even becomes a resource: extension matching is case-sensitive, see Resource types and formats.) The country/region filename format is encouraged but not enforced - `languages/hello_there_my_darling.json` is a perfectly valid language resource and is listed as such. (Added 2026-11-03 per spec 16: Language support; consumed by the `LanguageManager`, spec 16.)
 
-These two id-listing accessors exist so future screens can offer the player a chooser of
-available fonts and themes without knowing what resources the user has installed.
+These id-listing accessors exist so future screens can offer the player a chooser of
+available fonts, themes, and languages without knowing what resources the user has
+installed.
 
 Each of these functions requires a unique ID to be specified. Return `None` if the given
 ID is not present, or if the given ID identifies a resource of the wrong type (example:
@@ -277,6 +284,7 @@ can modify this list via a spec doc amendment.
 
 Current list:
 - The value of `UI_DEFAULT_FONT` from `game_constants.py`: core game font; used throughout the UI
+- The value of `UI_DEFAULT_LANGUAGE` from `game_constants.py`: the default (`en-us`) language resource; the fallback lookup table for every language key (added 2026-11-03 per spec 16: Language support)
 
 The master list lives in `game_constants.py` as `REQUIRED_RESOURCE_IDS: frozenset[str]`,
 defaulting to a frozenset made up of all items in the list above. Tests can exercise the
@@ -537,6 +545,15 @@ Notes for font validation:
     (recursive), sorted by full id (casefold), with the sentinel first.
   - `get_font_resource_ids` returns all resources whose ids begin with `fonts/` and end in `.ttf`
     (recursive), sorted by full id (casefold), with the sentinel first.
+- Language id accessor (added 2026-11-03 per spec 16: Language support):
+  - `get_language_resource_ids` returns all resources whose ids begin with `languages/`
+    and end in `.json`, NON-recursively (a nested id such as `languages/long/path/fr-ca.json`
+    is excluded even though it is a loaded resource), sorted by full id (casefold), with
+    no sentinel (an empty list is a valid result for a synthesized loader that carries no
+    language resources).
+  - ids whose filename contains uppercase characters (examples: `languages/de-AT.json`,
+    `languages/EN-US.json`) are silently excluded.
+  - non-`.json` files under `languages/` are excluded.
 - A required resource is not present on startup: the game should NOT start up, and should exit with an error (`MissingRequiredResourceError`).
 - If no resources at all are present, `NoResourcesFoundError` is raised instead of `MissingRequiredResourceError`.
 - A required resource that is not present in `resources/` but which is present in a named `.pak` file does not cause an error.
@@ -645,4 +662,25 @@ The spec is too large to implement all at once. The following staged dev plan is
    returns the raw surface uncached. One new pin in `tests/test_resource_loader.py`
    (`TestConvertedImages`, poison `pygame.Surface` subclass whose `convert` raises).
    **Completed 2026-10-28** (all 1332 tests pass)
+12. Amendment 2026-11-03 per spec 16 (Language support): add
+    `get_language_resource_ids()` to the consumer API (non-recursive,
+    lowercase filenames only, no sentinel), insert `LanguageManager`
+    initialization (`init_language_manager(resource_loader,
+    config.language)`) into the startup order after the AudioManager,
+    and add `UI_DEFAULT_LANGUAGE` to the required-resources master list.
+    Doc amended 2026-11-03, and the required-resources half landed the
+    same day (`game_constants.UI_DEFAULT_LANGUAGE`, the master-list
+    entry, the pin-test update, and a bundled placeholder
+    `resources/languages/en-us.json` - properly filled in later via
+    spec 16 stage 2). The id lister and the startup insertion land with
+    the `LanguageManager` implementation (spec 16 dev stages 3-4), and
+    their tests (see Testing above) land with them. Flip this document
+    back to `active` at that point, if the full suite passes.
+    **Completed 2026-11-03** (spec 16 stage 3): `get_language_resource_ids()`
+    (non-recursive, lowercase-filenames-only, no sentinel -
+    `ResourceLoader`, pinned in `TestLanguageIdListing`), the
+    `init_language_manager(resource_loader, config.language)` startup
+    insertion after the AudioManager in `dtd/main.py`, and the full
+    language test suite (`tests/test_language.py`) all landed; doc
+    flipped back to `active` with the full suite green at 1411 tests.
 

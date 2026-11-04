@@ -11,6 +11,7 @@ from loguru import logger
 from dtd import audio
 from dtd import game_config
 from dtd import game_constants
+from dtd import language
 from dtd import main as app_main
 from dtd import resource_loader
 from dtd.errors import (
@@ -499,6 +500,128 @@ class TestRun:
             == "themes/blue.json"
         )
 
+    def test_when_optionsScreenChangesLanguage_shouldBuildNextTitleScreenInThatLanguageAndPersistIt(
+        self,
+        bootstrapped_persistence: Path,
+        synthesized_project: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        # GIVEN language resources in the synthesized project: de-at
+        # translates the title and the caption but NOTHING else, so the
+        # per-key en-us fallback gets exercised end to end (spec 16:
+        # partial language fallback):
+        languages_dir = synthesized_project / "resources/languages"
+        languages_dir.mkdir(parents=True, exist_ok=True)
+        (languages_dir / "en-us.json").write_text(
+            json.dumps(
+                {
+                    "main_window": {"caption": "Dust to Dominion"},
+                    "title_screen": {
+                        "title": "Dust to Dominion",
+                        "options": "Options",
+                        "exit": "Exit Game",
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+        (languages_dir / "de-at.json").write_text(
+            json.dumps(
+                {
+                    "main_window": {"caption": "Staub zu Herrschaft"},
+                    "title_screen": {"title": "Staub zu Herrschaft"},
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        # GIVEN spies that capture every TitleScreen instance the loop
+        # builds, and screen subclasses driving one round trip,
+        created_titles: list[app_main.TitleScreen] = []
+        created_screens: list[str] = []
+        real_title_screen = app_main.TitleScreen
+        real_options_screen = app_main.OptionsScreen
+        title_handle_calls = 0
+        options_handle_calls = 0
+
+        class TransitioningTitleScreen(real_title_screen):
+            def __init__(self, *args, **kwargs):
+                super().__init__(*args, **kwargs)
+                created_titles.append(self)
+                created_screens.append("title")
+
+            def handle(self, events):
+                nonlocal title_handle_calls
+                title_handle_calls += 1
+                if title_handle_calls == 1:
+                    return ScreenAction.SHOW_OPTIONS_SCREEN
+                return super().handle(events)
+
+        class TransitioningOptionsScreen(real_options_screen):
+            def __init__(self, *args, **kwargs):
+                super().__init__(*args, **kwargs)
+                created_screens.append("options")
+
+            def handle(self, events):
+                nonlocal options_handle_calls
+                options_handle_calls += 1
+                if options_handle_calls == 1:
+                    # Stand in for a language ChoiceList selection: the
+                    # real callback goes through the singleton run()
+                    # initialized, which validates and persists through
+                    # this very call (spec 13, as amended by spec 16).
+                    language.get_language_manager().set_current_language("de-at")
+                    return ScreenAction.SHOW_TITLE_SCREEN
+                return super().handle(events)
+
+        monkeypatch.setattr(app_main, "TitleScreen", TransitioningTitleScreen)
+        monkeypatch.setattr(app_main, "OptionsScreen", TransitioningOptionsScreen)
+
+        # AND a QUIT event posted on the third pump, after the round
+        # trip has completed; the window caption is observed there - the
+        # language change happened on the second pump, and the caption
+        # refresh is immediate, unlike the widget text (spec 02, as
+        # amended by spec 16):
+        observed_caption: dict[str, str] = {}
+        pump_count = 0
+        real_event_get = pygame.event.get
+
+        def event_get(*args, **kwargs):
+            nonlocal pump_count
+            pump_count += 1
+            if pump_count == 3:
+                observed_caption["value"] = pygame.display.get_caption()[0]
+                pygame.event.post(pygame.event.Event(pygame.QUIT))
+            return real_event_get(*args, **kwargs)
+
+        monkeypatch.setattr(pygame.event, "get", event_get)
+
+        # WHEN run() executes,
+        exit_code = app_main.run()
+
+        # THEN the round trip happened,
+        assert exit_code == 0
+        assert created_screens == ["title", "options", "title"]
+        # ...the startup Title screen shows the default language's
+        # RESOLVED text - no raw key names on screen (spec 16 stage 4),
+        assert created_titles[0]._title.text == "Dust to Dominion"
+        assert created_titles[0]._ui.widgets[0].text == "Options"
+        # ...the Title screen built AFTER the change shows the de-at
+        # title, while keys de-at never translated fall back to their
+        # en-us text (spec 16: Testing - the change takes effect on the
+        # next screen transition),
+        assert created_titles[1]._title.text == "Staub zu Herrschaft"
+        assert created_titles[1]._ui.widgets[0].text == "Options"
+        # ...the window caption already carries the de-at text (the
+        # best-effort refresh rode the language change itself),
+        assert observed_caption["value"] == "Staub zu Herrschaft"
+        # ...and the choice is on disk for the next game start (spec 16:
+        # Testing - persists across game restarts):
+        payload = json.loads(
+            (bootstrapped_persistence / "game.json").read_text(encoding="utf-8")
+        )
+        assert payload["language"] == "de-at"
+
     def test_when_screenRequestsUndispatchedAction_shouldLogErrorAndKeepRenderingFrames(
         self,
         bootstrapped_persistence: Path,
@@ -856,8 +979,8 @@ class TestStartupFailures:
         # Spec 03 (stage 8): a required resource id that does not resolve
         # aborts startup with MissingRequiredResourceError (exit code 1).
         # The synthesized tree carries a text file and a theme but no
-        # font, so the shipped master list (the UI default font) cannot
-        # resolve - with the REAL loader, no load() stubbing.
+        # font, so the master list pinned here (the UI default font)
+        # cannot resolve - with the REAL loader, no load() stubbing.
         game_constants.REQUIRED_RESOURCE_IDS = frozenset(
             {game_constants.UI_DEFAULT_FONT}
         )

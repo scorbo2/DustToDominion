@@ -12,7 +12,11 @@ from typing import Final
 SIM_STEP = 1 / 60
 
 # --- Window handling (spec 02) -------------------------------------------
-WINDOW_TITLE = "Dust to Dominion"
+#: Language key for the game window's caption (spec 02: Window title, as
+#: amended by spec 16: Language support). The value lives in
+#: ``languages/en-us.json`` as ``main_window.caption``; the caption is
+#: resolved through ``LanguageManager.get_string`` (spec 16).
+WINDOW_TITLE = "main_window.caption"
 WINDOWED_WIDTH = 1280
 WINDOWED_HEIGHT = 720
 #: The only resolutions the game supports in fullscreen mode (spec 02).
@@ -72,6 +76,19 @@ DESIGN_H = 1080
 #: Step 2 of the spec 04 Font determination chain: the font used by all
 #: widgets unless a valid font is explicitly configured.
 UI_DEFAULT_FONT = "fonts/Audiowide-Regular.ttf"
+#: The default language resource id (spec 04: Core UI Resources, added by
+#: spec 16: Language support). Doubles as the required language resource
+#: (spec 03: Required resources) and as the fallback lookup table for
+#: every key missing from a non-default language (spec 16: LanguageManager).
+UI_DEFAULT_LANGUAGE = "languages/en-us.json"
+#: The config value - and stripped resource filename - of the default
+#: language (spec 16: Default language): the silent config default, the
+#: revert target for unrecognized codes, and the code of the fallback
+#: lookup table. Kept as a literal because the config model uses it as a
+#: plain field default; ``tests/test_language_resources.py`` pins that it
+#: stays consistent with ``UI_DEFAULT_LANGUAGE`` - if either drifts, the
+#: pin fires instead of the fallback chain silently missing its table.
+DEFAULT_LANGUAGE_CODE = "en-us"
 #: Sound effect for widgets that support mouse hover, played through
 #: ``AudioManager.play_ui_sfx`` (spec 04: Core UI Resources).
 UI_SFX_HOVER = "audio/ui/hover.ogg"
@@ -97,8 +114,11 @@ TITLE_SCREEN_BACKGROUND_IMAGE_IDS = (
     "graphics/screens/title_screen.jpg",
     "graphics/screens/title_screen.jpeg",
 )
-#: The game title shown on the Title Screen (spec 08: Title).
-TITLE_SCREEN_TITLE_TEXT = "Dust to Dominion"
+#: Language key for the game title shown on the Title Screen (spec 08:
+#: Title, as amended by spec 16: Language support) - the name of the game
+#: itself is subject to translation, so it lives in the language
+#: resources, not in code.
+TITLE_SCREEN_TITLE_TEXT = "title_screen.title"
 #: Title font size in points, in design space (spec 08: Title) - like every
 #: other design-space value, it scales with the window scale factor.
 TITLE_SCREEN_TITLE_FONT_PT = 80
@@ -135,32 +155,44 @@ OPTIONS_SCREEN_TEST_UI_SFX = "audio/sfx/test_ui_sfx.wav"
 #: Sample speech clip played while adjusting the speech volume slider
 #: (spec 13: Interactions and persistence).
 OPTIONS_SCREEN_TEST_SPEECH = "audio/sfx/test_speech.wav"
-#: Label of the Title Screen's Options button (spec 08: Buttons and options,
-#: added by spec 13). Clicking it transitions to the Options screen; it also
-#: labels the Options screen's title Label (spec 13: Exit control and title).
-OPTIONS_LABEL = "Options"
-#: Label of the Options screen's "< Back" button (spec 13: Exit control and
-#: title). Clicking it - or pressing ESC on the Options screen - transitions
-#: back to the Title screen.
-OPTIONS_LABEL_BACK = "< Back"
-#: Label of the Options screen's "Audio options" section title (spec 13:
+#: Language keys for every Button/Label/Checkbox text on the game's
+#: screens (spec 13: New constants, as amended by spec 16: Language
+#: support - these were display strings until 2026-11-03; the values
+#: moved to ``languages/en-us.json``). The calling screen resolves each
+#: key to display text via ``LanguageManager.get_string`` ("Caller
+#: decides", spec 16) - the Widget itself never knows where its text
+#: came from.
+#:
+#: Language key for the Title Screen's Options button (spec 08: Buttons
+#: and options, added by spec 13). Clicking it transitions to the
+#: Options screen; the same key also labels the Options screen's title
+#: Label (spec 13: Exit control and title), so the pair stays consistent
+#: across languages.
+OPTIONS_LABEL = "title_screen.options"
+#: Language key for the Options screen's Back button (spec 13: Exit
+#: control and title). Clicking it - or pressing ESC on the Options
+#: screen - transitions back to the Title screen.
+OPTIONS_LABEL_BACK = "options.back"
+#: Language key for the Options screen's audio section title (spec 13:
 #: UI controls - group 1).
-OPTIONS_LABEL_AUDIO_OPTIONS = "Audio options"
-#: Label of every Options screen volume Slider (spec 13: UI controls -
-#: group 1).
-OPTIONS_LABEL_VOLUME = "Volume:"
-#: Checkbox labels for the four audio categories (spec 13: UI controls -
-#: group 1). Each Checkbox drives the matching AudioManager enabled flag.
-OPTIONS_LABEL_GAME_SFX_ENABLED = "Game sound effects enabled"
-OPTIONS_LABEL_UI_SFX_ENABLED = "UI sound effects enabled"
-OPTIONS_LABEL_SPEECH_ENABLED = "Speech enabled"
-OPTIONS_LABEL_MUSIC_ENABLED = "Music enabled"
-#: Label of the Options screen's "UI options" section title (spec 13:
+OPTIONS_LABEL_AUDIO_OPTIONS = "options.audio_options"
+#: Language key for every Options screen volume Slider (spec 13: UI
+#: controls - group 1).
+OPTIONS_LABEL_VOLUME = "options.volume"
+#: Language keys for the four audio-category Checkboxes (spec 13: UI
+#: controls - group 1). Each Checkbox drives the matching AudioManager
+#: enabled flag.
+OPTIONS_LABEL_GAME_SFX_ENABLED = "options.game_sfx_enabled"
+OPTIONS_LABEL_UI_SFX_ENABLED = "options.ui_sfx_enabled"
+OPTIONS_LABEL_SPEECH_ENABLED = "options.speech_enabled"
+OPTIONS_LABEL_MUSIC_ENABLED = "options.music_enabled"
+#: Language key for the Options screen's UI section title (spec 13:
 #: UI controls - group 2).
-OPTIONS_LABEL_UI_OPTIONS = "UI options"
-#: Label of the Title Screen's Exit Game button (spec 08: Buttons and
-#: options). ESC on the Title Screen is equivalent to clicking it.
-EXIT_GAME_LABEL = "Exit Game"
+OPTIONS_LABEL_UI_OPTIONS = "options.ui_options"
+#: Language key for the Title Screen's Exit Game button (spec 08:
+#: Buttons and options, as amended by spec 16). ESC on the Title Screen
+#: is equivalent to clicking it.
+EXIT_GAME_LABEL = "title_screen.exit"
 #: Menu option geometry in design space (spec 08: Buttons and options):
 #: each option's size, its border width, and the empty space between
 #: options in the single centered vertical column.
@@ -241,14 +273,23 @@ THEME_RESOURCE_ID_PREFIX = "themes/"
 #: starts with this prefix is offered by ``get_font_resource_ids`` as an
 #: available font.
 FONT_RESOURCE_ID_PREFIX = "fonts/"
+#: By convention (spec 03, added by spec 16), a JSON resource whose ID
+#: starts with this prefix is offered by ``get_language_resource_ids``
+#: as an available language. The listing under this prefix is
+#: NON-recursive and lowercase-filenames-only (spec 03: Consumer API).
+LANGUAGE_RESOURCE_ID_PREFIX = "languages/"
 #: The master list of resource ids that must resolve at startup
 #: (spec 03: Required resources). Spec 03 owns this list; future spec docs
 #: amend it via spec doc amendment, never by editing this constant ad hoc.
 #: The UI default font is the first entry: the entire spec 04 font
 #: determination chain bottoms out here, so a build without it ships
-#: broken. The resource loader reads this constant as a module attribute
-#: at call time so tests can swap it (spec 03: implementation note).
-REQUIRED_RESOURCE_IDS: frozenset[str] = frozenset({UI_DEFAULT_FONT})
+#: broken. The default language resource joined the list on 2026-11-03
+#: per spec 16: every language lookup bottoms out there. The resource
+#: loader reads this constant as a module attribute at call time so tests
+#: can swap it (spec 03: implementation note).
+REQUIRED_RESOURCE_IDS: frozenset[str] = frozenset(
+    {UI_DEFAULT_FONT, UI_DEFAULT_LANGUAGE}
+)
 #: TrueType magic number: the first 4 bytes of every ``.ttf`` file (spec 03:
 #: Notes for font validation). A font that does not begin with these bytes
 #: is rejected. This header check is the ENTIRE font validation - pygame's

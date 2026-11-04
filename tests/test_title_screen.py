@@ -19,6 +19,7 @@ import pytest
 
 from dtd import game_constants
 from dtd import audio
+from dtd import language
 from dtd.resource_loader import ResourceLoader
 from dtd.screens import starfield
 from dtd.screens.base import Screen, ScreenAction
@@ -40,6 +41,17 @@ def _audio_singleton(silent_audio_manager: audio.AudioManager) -> None:
     (spec 08, as amended by spec 13)."""
 
 
+@pytest.fixture(autouse=True)
+def _language_singleton(silent_language_manager: language.LanguageManager) -> None:
+    """Mirror the startup precondition: the real game initializes the
+    LanguageManager before any screen exists (spec 03 startup order,
+    step 6, as amended by spec 16), and this screen resolves every
+    display text through it (spec 16: Caller decides). The silent
+    manager resolves nothing, so ``get_string`` answers with the raw
+    key - which is exactly what the shipped constants hold, keeping
+    the label assertions below honest about the wiring."""
+
+
 def _default_theme() -> Theme:
     """A built-in-default Theme over an unloaded loader (spec 04)."""
     return Theme("", "", ResourceLoader())
@@ -57,6 +69,21 @@ class _StubImageLoader(ResourceLoader):
     def get_image_resource(self, resource_id: str) -> pygame.Surface | None:
         self.requested_ids.append(resource_id)
         return self._images.get(resource_id)
+
+
+class _StubLanguageLoader:
+    """A loader serving fixed language documents (spec 16), for tests
+    that assert RESOLVED text rather than raw keys. Implements only what
+    LanguageManager touches; the screen's own loader stays separate."""
+
+    def __init__(self, documents: dict[str, dict]) -> None:
+        self._documents = documents
+
+    def get_json_resource(self, resource_id: str) -> dict | None:
+        return self._documents.get(resource_id)
+
+    def get_language_resource_ids(self) -> list[str]:
+        return sorted(self._documents)
 
 
 def _expected_option_rect(index: int, option_count: int = 2) -> pygame.Rect:
@@ -514,6 +541,67 @@ class TestTitleScreenOptionsButton:
 
         # THEN no transition is requested:
         assert screen.handle([]) is None
+
+
+class TestTitleScreenLanguageText:
+    """All screen text is resolved through the LanguageManager at
+    construction (spec 16: Default language / Caller decides) - after
+    the spec 16 stage 4 migration the screen shows real display text
+    again, not the raw key names."""
+
+    _EN_US_DOCUMENT = {
+        "title_screen": {
+            "title": "Dust to Dominion",
+            "options": "Options",
+            "exit": "Exit Game",
+        }
+    }
+    _PARTIAL_DE_AT_DOCUMENT = {"title_screen": {"title": "Staub zu Herrschaft"}}
+
+    def test_constructor_withFullEnUsDocuments_shouldLabelEveryWidgetWithResolvedText(
+        self, font_ready: None
+    ) -> None:
+        # GIVEN a language manager resolving every key the screen uses:
+        language.init_language_manager(
+            _StubLanguageLoader({"languages/en-us.json": self._EN_US_DOCUMENT}),
+            "en-us",
+        )
+
+        # WHEN the screen is constructed,
+        screen = TitleScreen(_default_theme(), _StubImageLoader({}), rng=random.Random(1))
+
+        # THEN the title and both Buttons carry the RESOLVED values, not
+        # the dotted keys the constants hold (spec 16: Acceptance
+        # criteria - existing widgets are provided text from the current
+        # language file):
+        assert screen._title.text == "Dust to Dominion"
+        assert screen._ui.widgets[0].text == "Options"
+        assert screen._ui.widgets[1].text == "Exit Game"
+
+    def test_constructor_withPartialDeAtDocuments_shouldFallBackPerKeyToEnUs(
+        self, font_ready: None
+    ) -> None:
+        # GIVEN a de-at manager whose document translates ONLY the title
+        # (and, of course, the en-us fallback table):
+        language.init_language_manager(
+            _StubLanguageLoader(
+                {
+                    "languages/en-us.json": self._EN_US_DOCUMENT,
+                    "languages/de-at.json": self._PARTIAL_DE_AT_DOCUMENT,
+                }
+            ),
+            "de-at",
+        )
+
+        # WHEN the screen is constructed,
+        screen = TitleScreen(_default_theme(), _StubImageLoader({}), rng=random.Random(1))
+
+        # THEN the translated key answers in German while the untranslated
+        # keys fall through to en-us - per key, not all-or-nothing
+        # (spec 16: Acceptance criteria - partial language fallback):
+        assert screen._title.text == "Staub zu Herrschaft"
+        assert screen._ui.widgets[0].text == "Options"
+        assert screen._ui.widgets[1].text == "Exit Game"
 
 
 class TestTitleScreenAudio:

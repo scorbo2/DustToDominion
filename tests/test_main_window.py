@@ -6,22 +6,44 @@ spec 02's scenarios are about. The dummy driver also clamps fullscreen
 window sizes to its own desktop size, so size/flags assertions go through a
 recording spy that wraps the REAL set_mode (the driver is still called for
 real; the spy only records the request).
+
+The caption is a language key lookup (spec 02, as amended by spec 16), so
+the caption pins drive ``open()`` over a language manager with a known
+document - and pin that a missing manager only ever costs a warning.
 """
 from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Callable
+from typing import Any, Callable
 
 import pygame
 import pytest
+from loguru import logger
 
-from dtd import config, game_config, game_constants
+from dtd import config, game_config, game_constants, language
 from dtd.errors import InvalidConfigError
 from dtd.game_config import GameConfig
 from dtd.main_window import MainWindow, MainWindowConfig
 
 ModeOk = Callable[..., int]
+
+
+class _CaptionStubLoader:
+    """A loader whose only document is a ``main_window.caption`` (spec 02,
+    as amended by spec 16): just enough for ``LanguageManager`` to resolve
+    the caption key, with no filesystem and no pygame resource decoding."""
+
+    def __init__(self, caption: str) -> None:
+        self._document = {"main_window": {"caption": caption}}
+
+    def get_json_resource(self, resource_id: str) -> Any | None:
+        if resource_id == "languages/en-us.json":
+            return self._document
+        return None
+
+    def get_language_resource_ids(self) -> list[str]:
+        return ["languages/en-us.json"]
 
 
 class _DisplaySpy:
@@ -195,8 +217,9 @@ class TestOpen:
     def test_with_no_config_should_display_default_windowed_1280x720(
         self, display_spy: _DisplaySpy, window: MainWindow, hermetic_persistence: Path
     ) -> None:
-        # get_caption returns (caption, icon_caption) in pygame-ce.
-        assert pygame.display.get_caption()[0] == game_constants.WINDOW_TITLE
+        # The caption is a language-key lookup and is pinned separately
+        # (TestOpenCaption, spec 02 as amended by spec 16); this test is
+        # about mode, geometry, and the no-persist-on-startup rule.
         assert not pygame.display.is_fullscreen()
         assert display_spy.last_request == _windowed_request()
         # Startup never persists config; only mode switches do (spec 02).
@@ -234,6 +257,53 @@ class TestOpen:
             # The startup fallback must NOT be persisted (spec 02).
             assert _read_saved_main_window(hermetic_persistence) is None
         finally:
+            handle.close()
+
+
+class TestOpenCaption:
+    """The window caption is a language key, not a hard-coded string
+    (spec 02: Window title, as amended by spec 16: Language support)."""
+
+    def test_open_withLanguageManager_shouldSetCaptionFromTheMainWindowCaptionKey(
+        self, display_spy: _DisplaySpy
+    ) -> None:
+        # GIVEN a language manager that resolves main_window.caption:
+        language.init_language_manager(_CaptionStubLoader("Dust to Dominion"))
+
+        # WHEN the window opens,
+        handle = MainWindow()
+        handle.open()
+        try:
+            # THEN the caption is the RESOLVED text, not the raw key
+            # standing in on screen (spec 16 stage 4: UI shows real
+            # text again):
+            assert pygame.display.get_caption()[0] == "Dust to Dominion"
+        finally:
+            handle.close()
+
+    def test_open_withUninitializedLanguageManager_shouldWarnAndStillOpen(
+        self, display_spy: _DisplaySpy
+    ) -> None:
+        # GIVEN no language singleton anywhere (autouse reset; startup
+        # ordering is main.run()'s job, pinned in test_main.py),
+        records: list[str] = []
+        sink_id = logger.add(
+            lambda message: records.append(str(message)), level="WARNING"
+        )
+        handle = MainWindow()
+
+        try:
+            # WHEN the window opens, THEN it must NOT raise: the caption
+            # update is best-effort (spec 16: "should not raise on
+            # failure")...
+            handle.open()
+            # ...the window really opened...
+            assert display_spy.last_request == _windowed_request()
+            assert not pygame.display.is_fullscreen()
+            # ...and the failure is visible in the log.
+            assert any("caption" in record for record in records)
+        finally:
+            logger.remove(sink_id)
             handle.close()
 
 

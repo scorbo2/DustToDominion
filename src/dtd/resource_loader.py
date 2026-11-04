@@ -297,6 +297,32 @@ class ResourceLoader:
             game_constants.DEFAULT_FONT_DISPLAY_VALUE,
         )
 
+    def get_language_resource_ids(self) -> list[str]:
+        """All available language resource ids (spec 03, added by
+        spec 16: Language support).
+
+        Every loaded JSON resource directly under ``languages/`` -
+        NON-recursively, so ``languages/long/path/fr-ca.json`` is not a
+        language - sorted alphabetically by full id (casefold). Unlike
+        the theme and font listers there is NO leading sentinel value:
+        the shipped game always lists at least ``languages/en-us.json``
+        because it is a required resource (spec 03: Required resources),
+        and ``LanguageManager.get_languages`` guarantees the default
+        regardless (spec 16). Ids whose filename contains any uppercase
+        character (``languages/DE-at.json``) are silently rejected:
+        language codes are lowercase by convention (spec 16). The
+        filename check also re-verifies non-recursiveness rather than
+        trusting key insertion order.
+        """
+        return sorted(
+            (
+                resource_id
+                for resource_id in self._store.json_resources
+                if _is_listable_language_id(resource_id)
+            ),
+            key=str.casefold,
+        )
+
     # ------------------------------------------------------------------ #
     # flat ordered search path (spec 03: Resource scanning)
     # ------------------------------------------------------------------ #
@@ -500,6 +526,26 @@ def _ids_with_leading_sentinel(
         if resource_id.startswith(prefix) and resource_id.endswith(suffixes)
     ]
     return [sentinel, *sorted(matching, key=str.casefold)]
+
+
+def _is_listable_language_id(resource_id: str) -> bool:
+    """Whether a loaded resource id is listable as a language (spec 03,
+    added by spec 16): under the ``languages/`` prefix with exactly one
+    path segment after it, ending in a Json extension, with an
+    all-lowercase filename. Extension matching is case-sensitive like
+    every other resource type (``.Json`` never loaded in the first
+    place), and uppercase filenames never become languages.
+    """
+    remainder = resource_id.removeprefix(game_constants.LANGUAGE_RESOURCE_ID_PREFIX)
+    if remainder == resource_id:
+        # No prefix at all (removeprefix changed nothing).
+        return False
+    if not remainder or "/" in remainder:
+        # Empty remainder, or a nested path: not a language.
+        return False
+    if not remainder.endswith(game_constants.JSON_RESOURCE_EXTENSIONS):
+        return False
+    return remainder == remainder.lower()
 
 
 # ---------------------------------------------------------------------- #

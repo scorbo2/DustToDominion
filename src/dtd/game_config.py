@@ -18,6 +18,7 @@ from dtd import config, persistence
 from dtd.errors import ConfigError
 from dtd.game_constants import (
     DEFAULT_FONT_VALUE,
+    DEFAULT_LANGUAGE_CODE,
     DEFAULT_THEME_VALUE,
     VOLUME_MAX_PERCENT,
     VOLUME_MIN_PERCENT,
@@ -94,8 +95,9 @@ class GameConfig(BaseModel):
 
     Each spec that adds a config section adds a field here (spec 02 added
     ``mainWindow``, spec 03 added ``resources``, spec 04 added ``theme``
-    and ``font``, spec 05 added ``audio``). extra='forbid' keeps typos loud
-    (spec 01: unexpected properties are always an error).
+    and ``font``, spec 05 added ``audio``, spec 16 added ``language``).
+    extra='forbid' keeps typos loud (spec 01: unexpected properties are
+    always an error).
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -114,6 +116,15 @@ class GameConfig(BaseModel):
     # which load_game_config turns into a warning plus defaults (spec 01).
     theme: str = ""
     font: str = ""
+    # Spec 16: UI language - the stripped filename of a language resource
+    # (for example "en-us"), never a resource id. A missing key gets the
+    # silent default "en-us"; blank or unrecognized values are resolved by
+    # the LanguageManager at startup and by set_current_language() at
+    # runtime (spec 16: Validating language codes) - the same
+    # consume-time normalization the theme/font values above get from
+    # Theme. Never fatal: a non-string fails validation and becomes a
+    # warning plus whole-config defaults (spec 01).
+    language: str = DEFAULT_LANGUAGE_CODE
 
 
 def game_config_path() -> Path:
@@ -169,6 +180,17 @@ def set_font(font: str | None) -> None:
     ``DEFAULT_FONT_VALUE`` as the sentinel.
     """
     _set_config_string("font", font, DEFAULT_FONT_VALUE)
+
+
+def set_language(language: str | None) -> None:
+    """Persist the ``language`` config key (spec 16: LanguageManager).
+
+    Same never-raises rules as :func:`set_theme`, but the blank/None
+    normalization target is ``DEFAULT_LANGUAGE_CODE`` ("en-us"), not a
+    "default" sentinel: the language system has no second sentinel
+    meaning (spec 16: Configuration).
+    """
+    _set_config_string("language", language, DEFAULT_LANGUAGE_CODE)
 
 
 def _set_config_string(key: str, value: str | None, default_value: str) -> None:
