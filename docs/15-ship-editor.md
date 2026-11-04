@@ -148,6 +148,7 @@ Group 2:
   - Text: "Options"
   - not opaque
   - selected
+- Button: "Rotate"
 - Button: "Reset"
 - Button: "Clear"
 - Button: "Save"
@@ -289,6 +290,79 @@ ever wanted, will have to come as a future amendment.
 The "Reset" button restores the default zoom level (fit, step 0) along
 with reloading the port data - see the "Reset" section. "Clear" and
 "Save" leave the current zoom level untouched.
+
+## Rotation
+
+When the tool first starts, rotation mode is NOT active. The user can toggle
+rotation mode to observe the sprite and all port markers slowly rotate, to confirm
+that the port markers correctly follow their assigned positions during rotation.
+
+Rotation mode has no effect on the in-memory port assignment list. Unsaved changes
+are preserved throughout the rotation.
+
+When in rotation mode, every frame rotates the `original fitted/scaled surface` by the
+required angle, rather than repeatedly rotating the previous frame's output.
+
+### Entering rotation mode
+
+The user can enter rotation mode by clicking the "Rotate" button:
+- all buttons and checkboxes are disabled, except for "Rotate" and "Exit".
+- zoom level is reset to default (unzoomed).
+- left-click input in the ship display area is disabled (cannot assign/unassign ports in rotation mode).
+- mouse wheel in the ship display area is disabled. The user cannot change the zoom level.
+- right-clicking the ship display area can still be used to toggle the background color.
+
+In rotation mode, the sprite slowly rotates clockwise in the ship display area.
+The rotation rate is 0.375 degrees per frame (one full rotation every 16 seconds assuming 60FPS).
+The rotation rate is driven by a `ROTATION_ADVANCE_PER_FRAME` constant and not hard-coded.
+The rotation rate cannot be modified by the user. There is no config key for it.
+
+### Exiting rotation mode
+
+Clicking the "Rotate" button while in rotation mode ends the rotation:
+- return the sprite to its default orientation (0 rotation). Rotation progress is not saved. That is, if the ship was at 45 degrees when exiting rotation mode, then re-entering rotation mode will not start rotating from 45 degrees, but rather begin again from 0.
+- re-enable all buttons and checkboxes.
+- left-clicking in the ship display area to assign or unassign ports is once again allowed.
+- right-clicking in the ship display area continues to toggle background color as before.
+- the zoom factor is NOT restored to what it was when rotation mode was entered. The ship is displayed at default zoom level.
+- mouse wheel in the ship display area is re-enabled. User can once again zoom as desired.
+
+Clicking the "Exit" button while in rotation mode exits the tool. This tool offers
+no confirmation prompt for unsaved changes - the in-memory port list is simply lost.
+
+### Code seams
+
+The code should expose seams to assist unit testing:
+- a `rotation_angle` property returns the current rotation angle.
+- an `advance_rotation()` method to advance the rotation in a clockwise direction by `ROTATION_ADVANCE_PER_FRAME` degrees. Note: this method is a no-op when not in rotation mode.
+- a `toggle_rotation()` method to enter or exit rotation mode, and handle UI adjustments as described above.
+
+Implementation note for rotation: pygame's `transform.rotate` treats positive angles
+as *counter-clockwise* rotation. The `advance_rotation()` method must therefore convert the
+positive rotation constant to a negative value to rotate in the correct clockwise direction.
+The `rotation_angle` property should grow positive-clockwise from zero.
+
+The current rotation angle resets to 0 after a full rotation.
+
+The current `marker_center_for_port` does integer rounding. Tests should use a quarter
+turn (90 degrees, or 240 advances) probe, since quarter-turn marker positions will land
+on clean integer co-ordinates and make the testing math easier. The quarter-turn tests should
+use even scaled dimensions so that center rounding cannot introduce ambiguity.
+
+`ShipEditorApp.update()` should invoke `advance_rotation()`, so that tests that pump `app.update([])`
+see rotation advance for free.
+
+### Port marker rotation
+
+The port markers themselves do not need to rotate. They can be drawn as plain, non-rotated squares
+centered on their respective cells at each step of the animation. They simply need to follow their
+assigned cells as the sprite image rotates.
+
+### Sprite corners
+
+The size of the bounding box of a rectangular sprite will change during rotation. This will result
+in the sprite corners being clipped. This is an acceptable side effect, even if it means that port
+markers assigned in sprite corners may become briefly invisible during rotation.
 
 ## Reset
 
@@ -481,6 +555,22 @@ fallback; `apply_click_edit` itself stays pygame-free.
 - At a zoom level where the cell is at least as large as the marker, a click inside a marker resolves to the same port cell mapping would pick (precedence changes nothing), while a port inside another port's marker footprint becomes addable only at such zoom levels: the same click resolves to the preemption target at fit and to the port-free cell when zoomed past the crossover.
 - Edge-port bleed included: a click in the display margin that lands on an edge port's drawn marker acts on that port, while a margin click that hits no marker remains a no-op; right-click background toggling is unaffected everywhere.
 - The precedence pass is pure image-space algebra (fractional click location versus marker centers and half-sizes in image units): the forward/inverse mapping round-trip tests stay untouched and green, and `apply_click_edit` remains pygame-free.
+- Clicking "Rotate" when not in rotation mode disables all buttons and checkboxes except for "Rotate" and "Exit". Left-click mouse input in the ship area is no longer accepted.
+- Clicking "Rotate" when in rotation mode enables all buttons and checkboxes. Left-click mouse input in the ship area is once again accepted.
+- When entering rotation mode, if a zoom factor was in effect, it is reset to the default zoom level.
+- When exiting rotation mode, the ship is restored to its default orientation (not rotated).
+- In rotation mode, the ship sprite rotates clockwise by 0.375 degrees per frame (one full rotation in 16s assuming 60FPS).
+- In rotation mode, the mouse wheel has no effect in the ship display area (cannot control zoom while rotating).
+- In rotation mode, the user can still right-click in the ship display area to toggle the background color between black and white.
+- In rotation mode, all port markers revolve with the sprite around the center of the sprite image, while remaining axis-aligned squares.
+- In rotation mode, the "Exit" button remains enabled and can still be used to exit the tool.
+- Entering/exiting rotation mode changes the edit mode checkboxes' enabled status, but not their checked state.
+- Entering rotation mode always starts rotating from 0 degrees, even if a previous rotation mode ended at some other angle.
+- Neither entering nor exiting rotation mode has any effect on the in-memory port assignment list.
+- `advance_rotation()` does nothing when not in rotation mode.
+- After exactly 960 rotation advances, `rotation_angle` should report 0, NOT 360.
+- In rotation mode, `app.update([])` advances the angle exactly once per frame. Rotation does not change when not in rotation mode.
+- An asymmetric sprite with distinctive pixels is drawn at its expected clockwise position after 240 advances (quarter-turn). A marker at the same quarter-turn lands at its expected position and remains an axis-aligned square.
 
 ## Acceptance criteria
 
@@ -493,6 +583,7 @@ fallback; `apply_click_edit` itself stays pygame-free.
 - When markers are drawn larger than the cells they represent, does clicking any visible pixel of a port's marker act on that port (nearest marker center wins) instead of spawning a stray overlapping port?
 - Can the user still place and edit ports that sit inside one another's marker footprints by zooming in until the scaled cell outgrows the marker?
 - Can the user save changes once ports are defined in-memory?
+- Can the user enter rotation mode for a read-only slow rotation view of the sprite and all port markers?
 
 ## Open questions (all resolved)
 
@@ -642,3 +733,24 @@ fallback; `apply_click_edit` itself stays pygame-free.
    (-13, -7) - hand arithmetic verified against the machine before
    pinning); full suite green at 1315 tests; doc status flipped to
    active.)
+15. **Amendment 2026-11-02** Implement "rotation mode" and its
+  associated tests. Ensure all new tests pass and that no existing
+  tests fail. If all is well, flip this document back to "active"
+  status. Implementation note: `test_option_button_clicks_should_all_have_observable_effects`
+  iterates `OPTION_BUTTON_LABELS` with a hard `else: # "Exit"` branch.
+  Take care when adding "Rotate" to this constant, so that we don't
+  send it down the Exit branch and assert an exit request. Also,
+  `test_panel_widget_rects_should_stack_two_groups_with_the_spec_gaps`
+  currently asserts `len(rects) == 9`, which needs updating for "Rotate".
+  **Completed 2026-11-03** (`Rotate` button added first in the Options
+  group; `ROTATION_ADVANCE_PER_FRAME = 0.375`, `rotation_angle`,
+  `advance_rotation()`, and `toggle_rotation()` implemented on
+  `ShipEditorApp`; rotation draws from the original scaled surface with a
+  negative pygame angle and keeps markers axis-aligned while revolving
+  them around the sprite center; entering rotation resets zoom, disables
+  all edit controls except Rotate/Exit, and blocks left-click/wheel input
+  while right-click background toggling remains live; panel rect and
+  option-button wiring tests updated; quarter-turn sprite/marker probe
+  proves clockwise positions and default restoration on exit; full suite
+  green at 1344 tests; doc status flipped to active.)
+

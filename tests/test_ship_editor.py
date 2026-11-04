@@ -53,6 +53,11 @@ display area):
   wheel over the panel ignored, "Reset" restores fit zoom, and the
   zoomed ship view is clipped to the display area (spec 15: Zoom,
   amended 2026-10-27)
+- rotation mode (spec 15: Rotation, added 2026-11-02): "Rotate" enters
+  and exits a read-only slow clockwise animation, disables editing and
+  zoom while preserving ports and checkbox checked state, restores the
+  sprite and marker positions on exit, and pumps one frame per
+  ``update()`` call
 - marker-rect preemption for left-clicks: clicks on drawn marker
   pixels act on that port - nearest marker center wins, ties by
   section then insertion order - edge-port margin bleed included,
@@ -151,6 +156,7 @@ from ship_editor_lib import (
     InvalidSidecarJsonError,
     PORT_MARKER_SIZE,
     PORT_COLORS,
+    ROTATION_ADVANCE_PER_FRAME,
     Port,
     prepare,
     resolve_click_port,
@@ -960,17 +966,29 @@ def test_panel_widget_rects_should_stack_two_groups_with_the_spec_gaps() -> None
     # GIVEN the design-space panel layout:
     rects = panel_widget_rects()
 
-    # THEN there are nine widgets (2 headers + 3 checkboxes + 4 buttons),
+    # THEN there are ten widgets (2 headers + 3 checkboxes + 5 buttons),
     # all 256x40 (spec 15: "all widgets are 256x40"), 32 design-px inside
     # the 320-px panel:
-    assert len(rects) == 9
+    assert len(rects) == 10
     assert all(rect.width == 256 and rect.height == 40 for rect in rects)
     assert all(rect.x == 1632 for rect in rects)
 
     # THEN the first group (header + three edit mode checkboxes) and the
-    # second group (header + four option buttons) stack with 12 design-px
-    # within-group gaps and a 48 design-px gap between groups:
-    assert [rect.y for rect in rects] == [32, 84, 136, 188, 276, 328, 380, 432, 484]
+    # second group (header + five option buttons) stack with 12 design-px
+    # within-group gaps and a 48 design-px gap between groups. "Rotate"
+    # leads the option buttons (spec 15 amendment 2026-11-02):
+    assert [rect.y for rect in rects] == [
+        32,
+        84,
+        136,
+        188,
+        276,
+        328,
+        380,
+        432,
+        484,
+        536,
+    ]
 
 
 def test_ship_editor_app_initial_background_is_black_and_scales_sprite(
@@ -1988,8 +2006,11 @@ def test_ship_editor_app_draw_should_carry_the_edit_mode_in_checkmarks_not_selec
     assert box_window(156) == box_window(208)
 
     # THEN the (unwired, never-selected) option buttons also paint the
-    # normal background:
-    assert screen.get_at((1886, 504)) == normal_background
+    # normal background. Use the bottom-most Exit rect rather than a
+    # hard-coded row, because rotation mode inserted "Rotate" above the
+    # old option-button y positions:
+    exit_rect = app.option_button("Exit").rect
+    assert screen.get_at((exit_rect.right - 2, exit_rect.centery)) == normal_background
 
 
 def test_group_header_labels_should_be_transparent_with_visible_text_ink(
@@ -2461,7 +2482,13 @@ def test_option_button_clicks_should_all_have_observable_effects(
 
         # THEN each label produces its own observable effect:
         snapshot = _port_snapshot(ports)
-        if label == "Reset":
+        if label == "Rotate":
+            assert app.rotation_mode is True
+            assert app.rotation_angle == 0.0
+            assert snapshot == pristine
+            assert app.option_button("Exit").enabled is True
+            assert app.option_button("Reset").enabled is False
+        elif label == "Reset":
             # ...and Reset pulls it back verbatim, levels and all:
             assert snapshot == pristine
         elif label == "Clear":
@@ -2474,6 +2501,343 @@ def test_option_button_clicks_should_all_have_observable_effects(
             assert app.exit_request is None
         else:  # "Exit"
             assert app.exit_request == (0, None)
+
+
+# ---------------------------------------------------------------------- #
+# rotation mode (spec 15: Rotation, added 2026-11-02)
+# ---------------------------------------------------------------------- #
+
+_EDIT_MODE_SECTIONS = ("gun_ports", "thruster_ports", "collection_ports")
+
+
+def _rotation_quarter_turn_layout() -> ToolLayout:
+    """A 4x4 sprite at exact 2x scale inside a generous display area, so
+    the quarter-turn sprite and the 9px marker footprint stay unclipped."""
+    return ToolLayout(
+        display_area=pygame.Rect(0, 0, 40, 40),
+        ship_fit_area=pygame.Rect(0, 0, 8, 8),
+        control_panel=pygame.Rect(40, 0, 10, 40),
+    )
+
+
+def _asymmetric_sprite_surface() -> pygame.Surface:
+    """A 4x4 sprite with one unmistakable top-left red pixel, which the
+    editor's nearest-neighbor scale turns into a 2x2 red block."""
+    surface = pygame.Surface((4, 4))
+    surface.fill((10, 20, 30))
+    surface.set_at((0, 0), (255, 0, 0))
+    return surface
+
+
+def _assert_edit_mode_checkbox_states(
+    app: ShipEditorApp, expected_checked: dict[str, bool], expected_enabled: bool
+) -> None:
+    for section in _EDIT_MODE_SECTIONS:
+        checkbox = app.edit_mode_checkbox(section)
+        assert checkbox.enabled is expected_enabled
+        assert checkbox.is_checked() is expected_checked[section]
+
+
+def test_clicking_rotate_button_should_disable_controls_and_ignore_display_left_clicks(
+    pygame_ready: None, silent_audio_manager: None
+) -> None:
+    # GIVEN a fresh editable session in the startup gun mode:
+    ports = ShipPorts()
+    app = _make_app(_make_surface((20, 10)), ports)
+    initial_checked = {
+        section: app.edit_mode_checkbox(section).is_checked()
+        for section in _EDIT_MODE_SECTIONS
+    }
+
+    # WHEN the user clicks "Rotate":
+    app.update(_left_click_events(app.option_button("Rotate").rect.center))
+
+    # THEN rotation mode is active, starts at 0 degrees, and has not
+    # touched the port list:
+    assert app.rotation_mode is True
+    assert app.rotation_angle == 0.0
+    assert _port_snapshot(ports) == {section: [] for section in _EDIT_MODE_SECTIONS}
+
+    # THEN only Rotate and Exit remain clickable, while checkbox checked
+    # state stays as it was (spec 15: Rotation):
+    _assert_edit_mode_checkbox_states(app, initial_checked, expected_enabled=False)
+    assert app.option_button("Rotate").enabled is True
+    assert app.option_button("Exit").enabled is True
+    for label in ("Reset", "Clear", "Save"):
+        assert app.option_button(label).enabled is False
+
+    # THEN left-clicks in the ship display area are read-only no-ops:
+    anchor = app.image_to_screen(5, 5)
+    assert app.handle_left_click((anchor[0] + 2, anchor[1] + 2)) is False
+    assert _port_snapshot(ports) == {section: [] for section in _EDIT_MODE_SECTIONS}
+
+
+def test_clicking_rotate_button_again_should_reenable_controls_and_accept_left_clicks(
+    pygame_ready: None, silent_audio_manager: None
+) -> None:
+    # GIVEN a session that has already entered rotation mode:
+    ports = ShipPorts()
+    app = _make_app(_make_surface((20, 10)), ports)
+    app.update(_left_click_events(app.option_button("Rotate").rect.center))
+    initial_checked = {
+        section: app.edit_mode_checkbox(section).is_checked()
+        for section in _EDIT_MODE_SECTIONS
+    }
+
+    # WHEN the user clicks "Rotate" again:
+    app.update(_left_click_events(app.option_button("Rotate").rect.center))
+
+    # THEN the edit controls are clickable again, still with the same
+    # checked state:
+    assert app.rotation_mode is False
+    assert app.rotation_angle == 0.0
+    _assert_edit_mode_checkbox_states(app, initial_checked, expected_enabled=True)
+    for label in OPTION_BUTTON_LABELS:
+        assert app.option_button(label).enabled is True
+
+    # THEN left-clicks edit ports again:
+    anchor = app.image_to_screen(5, 5)
+    assert app.handle_left_click((anchor[0] + 2, anchor[1] + 2)) is True
+    assert ports.find_at(5, 5) == ("gun_ports", Port(x=5, y=5, level=0))
+
+
+def test_entering_rotation_mode_should_reset_zoom_to_the_default_fit_view(
+    pygame_ready: None,
+) -> None:
+    # GIVEN the exactly-6x setup zoomed one step in:
+    app = _make_app(_make_surface((20, 10)), layout=_exact_scale_layout())
+    assert app.handle_mouse_wheel((124, 94), +1) is True
+    assert app.zoom_steps == 1
+
+    # WHEN rotation mode is entered:
+    app.toggle_rotation()
+
+    # THEN the rotating view starts from fit zoom, not the zoomed level
+    # (spec 15: Rotation):
+    assert app.zoom_steps == 0
+    assert app.ship_rect == pygame.Rect(64, 64, 120, 60)
+
+
+def test_rotation_mode_should_ignore_wheel_zoom_but_keep_background_right_clicks(
+    pygame_ready: None,
+) -> None:
+    # GIVEN a rotating app on the exactly-6x fit view:
+    app = _make_app(_make_surface((20, 10)), layout=_exact_scale_layout())
+    app.toggle_rotation()
+
+    # WHEN the user wheels over the display area:
+    # THEN zoom is disabled while rotation mode is active:
+    assert app.handle_mouse_wheel((124, 94), +1) is False
+    assert app.zoom_steps == 0
+
+    # WHEN the user right-clicks the display area:
+    # THEN the background still toggles (spec 15: Rotation):
+    assert app.handle_right_click((0, 0)) is True
+    assert app.background_color == BACKGROUND_WHITE
+
+
+def test_advance_rotation_without_rotation_mode_should_not_change_the_angle(
+    pygame_ready: None,
+) -> None:
+    # GIVEN a fresh app that is not in rotation mode:
+    app = _make_app()
+
+    # WHEN rotation advancement is requested directly or through update:
+    app.advance_rotation()
+    app.update([])
+
+    # THEN the angle remains exactly where it started:
+    assert app.rotation_mode is False
+    assert app.rotation_angle == 0.0
+
+
+def test_advance_rotation_in_rotation_mode_should_step_clockwise_and_wrap_after_960_frames(
+    pygame_ready: None,
+) -> None:
+    # GIVEN an app in rotation mode:
+    app = _make_app()
+    app.toggle_rotation()
+
+    # WHEN rotation advances frame by frame:
+    app.advance_rotation()
+
+    # THEN each frame advances the positive clockwise angle by the spec's
+    # 0.375 degrees:
+    assert app.rotation_angle == pytest.approx(ROTATION_ADVANCE_PER_FRAME)
+
+    # WHEN the remaining frames until one full revolution are pumped:
+    for _ in range(959):
+        app.advance_rotation()
+
+    # THEN a full circle reports 0, not 360 (spec 15: Rotation):
+    assert app.rotation_angle == 0.0
+    assert app.rotation_angle != 360.0
+
+
+def test_update_should_advance_rotation_exactly_once_per_frame_only_while_rotating(
+    pygame_ready: None,
+) -> None:
+    # GIVEN a fresh app outside rotation mode:
+    app = _make_app()
+
+    # WHEN empty frames are pumped:
+    app.update([])
+
+    # THEN nothing rotates:
+    assert app.rotation_angle == 0.0
+
+    # WHEN rotation mode is active and frames are pumped:
+    app.toggle_rotation()
+    app.update([])
+    app.update([])
+
+    # THEN each pumped frame contributes exactly one rotation step:
+    assert app.rotation_angle == pytest.approx(2 * ROTATION_ADVANCE_PER_FRAME)
+
+    # WHEN rotation mode exits and more frames are pumped:
+    app.toggle_rotation()
+    app.update([])
+
+    # THEN rotation stops:
+    assert app.rotation_angle == 0.0
+
+
+def test_entering_rotation_after_a_previous_rotation_should_start_from_zero(
+    pygame_ready: None,
+) -> None:
+    # GIVEN a rotation session that ended part-way through a circle:
+    app = _make_app()
+    app.toggle_rotation()
+    for _ in range(240):
+        app.advance_rotation()
+    assert app.rotation_angle == pytest.approx(90.0)
+
+    # WHEN the user exits and then re-enters rotation mode:
+    app.toggle_rotation()
+    app.toggle_rotation()
+
+    # THEN the new rotation starts at 0, not from the old angle:
+    assert app.rotation_mode is True
+    assert app.rotation_angle == 0.0
+
+
+def test_entering_and_exiting_rotation_should_not_change_the_in_memory_port_list(
+    pygame_ready: None,
+    silent_audio_manager: None,
+    tmp_path: Path,
+) -> None:
+    # GIVEN a session with sidecar ports and a fresh unsaved in-memory
+    # edit:
+    ports, app, _ = _session_with_three_port_sidecar(tmp_path)
+    ports.add("collection_ports", 3, 3, level=9)
+    before = _port_snapshot(ports)
+
+    # WHEN rotation mode is entered, advanced a bit, then exited:
+    app.toggle_rotation()
+    for _ in range(12):
+        app.advance_rotation()
+    app.toggle_rotation()
+
+    # THEN rotation never touched the in-memory ports:
+    assert _port_snapshot(ports) == before
+    assert app.exit_request is None
+
+
+def test_rotation_should_disable_edit_mode_checkboxes_without_unchecking_the_active_mode(
+    pygame_ready: None, silent_audio_manager: None
+) -> None:
+    # GIVEN a session switched away from the startup gun mode:
+    app = _make_app()
+    collection = app.edit_mode_checkbox("collection_ports")
+    app.update(_left_click_events(collection.rect.center))
+    expected_checked = {
+        "gun_ports": False,
+        "thruster_ports": False,
+        "collection_ports": True,
+    }
+
+    # WHEN rotation mode is entered and exited:
+    app.toggle_rotation()
+    _assert_edit_mode_checkbox_states(app, expected_checked, expected_enabled=False)
+    app.toggle_rotation()
+
+    # THEN the checkboxes changed enabled state only, never checked
+    # state:
+    _assert_edit_mode_checkbox_states(app, expected_checked, expected_enabled=True)
+
+
+def test_exit_button_click_during_rotation_should_still_end_the_tool(
+    pygame_ready: None, silent_audio_manager: None
+) -> None:
+    # GIVEN an app in rotation mode:
+    app = _make_app()
+    app.update(_left_click_events(app.option_button("Rotate").rect.center))
+    assert app.rotation_mode is True
+
+    # WHEN the user clicks the still-enabled "Exit" button:
+    app.update(_left_click_events(app.option_button("Exit").rect.center))
+
+    # THEN the session exits normally, with no rotation confirmation or
+    # save prompt (spec 15: Rotation):
+    assert app.exit_request == (0, None)
+
+
+def test_quarter_turn_should_move_the_sprite_and_marker_clockwise_and_restore_on_exit(
+    pygame_ready: None, font_ready: None
+) -> None:
+    # GIVEN the 4x4-asymmetric 2x-scale setup, with a thruster port in
+    # the bottom-left image cell (0, 3):
+    ports = ShipPorts()
+    ports.add("thruster_ports", 0, 3)
+    port = ports.section_ports("thruster_ports")[0]
+    app = _make_app(_asymmetric_sprite_surface(), ports, _rotation_quarter_turn_layout())
+    assert app.scaled_size == (8, 8)
+    assert app.marker_size == PORT_MARKER_SIZE
+    screen = pygame.Surface((50, 40))
+
+    # GIVEN the unrotated baseline: the distinctive red pixel is at the
+    # scaled top-left, and the port marker is centered at the scaled
+    # bottom-left:
+    app.draw(screen)
+    assert app.marker_center_for_port(port) == (17, 23)
+    assert screen.get_at((17, 17)) == (255, 0, 0, 255)
+
+    # WHEN the sprite has rotated a quarter turn clockwise (240 frames at
+    # 0.375 degrees per frame):
+    app.toggle_rotation()
+    for _ in range(240):
+        app.advance_rotation()
+    assert app.rotation_angle == pytest.approx(90.0)
+    app.draw(screen)
+
+    # THEN the distinctive sprite pixels have moved to the scaled
+    # top-right position, proving the image itself rotated clockwise:
+    assert screen.get_at((22, 16)) == (255, 0, 0, 255)
+    assert screen.get_at((23, 17)) == (255, 0, 0, 255)
+
+    # THEN the marker follows the same quarter-turn around the sprite
+    # center but remains an axis-aligned square footprint:
+    center_x, center_y = app.marker_center_for_port(port)
+    assert (center_x, center_y) == (17, 17)
+    half = app.marker_size // 2
+    marker_color = (*PORT_COLORS["thruster_ports"], 255)
+    assert screen.get_at((center_x, center_y)) == marker_color
+    for offset_x, offset_y in (
+        (-half, -half),
+        (half, -half),
+        (-half, half),
+        (half, half),
+    ):
+        assert screen.get_at((center_x + offset_x, center_y + offset_y)) == marker_color
+
+    # WHEN rotation mode exits:
+    app.toggle_rotation()
+    app.draw(screen)
+
+    # THEN the sprite and marker return to the default orientation:
+    assert app.rotation_angle == 0.0
+    assert app.marker_center_for_port(port) == (17, 23)
+    assert screen.get_at((17, 17)) == (255, 0, 0, 255)
 
 
 def test_apply_click_edit_on_a_free_cell_should_add_a_level_zero_port() -> None:
