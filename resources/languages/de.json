@@ -1,0 +1,23 @@
+{
+  "language_metadata": {
+    "name": "German"
+  },
+  "main_window": {
+    "caption": "Vom Staub zur Dominanz"
+  },
+  "title_screen": {
+    "title": "Vom Staub zur Dominanz",
+    "options": "Optionen",
+    "exit": "Spiel beenden"
+  },
+  "options": {
+    "back": "< Zurück",
+    "audio_options": "Audio-Optionen",
+    "ui_options": "UI-Optionen",
+    "volume": "Lautstärke:",
+    "game_sfx_enabled": "Spielsoundeffekte aktivieren",
+    "ui_sfx_enabled": "UI-Soundeffekte aktivieren",
+    "speech_enabled": "Sprachausgabe aktivieren",
+    "music_enabled": "Musik aktivieren"
+  }
+}
