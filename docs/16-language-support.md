@@ -1,13 +1,13 @@
 ---
 description: Describes the game's support for multiple languages.
-status: proposed
+status: active
 ---
 
 # Language support
 
 The game needs a way to support multiple languages, not only in user-facing UI
-labels, but also (going forward) in speech. The user should have the ability
-to choose from the list of supported languages (determined dynamically on startup
+labels, but also (going forward) in speech. The user can choose from the list
+of supported languages (determined dynamically on startup
 from the presence of language resources). All user-facing UI labels adjust to
 the chosen language, by reading their strings from the corresponding language resource.
 
@@ -15,10 +15,10 @@ When the game supports speech, then speech audio will also be played in the sele
 language, if speech is available in that language. (Speech is a future feature and
 so is not fully specified in this document).
 
-This doc proposes a new `dtd/language.py` module containing a `LanguageManager` class
+This doc describes the `dtd/language.py` module containing a `LanguageManager` class
 with a global singleton, following the pattern of `AudioManager` from the 05 spec.
-The `LanguageManager` class will interrogate the ResourceLoader for all
-language resources, and expose them to the rest of the application.
+The `LanguageManager` class interrogates the ResourceLoader for all
+language resources, and exposes them to the rest of the application.
 
 A module-level singleton in `dtd/language.py`, accessible via an accessor, allows the
 rest of the game code to access LanguageManager. This mirrors the pattern from the
@@ -37,7 +37,7 @@ This spec doc introduces one new top-level `language` key:
 
 - `language`: a string with a default value of `en-us`
 
-Silent default of `en-us` will be applied if the key is missing, or its value is blank.
+Silent default of `en-us` is applied if the key is missing, or its value is blank.
 
 ## LanguageManager
 
@@ -67,17 +67,17 @@ The LanguageManager class offers the following facilities:
   to what was done for `set_theme()` and `set_font()`. Persistence
   errors do NOT raise.
 
-LanguageManager should maintain an in-memory cache that starts cold and is
+LanguageManager maintains an in-memory cache that starts cold and is
 populated via calls to `get_string()`. Any call to `set_current_language()`
 resets the cache (unless the call is a no-op, for example specifying the
-language that is already selected). Note that even failed lookups should be
+language that is already selected). Note that even failed lookups are
 cached, to avoid log spam of failed lookups (warnings logged for failed
-lookups should occur once per key until cache reset).
+lookups occur once per key until cache reset).
 
 ### Validating language codes
 
-LanguageManager should reject invalid configuration values on startup,
-and `set_current_language()` should behave the same way: if an unrecognized
+LanguageManager rejects invalid configuration values on startup,
+and `set_current_language()` behaves the same way: if an unrecognized
 code is given (not present in `get_languages()`), revert to `en-us` with a
 log warning. If `set_current_language()` is given such an invalid value,
 do NOT persist it.
@@ -90,42 +90,43 @@ the same as `en-us`, as this is our default value.
 The default language is `en-us`. The `languages/en-us.json` file must exist,
 as it is a required resource as per the 03 spec.
 
-Currently (as of the time this doc is being written), the existing UI code
-stores user-facing strings in constants located in `game_constants.py`.
-The values of these constants should move to the `languages/en-us.json`
-file, and these constants should now contain key names to use as lookups
-in the language resource.
+The UI code that predates this spec doc used to store user-facing strings
+in constants located in `game_constants.py`. The one-time migration has
+been carried out: the values of those constants live in the
+`languages/en-us.json` file, and the constants now hold the key names
+used as lookups into the language resource.
 
 For example:
 
 ```
-# Currently:
+# Before:
 OPTIONS_LABEL_AUDIO_OPTIONS = "Audio options"
 
-# Proposed change:
+# After:
 OPTIONS_LABEL_AUDIO_OPTIONS = "options.audio_options"
 ```
 
-And the calling code should change to look up the value of the string:
+And the calling code looks the value up:
 
 ```
-# Currently:
+# Before:
 section = self._build_section_label(game_constants.OPTIONS_LABEL_AUDIO_OPTIONS)
 
-# Proposed:
+# After:
 label = get_language_manager().get_string(game_constants.OPTIONS_LABEL_AUDIO_OPTIONS)
 section = self._build_section_label(label)
 ```
 
-This is a one-time migration of UI code that predates this spec doc.
-Going forward, all new UI code should follow this pattern. Note that it's not just
-Widgets that are affected: window captions are also affected and should
-also be covered by this migration. Implementation note: currently, the main window
-caption is only set once when the window opens. The implementation of this spec
-doc should update the caption as needed when the current language changes (via
-`pygame.display.set_caption(get_string(...))`). This also requires the creation
-of a `main_window.caption` language key. Caption update is best-effort, and
-should not raise on failure.
+This is a one-time migration of UI code that predates this spec doc, and
+it is complete: every user-facing Widget text and the main window caption
+now flow through `get_string()`. Going forward, all new UI code should
+follow this pattern. Note that it's not just Widgets that are affected:
+window captions are also covered by this migration. Implementation note:
+the main window caption is set from the `main_window.caption` language
+key when the window opens, and the `LanguageManager` re-applies it
+whenever the current language changes (via
+`pygame.display.set_caption(get_string(...))`). Caption update is
+best-effort, and does not raise on failure.
 
 ### Explicitly out of scope
 
@@ -152,7 +153,7 @@ value for the Widget to use instead. The Widget itself does not know or care
 where its specified `text` value comes from. Therefore, no amendments to existing
 Widget classes are required as a result of this spec doc.
 
-## Proposed Json format
+## Json format
 
 The language Json files can be relatively simple, with an optional
 user-presentable name that we could consider using in place of the
@@ -190,7 +191,7 @@ Note that as per the 03 doc, invalid or unparseable Json files are fatal on game
 It is the user's responsibility to ensure that any added language resource file is valid Json.
 
 Non-string values are treated as missing keys. For example, none of the following
-will return correctly from `get_string()`:
+returns correctly from `get_string()`:
 
 ```json
 {
@@ -214,7 +215,7 @@ group1.key1
 group1.subgroup.key2
 ```
 
-The following Json would be expected:
+The following Json is the expected shape:
 
 ```json
 {
@@ -230,15 +231,19 @@ The following Json would be expected:
 Keys that don't resolve to a string value in the Json (for example, in the snippet above, if
 "subgroup" was anything other than an object) are treated as missing.
 
-Implementation note: dotted-key resolution should be a small pure function,
-like `resolve_json_path(decoded: Any, key: str) -> str | None` or similar, to keep
+Implementation note: dotted-key resolution is the small pure function
+`resolve_json_path(decoded: Any, key: str) -> str | None`, which keeps
 the fallback chain and the cache testable in isolation.
 
 ## Test impact
 
-A `clean_language_manager` autouse fixture should be introduced, following the
-pattern of `clean_audio_singleton`, with an init seam mirroring `init_audio_manager()`.
-Every test that constructs a screen needs the new singleton initialized.
+The `clean_language_manager` autouse fixture follows the pattern of
+`clean_audio_singleton`, with an init seam (`init_language_manager()`)
+mirroring `init_audio_manager()`. Every test that constructs a screen
+needs the singleton initialized; the opt-in `silent_language_manager`
+fixture (a manager over a loader that resolves nothing, so `get_string()`
+answers with raw keys) covers screen tests that assert nothing about
+language.
 
 ## Open questions
 
@@ -269,7 +274,7 @@ All resolved! Maintained here for historical reasons.
 
 ## Testing
 
-Tests should use a `silent_language_manager` fixture, following the pattern of
+Tests use the `silent_language_manager` fixture, following the pattern of
 `silent_audio_manager`, to avoid hand-patching dozens of tests.
 
 - `languages/en-us.json` is a required resource: the game fails to start if it is missing.
@@ -297,7 +302,7 @@ Tests should use a `silent_language_manager` fixture, following the pattern of
 - `get_string()` given a key that is not found in `de-at` returns the value of that key from `en-us` when the language is `de-at` and that key exists in `en-us`.
 - `get_string()` given a key that is not found in `de-at` or `en-us` when the language is `de-at` returns the given key as-is.
 - `get_string()` can be used to retrieve `language_metadata` keys. For example, `get_string("language_metadata.name")` should
-  return "US English" given the example presented in the "Proposed Json format" section.
+  return "US English" given the example presented in the "Json format" section.
 
 ## Acceptance criteria
 
@@ -399,4 +404,27 @@ Tests should use a `silent_language_manager` fixture, following the pattern of
   stage 3 is implemented"). Go through this spec doc and change all "proposes"
   and future-tense wording to "describes" and present-tense wording, to reflect
   reality. Flip this document to "active" status if all is well.
+  **Completed 2026-11-04**: full suite green at 1426 tests. Every
+  acceptance criterion confirmed against code and tests: screen widgets
+  resolve text through `get_string` (`TestTitleScreenLanguageText`,
+  `TestOptionsScreenLanguageControl`, the `tests/test_main.py` round
+  trip); the caption rides language keys at open and on change
+  (`TestOpenCaption`, `TestWindowCaptionRefresh`, the round trip's
+  caption observation); default `en-us` without configuration
+  (`GameConfig().language` pin); partial and incomplete-resource fallbacks
+  (`TestGetStringFallback`, the round trip's untranslated `options`
+  button); Options-screen language change persists and lands on the next
+  transition (`TestOptionsScreenLanguageControl` + the round trip); and
+  the Ship Editor stays hard-coded English (constant-driven labels in
+  `tools/ship_editor_lib.py`, no `dtd.language` import). No future-tense
+  stage references remain in `src/` or `tests/` (all surviving "stage N"
+  comments are historical citations of the specs that own the behavior,
+  matching the house style). Doc reworded from proposal to description:
+  "proposes" prose and prescriptive "should" wording updated to present
+  tense, the "Proposed Json format" section renamed to "Json format"
+  (internal cross-reference updated), the "Default language" migration
+  narrative and caption implementation note rewritten to describe what
+  the code now does. Future tense deliberately kept only for the speech
+  feature (explicitly out of scope and unspecified). Doc flipped to
+  `active`.
 
