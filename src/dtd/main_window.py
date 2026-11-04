@@ -2,7 +2,10 @@
 
 This module owns the ``mainWindow`` section of game.json: the pydantic model
 for it, window creation, F11 toggling, programmatic mode switching, and the
-config saves that follow a successful switch.
+config saves that follow a successful switch. The window caption comes from
+the ``main_window.caption`` language key via the LanguageManager (spec 02,
+as amended by spec 16) - applied on open, and refreshed on every real
+language change by the LanguageManager itself.
 """
 from __future__ import annotations
 
@@ -86,7 +89,7 @@ class MainWindow:
             config = default_main_window_config()
         if not pygame.display.get_init():
             pygame.display.init()
-        pygame.display.set_caption(game_constants.WINDOW_TITLE)
+        self._apply_window_caption()
         self._display_index = self._resolve_display_index(config.display)
         if config.mode == "windowed":
             self._enter_windowed(self._display_index, persist=False)
@@ -168,6 +171,37 @@ class MainWindow:
     # ------------------------------------------------------------------ #
     # internals
     # ------------------------------------------------------------------ #
+    def _apply_window_caption(self) -> None:
+        """Set the caption from the ``main_window.caption`` language key
+        (spec 02: Window title, as amended by spec 16: Language support).
+
+        Best-effort, mirroring the language-change refresh in
+        ``LanguageManager``: an uninitialized singleton or a display
+        refusing the update is a warning, never an exception - the
+        window opens regardless (spec 16: "Caption update is
+        best-effort, and should not raise on failure").
+
+        Local import of ``dtd.language``: that module imports
+        ``dtd.game_config``, which imports this module at module level -
+        the same cycle the ``_persist_config`` import works around.
+        """
+        try:
+            from dtd import language
+
+            caption = language.get_language_manager().get_string(
+                game_constants.WINDOW_TITLE
+            )
+            pygame.display.set_caption(caption)
+        except Exception as exc:
+            # Broad on purpose (spec 02: caption failure is logged, the
+            # window survives): RuntimeError from an uninitialized
+            # singleton, pygame.error from a refusing display, ...
+            logger.warning(
+                "failed to set the window caption from language key {}: {}",
+                game_constants.WINDOW_TITLE,
+                exc,
+            )
+
     def _enter_windowed(self, display_index: int, persist: bool) -> bool:
         try:
             # No RESIZABLE flag: spec 02 mandates a fixed 1280x720 window.

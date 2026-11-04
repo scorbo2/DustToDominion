@@ -4,9 +4,12 @@ Covers the spec's Testing bullets that belong to the manager and its
 resource plumbing: language listing (through a real ResourceLoader so
 the spec 03 lister rules are exercised end to end), startup and
 runtime language-code validation, the ``get_string`` fallback chain,
-the once-per-key failure logging, the cache reset rules, and the
-module-level singleton. The Options-screen wiring (ChoiceList, caption
-refresh, persistence across restarts) arrives with the UI migration.
+the once-per-key failure logging, the cache reset rules, the module
+singleton, and the window-caption refresh that follows every real
+language change (spec 02, as amended by spec 16). The Options-screen
+wiring (ChoiceList population, persistence across restarts) lives in
+the screen tests; the caption rides the manager itself and is pinned
+here.
 
 Two loader flavors on purpose:
 
@@ -23,6 +26,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+import pygame
 import pytest
 from loguru import logger
 
@@ -597,6 +601,116 @@ class TestGetStringCache:
             assert sum("options.nonexistent" in record for record in records) == 2
         finally:
             logger.remove(sink_id)
+
+
+class TestWindowCaptionRefresh:
+    """A real language change re-applies the window caption from the
+    ``main_window.caption`` key (spec 02: Window title, as amended by
+    spec 16: best-effort, logged, never raising)."""
+
+    _CAPTION_DOCUMENTS = {
+        "languages/en-us.json": {"main_window": {"caption": "Dust to Dominion"}},
+        "languages/de-at.json": {"main_window": {"caption": "Staub zu Herrschaft"}},
+    }
+
+    def _manager(self, current: str) -> language.LanguageManager:
+        return language.LanguageManager(_StubLoader(self._CAPTION_DOCUMENTS), current)
+
+    def _openTinyWindow(self) -> None:
+        """A real (tiny, dummy-driver) window so ``get_caption`` reflects
+        every ``set_caption`` (the spec 02 window-suite pattern)."""
+        pygame.display.set_mode((16, 16))
+
+    def test_setCurrentLanguage_withRealChange_shouldReCaptionWithTheNewLanguagesText(
+        self, pygame_ready: None, bootstrapped_persistence: Path
+    ) -> None:
+        # GIVEN an open window and an en-us manager:
+        self._openTinyWindow()
+        manager = self._manager("en-us")
+
+        # WHEN the language really changes,
+        manager.set_current_language("de-at")
+
+        # THEN the caption carries the NEW language's resolved text
+        # (spec 16: Testing - set_current_language updates the main
+        # window caption on a successful language change):
+        assert pygame.display.get_caption()[0] == "Staub zu Herrschaft"
+
+    def test_setCurrentLanguage_withNoOpChange_shouldNotTouchTheCaption(
+        self, pygame_ready: None, bootstrapped_persistence: Path
+    ) -> None:
+        # GIVEN an open window whose caption some other party set, and
+        # an en-us manager,
+        self._openTinyWindow()
+        pygame.display.set_caption("untouched")
+        manager = self._manager("en-us")
+
+        # WHEN the "change" is a no-op (already en-us),
+        manager.set_current_language("en-us")
+
+        # THEN the caption stays exactly as it was - the refresh rides
+        # only REAL changes:
+        assert pygame.display.get_caption()[0] == "untouched"
+
+    def test_setCurrentLanguage_withGarbageRevertFromAnotherLanguage_shouldReCaptionToTheDefaultText(
+        self, pygame_ready: None
+    ) -> None:
+        # GIVEN an open window and a de-at manager (garbage is about to
+        # revert it to the default - a real change, so the caption must
+        # follow):
+        self._openTinyWindow()
+        manager = self._manager("de-at")
+
+        # WHEN an unrecognized code is requested,
+        manager.set_current_language("tlh")
+
+        # THEN the caption carries the reverted default's text:
+        assert pygame.display.get_caption()[0] == "Dust to Dominion"
+
+    def test_setCurrentLanguage_withCaptionUpdateFailing_shouldWarnAndNotRaise(
+        self,
+        pygame_ready: None,
+        bootstrapped_persistence: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        # GIVEN an open window whose display refuses every caption
+        # update, and a warning sink:
+        self._openTinyWindow()
+
+        def refuse_caption(*args, **kwargs):
+            raise pygame.error("the platform refused")
+
+        monkeypatch.setattr(pygame.display, "set_caption", refuse_caption)
+        records, sink_id = _warning_records()
+        manager = self._manager("en-us")
+        try:
+            # WHEN a real language change attempts the refresh,
+            # THEN nothing raises (spec 02: caption failure is logged,
+            # never fatal)...
+            manager.set_current_language("de-at")
+            # ...the language change itself lands...
+            assert manager.get_current_language() == "de-at"
+            # ...and the caption failure is in the log.
+            assert any("caption" in record for record in records)
+        finally:
+            logger.remove(sink_id)
+
+    def test_setCurrentLanguage_withoutAnyDisplay_shouldNotRaiseAndStillSwitch(
+        self, bootstrapped_persistence: Path
+    ) -> None:
+        # GIVEN no display subsystem at all (no pygame_ready: this is
+        # how every other set_current_language test in this file runs),
+        manager = self._manager("en-us")
+
+        # WHEN a real language change attempts the caption refresh,
+        # THEN the missing display is survivable, exception or no
+        # exception (pygame-ce answers an uninitialized set_caption
+        # quietly on this platform, but the manager must not care
+        # either way - spec 16: "should not raise on failure")...
+        manager.set_current_language("de-at")
+
+        # ...and the language change itself lands regardless:
+        assert manager.get_current_language() == "de-at"
 
 
 class TestLanguageSingleton:

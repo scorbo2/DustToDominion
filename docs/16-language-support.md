@@ -370,6 +370,29 @@ Tests should use a `silent_language_manager` fixture, following the pattern of
 4. Migrate all UI code to use `get_string()` to look up text rather than
   use the raw string value from the constants. After this stage, all UI
   elements should once again display their actual text.
+  **Completed 2026-11-04**: `TitleScreen` and `OptionsScreen` now resolve
+  every Button/Label/Checkbox/Slider text through
+  `get_language_manager().get_string(...)` at construction, and
+  `MainWindow.open` sets the caption from `main_window.caption` the same
+  way - best-effort, warning-logged, never raising. The manager itself
+  re-applies the caption on every real language change
+  (`LanguageManager._refresh_window_caption`), and control group 2 of the
+  Options screen gained the language ChoiceList (items from
+  `get_languages()`, preselected from `get_current_language()`, selecting
+  calls `set_current_language()` - persisted immediately, effective on
+  the next screen transition, with the caption as the one immediately
+  visible exception). The Ship Editor stays hard-coded English (exempt).
+  New/updated tests: `TestWindowCaptionRefresh` (this file's Testing
+  section pins), `TestOpenCaption` in `tests/test_main_window.py`,
+  `TestTitleScreenLanguageText` in `tests/test_title_screen.py`, the
+  `TestOptionsScreenLanguageControl` suite in
+  `tests/test_options_screen.py` (group-2 widget count grew 14 -> 15),
+  and a full-game title->options->title round trip in
+  `tests/test_main.py` proving next-transition effect, caption refresh
+  and cross-restart persistence. Screen test modules picked up the
+  autouse `silent_language_manager` pattern per the Testing section.
+  Docs 02, 08 and 13 flip back to `active` alongside this stage.
+  Full suite green at 1426 tests.
 5. Verification pass. Do all tests pass? Are all acceptance criteria met?
   Go through the code and remove or update stage-specific references in comments
   and docstrings, if any are in future tense (example: "this will work once

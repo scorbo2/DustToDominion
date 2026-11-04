@@ -14,17 +14,25 @@ itself and logs a warning. The warning (and the answer) are cached per
 key, so a broken key spams the log exactly once until the next real
 language change resets the cache. Non-string Json values are missing
 values, and keys without a period never resolve (spec 16: Key format).
+
+A real language change also re-applies the window caption from the
+``main_window.caption`` key (spec 02, as amended by spec 16): best-effort,
+logged and never raising - unit tests drive ``set_current_language`` with
+no display at all, and the caption is a cosmetic detail that must never
+take the game down.
 """
 from __future__ import annotations
 
 from typing import Any
 
+import pygame
 from loguru import logger
 
 from dtd import game_config
 from dtd.game_constants import (
     DEFAULT_LANGUAGE_CODE,
     LANGUAGE_RESOURCE_ID_PREFIX,
+    WINDOW_TITLE,
 )
 from dtd.resource_loader import ResourceLoader
 
@@ -129,14 +137,37 @@ class LanguageManager:
         self._adopt(requested, persist=True)
 
     def _adopt(self, language_code: str, *, persist: bool) -> None:
-        """Point the manager at ``language_code``; reset the cache only on
-        a real change, and persist only when the request was valid.
+        """Point the manager at ``language_code``; reset the cache and
+        refresh the window caption only on a real change, and persist
+        only when the request was valid.
         """
         if persist:
             game_config.set_language(language_code)
         if language_code != self._current:
             self._current = language_code
             self._string_cache.clear()
+            self._refresh_window_caption()
+
+    def _refresh_window_caption(self) -> None:
+        """Re-apply the window caption from ``main_window.caption`` after
+        a real language change (spec 02, as amended by spec 16: "the
+        caption is updated via pygame.display.set_caption(get_string(...))").
+
+        Best-effort by contract: the caption is cosmetics, so ANY failure
+        - no display anywhere (unit tests), a platform refusing the
+        update - is a warning, never an exception (spec 16: "should not
+        raise on failure"). The deliberately broad except is what keeps
+        that promise airtight.
+        """
+        try:
+            pygame.display.set_caption(self.get_string(WINDOW_TITLE))
+        except Exception as exc:  # noqa: BLE001 - best-effort by spec
+            logger.warning(
+                "failed to refresh the window caption after the language "
+                "changed to {}: {}",
+                self._current,
+                exc,
+            )
 
     # ------------------------------------------------------------------ #
     # string lookup (spec 16: LanguageManager)

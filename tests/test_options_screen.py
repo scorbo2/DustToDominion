@@ -4,9 +4,12 @@ Covers the exit "< Back" button and ESC-as-back, the "Options" title
 Label, background handling (image probe order, scaling, starfield
 fallback), the constructor's music request, control group 1 (the audio
 Checkbox/Slider pairs and their immediate apply-and-persist wiring),
-and control group 2 (the font and theme ChoiceLists, their sentinel
-preselection, and their persist-plus-screen-local-Theme-rebuild
-wiring). The round-trip transition itself is pinned in test_main.py.
+and control group 2 (the font, theme, and language ChoiceLists, their
+preselection, and their persistence wiring - the language chooser added
+by the spec 16 amendment). All widget text is resolved through the
+LanguageManager (spec 16: Caller decides); the label assertions ride
+the silent manager's raw-key fallback. The round-trip transition itself
+is pinned in test_main.py.
 """
 from __future__ import annotations
 
@@ -17,7 +20,7 @@ from pathlib import Path
 import pygame
 import pytest
 
-from dtd import audio, game_constants
+from dtd import audio, game_config, game_constants, language
 from dtd.game_config import AudioConfig
 from dtd.resource_loader import ResourceLoader
 from dtd.screens.base import Screen, ScreenAction
@@ -38,6 +41,17 @@ def _audio_singleton(silent_audio_manager: audio.AudioManager) -> None:
     screen requests music in its constructor (spec 13: Audio handling)
     while its "< Back" Button hands ids to the singleton on clicks and
     hover (spec 09: widget audio)."""
+
+
+@pytest.fixture(autouse=True)
+def _language_singleton(silent_language_manager: language.LanguageManager) -> None:
+    """Mirror the startup precondition: the real game initializes the
+    LanguageManager before any screen exists (spec 03 startup order,
+    step 6, as amended by spec 16), and this screen resolves every
+    display text through it (spec 16: Caller decides). The silent
+    manager resolves nothing, so ``get_string`` answers with the raw
+    key - which is exactly what the shipped constants hold, keeping
+    the label assertions below honest about the wiring."""
 
 
 def _default_theme() -> Theme:
@@ -102,6 +116,22 @@ class _StubChooserLoader(ResourceLoader):
         return None
 
 
+class _StubLanguageLoader:
+    """A loader serving fixed language documents (spec 16), for tests
+    that exercise the language chooser against a known ``get_languages()``
+    result. Implements only what LanguageManager touches; the screen's
+    own loader stays separate."""
+
+    def __init__(self, documents: dict[str, dict]) -> None:
+        self._documents = documents
+
+    def get_json_resource(self, resource_id: str) -> dict | None:
+        return self._documents.get(resource_id)
+
+    def get_language_resource_ids(self) -> list[str]:
+        return sorted(self._documents)
+
+
 def _back_button(screen: OptionsScreen) -> Button:
     """The screen's first registered widget, asserted to be a Button."""
     button = screen._ui.widgets[0]
@@ -138,8 +168,9 @@ class TestOptionsScreenConstruction:
 
         # THEN its widget list is the back Button, the title Label, the
         # nine group 1 controls, then the group 2 section Label and the
-        # font and theme ChoiceLists (spec 13: UI controls - group 2):
-        assert len(screen._ui.widgets) == 14
+        # font, theme, and language ChoiceLists (spec 13: UI controls -
+        # group 2, as amended by spec 16):
+        assert len(screen._ui.widgets) == 15
         assert isinstance(screen._ui.widgets[0], Button)
         assert isinstance(screen._ui.widgets[1], Label)
         assert isinstance(screen._ui.widgets[2], Label)
@@ -149,6 +180,7 @@ class TestOptionsScreenConstruction:
         assert isinstance(screen._ui.widgets[11], Label)
         assert isinstance(screen._ui.widgets[12], ChoiceList)
         assert isinstance(screen._ui.widgets[13], ChoiceList)
+        assert isinstance(screen._ui.widgets[14], ChoiceList)
 
     def test_constructor_withDefaultWidgetSet_shouldSelectOnlyTheTitleAndSectionLabels(
         self, font_ready: None
@@ -815,16 +847,19 @@ class TestOptionsScreenUiControls:
         group1_top = min(control.rect.top for control in widgets[2:11])
         assert section.rect.left - 960 == 1920 - section.rect.right
         assert section.rect.top == group1_top
-        # ...then the font ChoiceList, then the theme ChoiceList, each
-        # separated by the fixed 32px margin (spec 13: UI controls -
-        # group 2),
+        # ...then the font ChoiceList, then the theme ChoiceList, then
+        # the language ChoiceList (spec 13: UI controls - group 2, as
+        # amended by spec 16), each separated by the fixed 32px margin,
         font_list = widgets[self._SECTION + 1]
         theme_list = widgets[self._SECTION + 2]
+        language_list = widgets[self._SECTION + 3]
         assert font_list.rect.top - section.rect.bottom == 32
         assert theme_list.rect.top - font_list.rect.bottom == 32
+        assert language_list.rect.top - theme_list.rect.bottom == 32
         # ...and the whole group shares one left edge:
         assert font_list.rect.left == section.rect.left
         assert theme_list.rect.left == section.rect.left
+        assert language_list.rect.left == section.rect.left
 
     def test_group2Widgets_shouldHaveSpecSizesAndTheSectionLabelSpecAppearance(
         self, font_ready: None
@@ -834,13 +869,16 @@ class TestOptionsScreenUiControls:
         section = screen._ui.widgets[self._SECTION]
         font_list = screen._ui.widgets[self._SECTION + 1]
         theme_list = screen._ui.widgets[self._SECTION + 2]
+        language_list = screen._ui.widgets[self._SECTION + 3]
 
         # THEN the ChoiceLists are fixed 600x64 with the shared menu
         # border width,
         assert font_list.rect.size == (600, 64)
         assert theme_list.rect.size == (600, 64)
+        assert language_list.rect.size == (600, 64)
         assert font_list.border_width == game_constants.MENU_OPTION_BORDER_WIDTH
         assert theme_list.border_width == game_constants.MENU_OPTION_BORDER_WIDTH
+        assert language_list.border_width == game_constants.MENU_OPTION_BORDER_WIDTH
         # ...and the section Label is 600x80, left-aligned (the Label
         # default), non-opaque, borderless, selected, carrying the spec
         # text:
@@ -1011,6 +1049,138 @@ class TestOptionsScreenUiControls:
         assert screen._theme.get_theme_resource_id() == loader.THEME_ID
         # ...and the UIManager carries it for the next frame:
         assert screen._ui.theme is screen._theme
+
+
+class TestOptionsScreenLanguageControl:
+    """The language ChoiceList added to control group 2 by the spec 16
+    amendment (spec 13: UI controls - group 2 / Testing): populated from
+    ``LanguageManager.get_languages()``, preselected from
+    ``get_current_language()``, and selecting calls
+    ``set_current_language()`` - persisted immediately, effective on the
+    next screen transition."""
+
+    _SECTION = 11
+
+    _EN_US_DOCUMENT = {"options": {"back": "< Back"}}
+    _DE_AT_DOCUMENT = {"options": {"back": "< Zurueck"}}
+
+    def _language_list(self, screen: OptionsScreen) -> ChoiceList:
+        list_widget = screen._ui.widgets[self._SECTION + 3]
+        assert isinstance(list_widget, ChoiceList)
+        return list_widget
+
+    def _two_language_loader(self) -> _StubLanguageLoader:
+        return _StubLanguageLoader(
+            {
+                "languages/en-us.json": self._EN_US_DOCUMENT,
+                "languages/de-at.json": self._DE_AT_DOCUMENT,
+            }
+        )
+
+    def test_languageList_withNoLanguageResources_shouldOfferTheGuaranteedDefaultPreselected(
+        self, font_ready: None
+    ) -> None:
+        # GIVEN the silent manager over a loader with no language
+        # resources at all (installed by the autouse fixture),
+        # WHEN the screen is built,
+        screen = OptionsScreen(_default_theme(), ResourceLoader())
+        language_list = self._language_list(screen)
+
+        # THEN the chooser still offers exactly the guaranteed default,
+        # preselected (spec 13, amended by spec 16: "there is always at
+        # least one option, en-us, because languages/en-us.json is a
+        # required resource"):
+        assert language_list.get_item_count() == 1
+        assert (
+            language_list.get_current_item()
+            == game_constants.DEFAULT_LANGUAGE_CODE
+        )
+
+    def test_languageList_withMultipleLanguages_shouldBePopulatedFromGetLanguagesAndPreselectTheCurrent(
+        self, font_ready: None
+    ) -> None:
+        # GIVEN a language manager that knows de-at and en-us and runs
+        # de-at:
+        language.init_language_manager(self._two_language_loader(), "de-at")
+
+        # WHEN the screen is built,
+        screen = OptionsScreen(_default_theme(), ResourceLoader())
+        language_list = self._language_list(screen)
+
+        # THEN the chooser carries every language get_languages()
+        # reports, and the current one is preselected (spec 13: Testing
+        # - populated from get_languages, preselected from
+        # get_current_language):
+        assert language_list.get_item_count() == 2
+        assert language_list.get_current_item() == "de-at"
+
+    def test_languageList_selectingALanguage_shouldSwitchTheManagerAndPersistImmediately(
+        self, bootstrapped_persistence: Path, font_ready: None
+    ) -> None:
+        # GIVEN a screen over a two-language manager running en-us, with
+        # the persistence dir bootstrapped:
+        language.init_language_manager(self._two_language_loader(), "en-us")
+        screen = OptionsScreen(_default_theme(), ResourceLoader())
+        language_list = self._language_list(screen)
+
+        # WHEN de-at is selected on the chooser,
+        language_list.set_current_item("de-at")
+
+        # THEN the singleton switched immediately...
+        assert language.get_language_manager().get_current_language() == "de-at"
+        # ...and game.json already carries the language key - persistence
+        # is immediate like every other control on this screen (spec 13,
+        # amended by spec 16):
+        payload = json.loads(
+            (bootstrapped_persistence / "game.json").read_text(encoding="utf-8")
+        )
+        assert payload["language"] == "de-at"
+
+    def test_languageList_selectingALanguage_shouldKeepBuiltWidgetTextUntilANewScreen(
+        self, bootstrapped_persistence: Path, font_ready: None
+    ) -> None:
+        # GIVEN a screen built in en-us whose "< Back" button shows the
+        # RESOLVED en-us text (spec 16 stage 4: widgets get text, not keys):
+        language.init_language_manager(self._two_language_loader(), "en-us")
+        screen = OptionsScreen(_default_theme(), ResourceLoader())
+        back = _back_button(screen)
+        assert back.text == "< Back"
+
+        # WHEN de-at is selected on the language chooser, THEN this
+        # screen's already-built widgets keep their text - the documented
+        # known issue (spec 13: Interactions and persistence): widgets
+        # store resolved strings, so the change lands on the NEXT screen
+        # transition, not this frame...
+        self._language_list(screen).set_current_item("de-at")
+        assert back.text == "< Back"
+
+        # ...and the fresh screen the transition would build resolves the
+        # new language (spec 16: Testing - "changes take effect on next
+        # screen transition"):
+        rebuilt = OptionsScreen(_default_theme(), ResourceLoader())
+        assert _back_button(rebuilt).text == "< Zurueck"
+
+    def test_languageList_selectingALanguage_shouldSurviveAGameRestart(
+        self, bootstrapped_persistence: Path, font_ready: None
+    ) -> None:
+        # GIVEN a language change made through the chooser on a screen
+        # over the bootstrapped persistence dir:
+        language.init_language_manager(self._two_language_loader(), "en-us")
+        screen = OptionsScreen(_default_theme(), ResourceLoader())
+        self._language_list(screen).set_current_item("de-at")
+
+        # WHEN the game "restarts" - config re-read from disk, a fresh
+        # LanguageManager built from it, exactly the spec 03 startup
+        # sequence,
+        restarted_manager = language.LanguageManager(
+            self._two_language_loader(),
+            game_config.load_game_config().language,
+        )
+
+        # THEN the chosen language survived (spec 16: Testing - changing
+        # languages in the Options screen persists across game restarts):
+        assert restarted_manager.get_current_language() == "de-at"
+        assert restarted_manager.get_string("options.back") == "< Zurueck"
 
 
 class TestOptionsScreenConstants:

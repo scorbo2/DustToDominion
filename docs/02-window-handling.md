@@ -1,6 +1,6 @@
 ---
 description: The main game window: windowed vs fullscreen modes, F11 and programmatic mode switching, the mainWindow game.json section, and fallbacks for unsupported resolutions or displays.
-status: proposed
+status: active
 ---
 
 # Window handling
@@ -147,4 +147,11 @@ From fullscreen mode:
    (key lands in spec 16 stage 2, caption wiring in spec 16 stage 4).
    Flip this document back to `active` once that code lands and the full
    suite passes.
+   **Completed 2026-11-04**: landed under spec 16 dev stage 4.
+   `MainWindow.open` resolves the caption from `main_window.caption`
+   through the `LanguageManager` (warning-logged, never raising - pinned
+   in `TestOpenCaption`), and the manager re-applies the caption on every
+   real language change (pinned in `TestWindowCaptionRefresh` and the
+   full-game round trip in `tests/test_main.py`). Doc flipped back to
+   `active`; full suite green at 1426 tests.
 

@@ -1,6 +1,6 @@
 ---
 description: Describes the game's title screen and the game's screen-handling in general.
-status: proposed
+status: active
 ---
 
 # Title Screen
@@ -358,4 +358,13 @@ staged implementation plan is suggested (each stage should include tests):
      stages 2, and the `get_string()` wiring in stage 4). Flip this
      document back to `active`, and mark this stage complete, once that
      code lands and the full suite passes.
+     **Completed 2026-11-04**: landed under spec 16 dev stage 4. The
+     title `Label` and both menu `Button`s now take their text from
+     `LanguageManager.get_string` on the keys above, falling back per
+     key to `en-us` and then to the raw key. Pinned by
+     `TestTitleScreenLanguageText` in `tests/test_title_screen.py`
+     (full-`en-us` resolved text, partial-`de-at` per-key fallback) and
+     by the full-game round trip in `tests/test_main.py` (the Title
+     screen built after a language change shows the new language). Doc
+     flipped back to `active`; full suite green at 1426 tests.
 

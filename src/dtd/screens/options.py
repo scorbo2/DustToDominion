@@ -12,10 +12,22 @@ re-enabling music re-requests the Options track.
 
 Control group 2 - the UI options - lives in the right half, its top
 edge aligned with group 1's: the "UI options" section title plus the
-font and theme ChoiceLists (formerly on the Title screen). Selecting an
-item persists it immediately via ``game_config.set_font``/``set_theme``
-and rebuilds the screen-local Theme so the change lands on the very
-next frame (spec 13: Interactions and persistence).
+font, theme, and language ChoiceLists (the choosers formerly on the
+Title screen). Selecting a font or theme item persists it immediately
+via ``game_config.set_font``/``set_theme`` and rebuilds the screen-local
+Theme so the change lands on the very next frame (spec 13: Interactions
+and persistence). Selecting a language item goes through
+``LanguageManager.set_current_language`` instead (spec 13, as amended by
+spec 16): validation plus immediate persistence, and the new language
+takes effect on the next screen transition - this screen's already-built
+widgets keep their text, the one exception to "everything lands now"
+(spec 13: the known issue; the window caption is the visible exception
+that DOES update, best-effort, via the LanguageManager).
+
+Every Button/Label/Checkbox/Slider on this screen receives its text
+resolved from a language key via ``LanguageManager.get_string`` at
+construction time (spec 16: Caller decides); the widgets never see the
+keys.
 
 The background comes from the shared ``Background`` helper: the first
 ``OPTIONS_SCREEN_BACKGROUND_IMAGE_IDS`` image that resolves, scaled
@@ -54,6 +66,7 @@ import pygame
 
 from dtd import audio, game_config, game_constants
 from dtd.audio import AudioManager
+from dtd.language import get_language_manager
 from dtd.resource_loader import ResourceLoader
 from dtd.screens.background import Background
 from dtd.screens.base import Screen, ScreenAction
@@ -93,6 +106,8 @@ _CONTROL_MARGIN = 32
 class _AudioRowSpec:
     """One audio category's control row (spec 13: UI controls - group 1).
 
+    ``label`` is a language KEY (spec 16: Default language); the builder
+    resolves it to display text via ``LanguageManager.get_string``.
     ``config_prefix`` relies on the naming regularity spec 05 guarantees:
     the AudioManager exposes ``<prefix>_enabled`` / ``<prefix>_volume``
     properties whose setters validate, apply immediately, and persist.
@@ -211,7 +226,7 @@ class OptionsScreen(Screen):
         """
         back = Button(
             _BACK_BUTTON_RECT.copy(),
-            text=game_constants.OPTIONS_LABEL_BACK,
+            text=get_language_manager().get_string(game_constants.OPTIONS_LABEL_BACK),
             border_width=game_constants.MENU_OPTION_BORDER_WIDTH,
             on_click=self._request_back,
         )
@@ -227,7 +242,7 @@ class OptionsScreen(Screen):
         """
         title = Label(
             _TITLE_LABEL_RECT.copy(),
-            text=game_constants.OPTIONS_LABEL,
+            text=get_language_manager().get_string(game_constants.OPTIONS_LABEL),
             border_width=0,
         )
         title.set_opaque(False)
@@ -251,20 +266,26 @@ class OptionsScreen(Screen):
         Checkbox's checked state.
         """
         manager = audio.get_audio_manager()
-        section = self._build_section_label(game_constants.OPTIONS_LABEL_AUDIO_OPTIONS)
+        section = self._build_section_label(
+            get_language_manager().get_string(
+                game_constants.OPTIONS_LABEL_AUDIO_OPTIONS
+            )
+        )
         controls: list[Widget] = [section]
         for row in _AUDIO_ROWS:
             enabled = getattr(manager, f"{row.config_prefix}_enabled")
             checkbox = Checkbox(
                 pygame.Rect(0, 0, *_CONTROL_SIZE),
-                text=row.label,
+                text=get_language_manager().get_string(row.label),
                 border_width=0,
                 initially_checked=enabled,
             )
             checkbox.set_opaque(False)
             slider = Slider(
                 pygame.Rect(0, 0, *_CONTROL_SIZE),
-                text=game_constants.OPTIONS_LABEL_VOLUME,
+                text=get_language_manager().get_string(
+                    game_constants.OPTIONS_LABEL_VOLUME
+                ),
                 min_value=game_constants.VOLUME_MIN_PERCENT,
                 max_value=game_constants.VOLUME_MAX_PERCENT,
                 initial_value=getattr(manager, f"{row.config_prefix}_volume"),
@@ -313,16 +334,24 @@ class OptionsScreen(Screen):
 
     def _build_ui_controls(self) -> None:
         """Create and register control group 2: the "UI options" section
-        title and the font and theme ChoiceLists (spec 13: UI controls -
-        group 2), preselected from the incoming Theme's accessors.
+        title and the font, theme, and language ChoiceLists (spec 13:
+        UI controls - group 2, as amended by spec 16: Language support),
+        preselected from the incoming Theme's font/theme accessors and
+        from ``LanguageManager.get_current_language()``.
 
-        The loader's id lists are sentinel-first by contract (spec 03, as
-        amended by spec 08), so an unconfigured or unresolvable value
-        always lands on the sentinel.
+        The loader's font/theme id lists are sentinel-first by contract
+        (spec 03, as amended by spec 08), so an unconfigured or
+        unresolvable value always lands on the sentinel. The language
+        list has no sentinel - ``get_languages()`` always contains at
+        least ``en-us`` (spec 16), and the current code is validated, so
+        the preselect lookup cannot miss; the fallback index is
+        belt-and-braces.
         """
         font_ids = self._resource_loader.get_font_resource_ids()
         theme_ids = self._resource_loader.get_theme_resource_ids()
-        section = self._build_section_label(game_constants.OPTIONS_LABEL_UI_OPTIONS)
+        section = self._build_section_label(
+            get_language_manager().get_string(game_constants.OPTIONS_LABEL_UI_OPTIONS)
+        )
         font_list = ChoiceList(
             pygame.Rect(0, 0, *_CHOICE_LIST_SIZE),
             items=font_ids,
@@ -347,7 +376,20 @@ class OptionsScreen(Screen):
             border_width=game_constants.MENU_OPTION_BORDER_WIDTH,
             selection_callback=self._on_theme_choice,
         )
-        controls = [section, font_list, theme_list]
+        language_codes = get_language_manager().get_languages()
+        current_code = get_language_manager().get_current_language()
+        language_list = ChoiceList(
+            pygame.Rect(0, 0, *_CHOICE_LIST_SIZE),
+            items=language_codes,
+            initial_index=(
+                language_codes.index(current_code)
+                if current_code in language_codes
+                else 0
+            ),
+            border_width=game_constants.MENU_OPTION_BORDER_WIDTH,
+            selection_callback=self._on_language_choice,
+        )
+        controls = [section, font_list, theme_list, language_list]
         self._layout_group_in_right_half_at_group1_top(controls)
         self._ui.widgets.extend(controls)
 
@@ -412,6 +454,17 @@ class OptionsScreen(Screen):
         )
         game_config.set_theme(self._current_theme_value)
         self._apply_current_theme_and_font()
+
+    def _on_language_choice(self, language_code: str) -> None:
+        """Adopt the chosen language (spec 13: UI controls - group 2, as
+        amended by spec 16): ``set_current_language`` validates, persists
+        to game.json immediately, and refreshes the window caption - but
+        this screen's already-built widgets keep their resolved text, so
+        the new language takes effect on the next screen transition
+        (spec 13: the documented known issue; a rebuilt screen re-runs
+        the ``get_string`` lookups).
+        """
+        get_language_manager().set_current_language(language_code)
 
     def _apply_current_theme_and_font(self) -> None:
         """Rebuild the screen-local Theme from the current values and

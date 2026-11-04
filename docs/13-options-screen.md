@@ -1,6 +1,6 @@
 ---
 description: Describes the game's options screen.
-status: proposed
+status: active
 ---
 
 # Options Screen
@@ -177,10 +177,9 @@ the calling screen ("Caller decides", spec 16):
 
 The matching values ("Options", "< Back", "Volume:", ...) move into
 `languages/en-us.json` (spec 16: Default language - one-time migration).
-Until that migration completes, the on-screen text is whatever the
-constants hold: during spec 16's staged implementation there is a window
-where the raw key names are visible on screen - expected, and closed by
-spec 16 stage 4.
+The migration completed 2026-11-04 (spec 16 dev stage 4): the calling
+screens resolve every key through `LanguageManager.get_string`, so the
+raw key names are no longer visible on screen anywhere in the game.
 
 ## Audio handling
 
@@ -465,4 +464,20 @@ The tests use the `mixer_ready` + `init_audio_manager` pattern to process audio 
     wiring in spec 16 stage 4, the tests as described in the Testing
     section above). Flip this document back to `active`, and mark this
     stage complete, once that code lands and the full suite passes.
+    **Completed 2026-11-04**: landed under spec 16 dev stage 4. Control
+    group 2 now ends with the language `ChoiceList` (below the theme
+    chooser, same width and left edge), populated from
+    `LanguageManager.get_languages()` and preselected from
+    `get_current_language()`; selecting an entry calls
+    `set_current_language()`, which validates and persists through
+    `game_config.set_language()` immediately, while the already-built
+    widgets of this screen keep their text until the next screen
+    transition (the documented known issue). Every label on the screen
+    is resolved through `get_string` on the `options.*` /
+    `title_screen.options` keys. Pinned by `TestOptionsScreenLanguageControl`
+    in `tests/test_options_screen.py` (guaranteed `en-us`, populate and
+    preselect, switch-and-persist, the known-issue widget behavior, and
+    survival across a simulated game restart) plus the layout/count
+    pins, now 15 widgets. Doc flipped back to `active`; full suite
+    green at 1426 tests.
 

@@ -16,6 +16,12 @@ menu widgets - the spec's paint order - rather than registered with the
 UIManager, because a Label ignores the mouse entirely and the menu's
 widget list stays exactly the menu.
 
+All display text on this screen is resolved from language keys via the
+LanguageManager at construction time (spec 16: Caller decides) - the
+constants in game_constants carry the dotted keys, the Widgets receive
+the resolved text, and a language changed on the Options screen lands
+here on the next screen transition (main builds a brand-new screen).
+
 Each screen starts its own music (spec 08: Title Screen audio, as
 amended by spec 13): the first ``TITLE_SCREEN_MUSIC_IDS`` track that
 resolves is requested in the constructor; the main loop stops it on any
@@ -30,6 +36,7 @@ import random
 import pygame
 
 from dtd import audio, game_constants
+from dtd.language import get_language_manager
 from dtd.resource_loader import ResourceLoader
 from dtd.screens.background import Background
 from dtd.screens.base import Screen, ScreenAction
@@ -113,7 +120,9 @@ class TitleScreen(Screen):
         """
         title = Label(
             pygame.Rect(0, 0, game_constants.DESIGN_W, game_constants.DESIGN_H // 2),
-            text=game_constants.TITLE_SCREEN_TITLE_TEXT,
+            text=get_language_manager().get_string(
+                game_constants.TITLE_SCREEN_TITLE_TEXT
+            ),
             border_width=0,
         )
         title.set_text_centered(True)
@@ -137,13 +146,13 @@ class TitleScreen(Screen):
         )
         options_button = Button(
             option_rect.copy(),
-            text=game_constants.OPTIONS_LABEL,
+            text=get_language_manager().get_string(game_constants.OPTIONS_LABEL),
             border_width=game_constants.MENU_OPTION_BORDER_WIDTH,
             on_click=self._request_options,
         )
         exit_game = Button(
             option_rect.copy(),
-            text=game_constants.EXIT_GAME_LABEL,
+            text=get_language_manager().get_string(game_constants.EXIT_GAME_LABEL),
             border_width=game_constants.MENU_OPTION_BORDER_WIDTH,
             on_click=self._request_quit,
         )
