@@ -856,8 +856,8 @@ class TestStartupFailures:
         # Spec 03 (stage 8): a required resource id that does not resolve
         # aborts startup with MissingRequiredResourceError (exit code 1).
         # The synthesized tree carries a text file and a theme but no
-        # font, so the shipped master list (the UI default font) cannot
-        # resolve - with the REAL loader, no load() stubbing.
+        # font, so the master list pinned here (the UI default font)
+        # cannot resolve - with the REAL loader, no load() stubbing.
         game_constants.REQUIRED_RESOURCE_IDS = frozenset(
             {game_constants.UI_DEFAULT_FONT}
         )

@@ -997,17 +997,19 @@ class TestRequiredResources:
         # update this assertion in the same change, never the other
         # way around. (Whether every shipped id actually SHIPS as an
         # asset - loose file or .pak - is a separate canary, deferred
-        # until required-resource packaging is finalized.)
+        # until required-resource packaging is finalized.) The
+        # default language resource joined the list on 2026-11-03 per
+        # spec 16: Language support.
         assert _SHIPPED_REQUIRED_RESOURCE_IDS == frozenset(
-            {game_constants.UI_DEFAULT_FONT}
+            {game_constants.UI_DEFAULT_FONT, game_constants.UI_DEFAULT_LANGUAGE}
         )
 
     def test_load_withRequiredIdMissingFromSearchPath_shouldRaiseMissingRequiredResourceError(
         self, project: Path, mixer_ready: None, font_ready: None
     ) -> None:
-        # GIVEN the shipped master list (the UI default font) and the
-        # standard tree - which carries fonts/ui_font.ttf but NOT
-        # fonts/Audiowide-Regular.ttf:
+        # GIVEN the UI default font alone (one entry of the shipped
+        # master list) and the standard tree - which carries
+        # fonts/ui_font.ttf but NOT fonts/Audiowide-Regular.ttf:
         game_constants.REQUIRED_RESOURCE_IDS = frozenset(
             {game_constants.UI_DEFAULT_FONT}
         )

@@ -377,6 +377,7 @@ They are represented in `game_constants.py`:
 | Constant name | Constant value | Purpose |
 | --- | --- | --- |
 | `UI_DEFAULT_FONT` | `fonts/Audiowide-Regular.ttf` | Resource ID of the font used by all Widgets unless explicitly noted otherwise. |
+| `UI_DEFAULT_LANGUAGE` | `languages/en-us.json` | Resource ID of the default language resource: the fallback lookup table for every language key, and the bootstrap for the language list itself (added 2026-11-03 per spec 16: Language support; required per spec 03: Required resources). |
 | `UI_SFX_HOVER` | `audio/ui/hover.ogg` | Used by widgets that support mouse hover events. |
 | `UI_SFX_ACCEPT` | `audio/ui/accept.ogg` | Used to confirm some UI action (example: a button click). |
 | `TITLE_SCREEN_BACKGROUND_IMAGE_IDS` | `( "graphics/screens/title_screen.png", "graphics/screens/title_screen.jpg", "graphics/screens/title_screen.jpeg" )` | List of background image resource IDs that can be displayed on the Title Screen (spec 08). |
@@ -544,6 +545,20 @@ The spec can be implemented in stages:
     independence test described in the Testing section above. If all tests pass,
     flip this document back to `active` status.
     **Completed 2026-10-15** (full suite green at 1010 tests)
+14. Amendment 2026-11-03 per spec 16 (Language support): add the
+    `UI_DEFAULT_LANGUAGE` core UI resource constant
+    (`languages/en-us.json`) to the Core UI Resources table and to
+    `game_constants.py`. No other change to this doc's framework: per
+    spec 16's "Caller decides" rule, no existing Widget class learns
+    anything about languages. The constant immediately joins spec 03's
+    required-resources master list, with a placeholder
+    `resources/languages/en-us.json` bundled the same day so the
+    startup gate passes while spec 16 fills the file in for real. No
+    new tests in this doc (the constant is pinned by spec 03's
+    shipped-master-list pin test). This doc never left `active` for
+    this amendment - the change is fully implemented as written.
+    **Completed 2026-11-03** (constant and shipped resource landed;
+    full suite green at 1349 tests)
 
 Upon completion, if all tests pass, mark this document as "active". (Done 2026-10-01;
 full suite green at 280 tests.)

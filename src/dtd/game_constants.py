@@ -72,6 +72,11 @@ DESIGN_H = 1080
 #: Step 2 of the spec 04 Font determination chain: the font used by all
 #: widgets unless a valid font is explicitly configured.
 UI_DEFAULT_FONT = "fonts/Audiowide-Regular.ttf"
+#: The default language resource id (spec 04: Core UI Resources, added by
+#: spec 16: Language support). Doubles as the required language resource
+#: (spec 03: Required resources) and as the fallback lookup table for
+#: every key missing from a non-default language (spec 16: LanguageManager).
+UI_DEFAULT_LANGUAGE = "languages/en-us.json"
 #: Sound effect for widgets that support mouse hover, played through
 #: ``AudioManager.play_ui_sfx`` (spec 04: Core UI Resources).
 UI_SFX_HOVER = "audio/ui/hover.ogg"
@@ -246,9 +251,13 @@ FONT_RESOURCE_ID_PREFIX = "fonts/"
 #: amend it via spec doc amendment, never by editing this constant ad hoc.
 #: The UI default font is the first entry: the entire spec 04 font
 #: determination chain bottoms out here, so a build without it ships
-#: broken. The resource loader reads this constant as a module attribute
-#: at call time so tests can swap it (spec 03: implementation note).
-REQUIRED_RESOURCE_IDS: frozenset[str] = frozenset({UI_DEFAULT_FONT})
+#: broken. The default language resource joined the list on 2026-11-03
+#: per spec 16: every language lookup bottoms out there. The resource
+#: loader reads this constant as a module attribute at call time so tests
+#: can swap it (spec 03: implementation note).
+REQUIRED_RESOURCE_IDS: frozenset[str] = frozenset(
+    {UI_DEFAULT_FONT, UI_DEFAULT_LANGUAGE}
+)
 #: TrueType magic number: the first 4 bytes of every ``.ttf`` file (spec 03:
 #: Notes for font validation). A font that does not begin with these bytes
 #: is rejected. This header check is the ENTIRE font validation - pygame's

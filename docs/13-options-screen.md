@@ -1,6 +1,6 @@
 ---
 description: Describes the game's options screen.
-status: active
+status: proposed
 ---
 
 # Options Screen
@@ -28,6 +28,9 @@ This document does not introduce any new top-level game configuration keys.
 This document makes use of the `audio` key described in spec 05.
 
 This document makes use of `font` and `theme` config keys described in spec 04.
+
+This document makes use of the `language` config key described in
+spec 16 (Language support), persisted by the language ChoiceList.
 
 ## Options Screen appearance
 
@@ -141,22 +144,43 @@ group 2, just as with group 1.
 - ChoiceLists:
   - the font ChoiceList formerly on the Title screen appears here.
   - the theme ChoiceList formerly on the Title screen appears here.
+  - the language ChoiceList appears here, beneath the font and theme
+    choosers (added 2026-11-03 per spec 16: Language support). Its
+    items are the available languages returned by
+    `LanguageManager.get_languages()` - there is always at least one
+    option, `en-us`, because `languages/en-us.json` is a required
+    resource (spec 03: Required resources). It is preselected from
+    `LanguageManager.get_current_language()`. Selecting an item calls
+    `LanguageManager.set_current_language()`, which persists the
+    `language` config key.
   - each ChoiceList has a border width of `MENU_OPTION_BORDER_WIDTH` and a fixed size of 600x64.
 
 ## New constants
 
 The following constants live in `game_constants.py`, covering all
-Button, Label, and Checkbox labels:
+Button, Label, and Checkbox labels. Amended 2026-11-03 per spec 16
+(Language support): their VALUES are no longer display strings but
+language keys, resolved to text via `LanguageManager.get_string()` by
+the calling screen ("Caller decides", spec 16):
 
-- `OPTIONS_LABEL`: "Options"
-- `OPTIONS_LABEL_BACK`: "< Back"
-- `OPTIONS_LABEL_VOLUME`: "Volume:"
-- `OPTIONS_LABEL_GAME_SFX_ENABLED`: "Game sound effects enabled"
-- `OPTIONS_LABEL_UI_SFX_ENABLED`: "UI sound effects enabled"
-- `OPTIONS_LABEL_SPEECH_ENABLED`: "Speech enabled"
-- `OPTIONS_LABEL_MUSIC_ENABLED`: "Music enabled"
-- `OPTIONS_LABEL_AUDIO_OPTIONS`: "Audio options"
-- `OPTIONS_LABEL_UI_OPTIONS`: "UI options"
+- `OPTIONS_LABEL`: `title_screen.options` (re-using the Title Screen's
+  Options-button key, so the button and the Options screen's title
+  Label always read alike)
+- `OPTIONS_LABEL_BACK`: `options.back`
+- `OPTIONS_LABEL_VOLUME`: `options.volume`
+- `OPTIONS_LABEL_GAME_SFX_ENABLED`: `options.game_sfx_enabled`
+- `OPTIONS_LABEL_UI_SFX_ENABLED`: `options.ui_sfx_enabled`
+- `OPTIONS_LABEL_SPEECH_ENABLED`: `options.speech_enabled`
+- `OPTIONS_LABEL_MUSIC_ENABLED`: `options.music_enabled`
+- `OPTIONS_LABEL_AUDIO_OPTIONS`: `options.audio_options`
+- `OPTIONS_LABEL_UI_OPTIONS`: `options.ui_options`
+
+The matching values ("Options", "< Back", "Volume:", ...) move into
+`languages/en-us.json` (spec 16: Default language - one-time migration).
+Until that migration completes, the on-screen text is whatever the
+constants hold: during spec 16's staged implementation there is a window
+where the raw key names are visible on screen - expected, and closed by
+spec 16 stage 4.
 
 ## Audio handling
 
@@ -169,6 +193,15 @@ transitions from disabled to enabled.
 ## Interactions and persistence
 
 All changes to any UI control take effect immediately!
+
+*Known issue (added 2026-11-03 per spec 16: Language support): the
+language ChoiceList is the one exception on this screen - a language
+change takes effect on the **next screen transition**, not immediately.
+This is an accepted byproduct of spec 16's "Caller decides" approach:
+widgets store resolved raw text, not lookup keys, so widgets that are
+already built keep the strings they were built with. Persistence,
+however, is immediate like every other control: the next screen - and
+any later game restart - uses the new language.*
 
 Persistence is also immediate - the game config file is updated as each
 change is made. There is no "cancel" option - changes are live.
@@ -260,6 +293,15 @@ The tests use the `mixer_ready` + `init_audio_manager` pattern to process audio 
 - Changing the current theme takes effect on next frame with persistence to game config file.
 - If font and/or theme are changed in Options screen, then the Title
   screen uses the new values when transitioning back to Title screen.
+- The language ChoiceList (added 2026-11-03 per spec 16: Language support):
+  - it is populated from `LanguageManager.get_languages()` (at least `en-us`)
+    and preselected from `LanguageManager.get_current_language()`.
+  - it sits beneath the font and theme choosers in control group 2, with the
+    same fixed size (600x64) and border width as they have.
+  - changing the selection calls `set_current_language()`, persists the
+    `language` key to the game config file immediately, and takes effect
+    on the next screen transition (the current screen's already-built
+    widgets keep their old text - the known issue noted above).
 
 ## Acceptance criteria
 
@@ -408,4 +450,19 @@ The tests use the `mixer_ready` + `init_audio_manager` pattern to process audio 
    changes; no duplicated tests (pinned once in `tests/test_title_screen.py`).
    **Completed 2026-10-28**: inherited via the shared helper; full suite:
    1324 passed.
+10. Amendment 2026-11-03 per spec 16 (Language support): add a language
+    ChoiceList to control group 2 (items from
+    `LanguageManager.get_languages()`, preselected from
+    `get_current_language()`, selecting calls `set_current_language()`);
+    document the known issue that a language change only takes effect on
+    the next screen transition; convert the "New constants" values from
+    display strings to language keys (`OPTIONS_LABEL` ->
+    `title_screen.options`, `OPTIONS_LABEL_BACK` -> `options.back`, and
+    the rest of the `options.*` set per the section above). Doc amended
+    and marked `proposed` 2026-11-03; the code half is carried out under
+    spec 16's dev plan (the key constants and `languages/en-us.json`
+    content in spec 16 stage 2, the ChoiceList and the `get_string()`
+    wiring in spec 16 stage 4, the tests as described in the Testing
+    section above). Flip this document back to `active`, and mark this
+    stage complete, once that code lands and the full suite passes.
 

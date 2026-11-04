@@ -39,58 +39,6 @@ This spec doc introduces one new top-level `language` key:
 
 Silent default of `en-us` will be applied if the key is missing, or its value is blank.
 
-## Amendments to previous spec docs
-
-### Changes to the 02 spec
-
-- "The window title is always the full name of the game" should be modified to
-  state that the title of the game is read from the language key `main_window.caption`.
-
-### Changes to the 04 spec
-
-- add a new core UI resource constant `UI_DEFAULT_LANGUAGE` with a value of `languages/en-us.json`.
-
-### Changes to the 03 spec
-
-- add `UI_DEFAULT_LANGUAGE` to the list of required resources.
-- modify application startup order to insert `LanguageManager` initialization after
-  `audio.init_audio_manager()`: add `init_language_manager(resource_loader, config.language)`.
-- add a `get_language_resource_ids()` method that enumerates and returns a list of all
-  resources that start with `languages/` and end with `.json`. The search is NOT recursive:
-  if both `languages/fr-ca.json` and `languages/long/path/fr-ca.json` are found, only the
-  non-nested one is returned. The list is sorted alphabetically by full resource id (casefold).
-  The list should contain at least `languages/en-us.json` because it is a required resource.
-  Filenames must be all lowercase! Files `EN-US.json`, `En-us.json`, and `en-us.Json` are all
-  silently rejected, similar to files in nested subdirectories. Note that `get_language_resource_ids()`
-  is similar to what was done for the theme/font listers, except that here there is
-  no leading sentinel value (we don't need one, as `en-us` is a required resource).
-  Also note that the country/region filename format is encouraged but not enforced. A user could
-  supply `languages/hello_there_my_darling.json`, and it will be loaded and displayed as such.
-
-### Changes to the 08 spec
-
-- the "Title" section needs changing to specify that the game title should come from
-  a language key `title_screen.title` instead of hard-coding "Dust to Dominion".
-  The intention is that the name of the game itself is also subject to translation.
-- button labels (currently "Options" and "Exit Game") should also be driven from
-  language keys: `title_screen.options` and `title_screen.exit`.
-
-### Changes to the 13 spec
-
-- add a new language ChoiceList control to the UI Options group. The options for this
-  ChoiceList will be driven from the available language list returned by `LanguageManager`.
-  There is always at least one option: `en-us` (ensured by LanguageManager).
-  This new ChoiceList can be added after (beneath) the existing options in that group.
-  The ChoiceList has the same size and cosmetic attributes as the Font and Theme choosers.
-- add a note somewhere in the document that it is a known issue that changing the language
-  setting on the Options screen only takes effect *on the next screen transition*, and not
-  immediately as with the other controls on that screen. This is a byproduct of the
-  "Caller decides" approach, where widgets store raw text and not lookup keys.
-- the "New constants" section currently lists string values. These need to be
-  changed as needed to language keys. For example: `OPTIONS_LABEL` should
-  have value `title_screen.options` (re-using title-screen label), `OPTIONS_LABEL_BACK`
-  should have value `options.back`, and so on.
-
 ## LanguageManager
 
 The LanguageManager class offers the following facilities:
@@ -371,6 +319,17 @@ Tests should use a `silent_language_manager` fixture, following the pattern of
   `languages/en-us.json` file as part of this stage to avoid failing tests.
   This file will be properly filled in as part of stage 2. Add `language: str` to
   GameConfig as part of this stage.
+  **Completed 2026-11-03**: docs 02, 03, 04, 08 and 13 amended, each with a new
+  dev-plan stage; the Amendments section is now gone from this doc. Code landed
+  with the amendments: `game_constants.UI_DEFAULT_LANGUAGE`
+  (`languages/en-us.json`) added to the Core UI Resources table and to spec 03's
+  required-resources master list (pin test updated), the shipped placeholder
+  `resources/languages/en-us.json`, and `language: str = "en-us"` on `GameConfig`
+  (full suite green at 1349 tests). Spec 04's amendment was fully implemented
+  and stayed `active`; docs 02, 03, 08 and 13 carry amended text whose code
+  halves land in stages 2-4 below, so each of those docs is marked `proposed`
+  and its new dev-plan stage stays unmarked until its implementation lands and
+  the doc flips back to `active`.
 2. Create the `resources/languages/en-us.json` file using values from
   all existing UI components. Add key constants as needed to `game_constants.py`.
   At this point, all UI elements in the game should display the raw key values
