@@ -1,11 +1,11 @@
 ---
-description: Proposes a new standalone tool for the game: `npc_generator`
-status: proposed
+description: Specifies the standalone `npc_generator` tool that pre-generates NPC profile images and metadata directories for the game
+status: active
 ---
 
 # NPC Image Generator
 
-This document proposes a new `tools/npc_generator` standalone
+This document specifies the `tools/npc_generator` standalone
 Python script that can be used to easily generate profile images
 for all NPC characters.
 
@@ -469,4 +469,28 @@ via the tool's `--server` config.
   terminal UX. 2 new tests; full suite green at 1551 tests.)
 7. Verification pass: do all tests pass? Are all acceptance criteria met?
   If all is well, flip this document to "active" status.
+  **Completed 2026-11-04** (verification record: full suite green twice
+  back to back at 1552 tests. Every Testing bullet maps to at least
+  one named test; the audit caught one gap - the "100 random name
+  draws" bullet was pinned only at the `allocate_npc_directory` level,
+  never through `run()`, exactly the tool-path exit-1 wiring this
+  stage 2's note promised - closed with
+  `test_run_withExhaustedUniqueNameDraws_shouldExitOneWithTheSpecsExhaustionMessage`
+  (single-combination name files, the sole name pre-taken, exit 1,
+  spec's exact stderr message, pre-existing directory untouched). All
+  five Acceptance criteria verified end-to-end, twice over: by
+  `test_npcGeneratorShim_withStubServerAndRealSdClient_shouldGenerateTheFullNpcDirectory`
+  and by an audit run of the real `tools/npc_generator` shim (no test
+  name-file overrides - the shipped 500-name pools) driving the real
+  `sd-client.py` against the stub server: unique `{first} {last}`
+  directories, valid `image.png` in each, `metadata.json` carrying the
+  resolved sex as its only key, and an empty `audio/` subdirectory in
+  each. AGENTS.md workflow gates all satisfied: frontmatter
+  `description` present, `Configuration`, `Testing` and `Acceptance
+  criteria` sections present, Dev plan complete for a >250-line spec,
+  no unanswered `Open questions`, no `Amendments` section requiring
+  re-staging. Spec/code sync spot-checked across exit codes, config
+  rules, the invocation contract, and the `--debug` stdout rule.
+  Document flipped `proposed` -> `active`; the intro prose now says
+  "specifies", as it officially does.)
 

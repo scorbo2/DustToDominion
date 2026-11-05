@@ -1864,6 +1864,35 @@ def test_run_withInterruptedSecondGeneration_shouldKeepTheFirstNpcAndExitOne(
     assert (first_npc / "audio").is_dir()
 
 
+def test_run_withExhaustedUniqueNameDraws_shouldExitOneWithTheSpecsExhaustionMessage(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # GIVEN single-combination name files (the male draw can only ever
+    # be "John Smith"), that one name already taken in the output dir,
+    # and one NPC to make: all 100 permitted draws are guaranteed
+    # collisions - the spec's fatal "Name pool exhausted" path now
+    # that stage 5 wired allocation into the tool:
+    argv = _base_args(tmp_path) + ["--count", "1", "--sex", "male"]
+    for filename, content in (
+        ("female_names.txt", "Zoe\n"),
+        ("male_names.txt", "John\n"),
+        ("last_names.txt", "Smith\n"),
+    ):
+        (tmp_path / filename).write_text(content, encoding="utf-8")
+    (tmp_path / "npc-out" / "John Smith").mkdir()
+    _fake_sd_client(tmp_path, monkeypatch)
+
+    exit_code = npc_generator_lib.run(argv)
+
+    # THEN the run exits 1 with the spec's exact message on stderr,
+    # and the name's pre-existing directory is left completely alone:
+    assert exit_code == 1
+    err = capsys.readouterr().err
+    assert "error: Name pool exhausted! You need more names." in err
+    assert [p.name for p in (tmp_path / "npc-out").iterdir()] == ["John Smith"]
+    assert not (tmp_path / "npc-out" / "John Smith" / "metadata.json").exists()
+
+
 def test_run_withSdClientScriptMissing_shouldExitOneWithoutGeneratingAnything(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
