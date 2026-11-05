@@ -356,9 +356,22 @@ via the tool's `--server` config.
 ## Dev plan
 
 1. Follow the example of the Ship Editor tool from the 15 spec doc, and create
-  an `npc_generator_lib.py` to contain the logic of this new tool. This can be stubbed
-  for now. Generate the `npc_generator` script with argparse and parsing
+  an `npc_generator_lib.py` to contain the logic of this new tool. This can be
+  stubbed for now. Generate the `npc_generator` script with argparse and parsing
   of the `npc_generator.json` file if present.
+  **Completed 2026-11-04** (stdlib-only `npc_generator_lib` - no `dtd.*` or
+  pygame imports, so the shim needs no `sys.path` bootstrap - with the full
+  spec 17 argument surface (argparse: `--output-dir` required, code 2 on
+  missing/invalid values; name-file/output-dir problems, code 1),
+  `npc_generator.json` loading per the spec's fatal/warning rules (missing
+  file and missing keys warn with defaults in effect; malformed Json, empty
+  file, non-object top level, and unrecognized keys are code 1; blank
+  `image_style` honored; `--width`/`--height` beat config values), a
+  `prepare`/`run(argv)` test seam, and a loudly-warning `generate_npcs`
+  stub for stages 2-5. One deliberate beyond-spec call: wrong-typed config
+  values fail fast at load with code 1 rather than surfacing inside
+  `sd-client.py`. 66 tests in `tests/test_npc_generator.py`; full suite
+  green at 1492 tests.)
 2. Add random name drawing functionality to `npc_generator_lib.py`.
 3. Add prompt generation functionality to `npc_generator_lib.py`.
 4. Implement the stub service for `sd-client.py` to hit.
