@@ -1,4 +1,4 @@
-"""NPC image generator tool tests (spec 17, dev plan stages 1-5).
+"""NPC image generator tool tests (spec 17, dev plan stages 1-6).
 
 Stages 1-2 covered the tool's front door (argument surface, argument
 validation, npc_generator.json loading) and random name drawing with
@@ -33,6 +33,9 @@ subprocess per NPC. The Testing bullets these stages make testable:
 - a successful generation fills the NPC directory with ``image.png``,
   ``metadata.json`` (resolved sex as the only key) and an empty
   ``audio/`` subdirectory
+- without ``--debug`` stdout carries only the per-NPC "Generating..."
+  announcements; with ``--debug`` the exact prompt used for each NPC
+  follows on its own line (and matches what sd-client.py received)
 
 Generation subprocesses never touch the real network: an autouse
 fixture swaps the tool's ``SD_CLIENT_SCRIPT`` seam for a harmless
@@ -624,6 +627,7 @@ def test_buildParser_withOnlyOutputDir_shouldDefaultFileArgumentsBesideTheTool()
     assert args.seed == -1
     assert args.width is None
     assert args.height is None
+    assert args.debug is False
 
 
 def test_prepare_withOptionalArgumentsOmitted_shouldUseSpecScalarDefaults(
@@ -1573,6 +1577,7 @@ def test_build_sd_client_command_shouldLeadWithInterpreterAndTheBesideToolScript
             female_names_file=Path("f.txt"),
             male_names_file=Path("m.txt"),
             last_names_file=Path("l.txt"),
+            debug=False,
         ),
         "a prompt",
         Path("/nowhere/Ada Dee/image.png"),
@@ -1723,6 +1728,65 @@ def test_run_withCountTwo_shouldPrintOneGeneratingLinePerNpcOnStdout(
     assert sorted(announced) == sorted(
         directory.name for directory in (tmp_path / "npc-out").iterdir()
     )
+
+
+# ------------------------------------------------------------------ #
+# the --debug prompt echo (spec 17: Arguments + Invocation contract,
+# dev plan stage 6)
+# ------------------------------------------------------------------ #
+
+def test_run_withDebugFlag_shouldPrintEachFullPromptRightAfterItsGeneratingLine(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # GIVEN a two-NPC run with --debug and the recording fake:
+    argv = _base_args(tmp_path) + ["--count", "2", "--debug"]
+    log = _fake_sd_client(tmp_path, monkeypatch)
+
+    exit_code = npc_generator_lib.run(argv)
+
+    assert exit_code == 0
+
+    # THEN stdout alternates exactly: Generating line, Prompt line,
+    # once per NPC (spec: "Prompt: {full_prompt}" on a separate line
+    # after the Generating line):
+    lines = capsys.readouterr().out.splitlines()
+    assert len(lines) == 4
+    for index, pair in enumerate(
+        (lines[0:2], lines[2:4])
+    ):
+        generating_line, prompt_line = pair
+        assert generating_line.startswith("Generating ")
+        assert generating_line.endswith("...")
+        assert prompt_line.startswith("Prompt: ")
+
+    # AND each printed prompt is the EXACT one that reached
+    # sd-client.py - the fake records the positional prompt, closing
+    # any gap between what the user is told and what is generated:
+    invocations = _recorded_invocations(log)
+    assert len(invocations) == 2
+    printed_prompts = [
+        line[len("Prompt: "):] for line in lines if line.startswith("Prompt: ")
+    ]
+    assert printed_prompts == [invocation[0] for invocation in invocations]
+    for prompt in printed_prompts:
+        assert prompt.startswith(npc_generator_lib.COMMON_CHARACTERISTICS)
+
+
+def test_run_withoutDebugFlag_shouldNotPrintPromptLines(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # GIVEN the same kind of run WITHOUT --debug (the flag defaults to
+    # false, and the spec pins the quiet output too):
+    argv = _base_args(tmp_path) + ["--count", "2"]
+    _fake_sd_client(tmp_path, monkeypatch)
+
+    exit_code = npc_generator_lib.run(argv)
+
+    # THEN stdout carries only the two Generating announcements:
+    assert exit_code == 0
+    captured = capsys.readouterr()
+    assert "Prompt:" not in captured.out
+    assert len(captured.out.splitlines()) == 2
 
 
 # ------------------------------------------------------------------ #

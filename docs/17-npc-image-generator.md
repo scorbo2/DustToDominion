@@ -98,6 +98,8 @@ The following arguments are all optional (their defaults are listed here):
   in the same directory as the script itself.
 - `--config` (for testing purposes): the location of the `npc_generator.json`
   configuration file. Defaults to `npc_generator.json` in the script's directory.
+- `--debug` (for testing purposes): if true, outputs the exact prompt
+  used to stdout for each NPC. Defaults to false.
 
 ### Argument validation
 
@@ -270,7 +272,8 @@ as our prompt varies for each new NPC to be generated.
 Any `sd-client.py` failure terminates the batch operation and exits with code 1.
 
 The tool should print `Generating {first_name} {last_name}...` to stdout before each
-invocation of `sd-client.py`.
+invocation of `sd-client.py`. If `--debug` was specified, also output `Prompt: {full_prompt}`
+on a separate line after the "Generating..." line.
 
 Failed generations (for example, `sd-client.py` returning non-zero) should result in
 the new NPC directory being cleaned up, to free that name for a future attempt. Note that
@@ -344,6 +347,8 @@ via the tool's `--server` config.
 - a successful generation creates a new directory with the expected name containing `image.png`, `metadata.json`, and an empty `audio` subdirectory. The metadata file contains sex as the only key.
 - interrupting a batch halfway through does NOT clean up the NPCs already successfully generated.
 - `sd-client.py` is missing from the `tools/` directory: error and exit code 1.
+- if `--debug` is not specified, a `Generating {first_name} {last_name}` message is output to stdout for each NPC.
+- if `--debug` is specified, an additional output line containing the full prompt is also output to stdout for each NPC..
 
 ## Acceptance criteria
 
@@ -449,6 +454,19 @@ via the tool's `--server` config.
   the stub's PNG bytes exactly, and the stub's recorded payload proves
   width/height/steps/cfg rode all the way through. Full suite green
   at 1549 tests.)
-6. Verification pass: do all tests pass? Are all acceptance criteria met?
+6. Implement the `--debug` command line option. This only affects the
+  stdout output that is generated for each NPC generation.
+  **Completed 2026-11-04** (`--debug` is an argparse store-true flag
+  defaulting to false, carried through `ResolvedSettings.debug`; when
+  on, `Prompt: {full_prompt}` goes to stdout on its own line, flushed,
+  immediately after the `Generating...` announcement and before the
+  `sd-client.py` invocation - generation itself is untouched. The
+  tests pin both Testing bullets: with the flag, the printed prompts
+  are compared against the prompt the recording fake actually
+  received (so "the exact prompt" is proven, not asserted); without
+  it, stdout stays at two lines per two NPCs with no `Prompt:` in
+  sight. A live smoke run against the stage 4 stub shows the real
+  terminal UX. 2 new tests; full suite green at 1551 tests.)
+7. Verification pass: do all tests pass? Are all acceptance criteria met?
   If all is well, flip this document to "active" status.
 

@@ -14,15 +14,16 @@ normal resource machinery). ``sd-client.py``, the one component that
 talks to an image server, is likewise stdlib-only (spec 17: Additional
 dependencies).
 
-Stages 1-5 of the spec 17 dev plan are live: the full argument surface
+Stages 1-6 of the spec 17 dev plan are live: the full argument surface
 with validation, ``npc_generator.json`` loading with the spec's fatal
 and non-fatal rules, the merged-settings seam, random name drawing
 with the output-dir uniqueness rule (``NamePool``,
 ``allocate_npc_directory``), prompt assembly (``generate_prompt`` with
-the spec's category constants), and the generation pipeline itself
+the spec's category constants), the generation pipeline itself
 (``generate_npcs``): per-NPC directory layout (``image.png``,
 ``metadata.json``, empty ``audio/``) plus one ``sd-client.py``
-subprocess per NPC, with the spec's fatal-failure cleanup.
+subprocess per NPC, with the spec's fatal-failure cleanup, and the
+``--debug`` prompt echo on stdout.
 """
 from __future__ import annotations
 
@@ -129,7 +130,8 @@ class ResolvedSettings:
     ``width``/``height`` carry the spec 17 Arguments override rule: a
     command-line value wins over the ``npc_generator.json`` value.
     ``sex`` is the *requested* sex; resolving ``random`` per-NPC is the
-    name-drawing stage's job (spec 17: Testing).
+    name-drawing stage's job (spec 17: Testing). ``debug`` is the
+    ``--debug`` prompt-echo switch (spec 17: dev stage 6).
     """
 
     output_dir: Path
@@ -145,6 +147,7 @@ class ResolvedSettings:
     female_names_file: Path
     male_names_file: Path
     last_names_file: Path
+    debug: bool
 
 
 # ------------------------------------------------------------------ #
@@ -275,6 +278,14 @@ def _build_parser() -> argparse.ArgumentParser:
         help=(
             "location of npc_generator.json (default: beside the "
             "tool); a missing file is a warning, not an error"
+        ),
+    )
+    parser.add_argument(
+        "--debug",
+        action="store_true",
+        help=(
+            "also print the exact prompt used for each NPC to stdout, "
+            "one line after the Generating announcement (default: off)"
         ),
     )
     return parser
@@ -443,6 +454,7 @@ def merge_settings(
         female_names_file=Path(args.first_names_female),
         male_names_file=Path(args.first_names_male),
         last_names_file=Path(args.last_names),
+        debug=args.debug,
     )
 
 
@@ -798,9 +810,13 @@ def generate_npcs(settings: ResolvedSettings) -> int:
 
         write_npc_directory_layout(npc_directory, npc_name)
         prompt = generate_prompt(npc_name.sex, settings.image_style, rng)
-        # flush so the announcement reaches the terminal before
+        # flush so the announcements reach the terminal before
         # sd-client.py's own output, even when stdout is block-buffered.
         print(f"Generating {npc_name.full_name}...", flush=True)
+        if settings.debug:
+            # spec 17 dev stage 6: the exact prompt, on its own line,
+            # right after the Generating announcement.
+            print(f"Prompt: {prompt}", flush=True)
         returncode = _invoke_sd_client(
             build_sd_client_command(
                 settings, prompt, npc_directory / IMAGE_FILENAME
