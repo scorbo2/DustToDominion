@@ -14,14 +14,15 @@ normal resource machinery). ``sd-client.py``, the one component that
 talks to an image server, is likewise stdlib-only (spec 17: Additional
 dependencies).
 
-Stages 1-3 of the spec 17 dev plan are live: the full argument surface
+Stages 1-5 of the spec 17 dev plan are live: the full argument surface
 with validation, ``npc_generator.json`` loading with the spec's fatal
 and non-fatal rules, the merged-settings seam, random name drawing
 with the output-dir uniqueness rule (``NamePool``,
-``allocate_npc_directory``), and prompt assembly (``generate_prompt``
-with the spec's category constants). The stub server and the
-``sd-client.py`` wiring (stages 4-5) sit behind the stubbed
-``generate_npcs``.
+``allocate_npc_directory``), prompt assembly (``generate_prompt`` with
+the spec's category constants), and the generation pipeline itself
+(``generate_npcs``): per-NPC directory layout (``image.png``,
+``metadata.json``, empty ``audio/``) plus one ``sd-client.py``
+subprocess per NPC, with the spec's fatal-failure cleanup.
 """
 from __future__ import annotations
 
@@ -29,6 +30,8 @@ import argparse
 import json
 import os
 import random
+import shutil
+import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -41,6 +44,18 @@ DEFAULT_CONFIG_FILE = _TOOLS_DIR / "npc_generator.json"
 DEFAULT_FEMALE_NAMES_FILE = _TOOLS_DIR / "npc_first_names_female.txt"
 DEFAULT_MALE_NAMES_FILE = _TOOLS_DIR / "npc_first_names_male.txt"
 DEFAULT_LAST_NAMES_FILE = _TOOLS_DIR / "npc_last_names.txt"
+
+#: The generation helper, spec'd to live beside the tool (spec 17:
+#: Error handling - "the sd-client.py script does not exist in the same
+#: directory as npc_generator" is fatal). Tests swap this module-level
+#: seam for a fake so no test ever needs a GPU or a network.
+SD_CLIENT_SCRIPT = _TOOLS_DIR / "sd-client.py"
+
+#: Per-NPC layout inside the output dir (spec 17: NPC file storage -
+#: ``image.png``, ``metadata.json``, and an initially empty ``audio/``).
+IMAGE_FILENAME = "image.png"
+METADATA_FILENAME = "metadata.json"
+AUDIO_DIRECTORY_NAME = "audio"
 
 #: npc_generator.json defaults, verbatim from the spec 17 Configuration
 #: snippet. Note the deliberate port mismatch with sd-client.py's own
@@ -673,6 +688,140 @@ def generate_prompt(
 
 
 # ------------------------------------------------------------------ #
+# generation via sd-client.py (spec 17: Image generation, Invocation
+# contract, NPC file storage)
+# ------------------------------------------------------------------ #
+
+def build_sd_client_command(
+    settings: ResolvedSettings, prompt: str, image_path: Path
+) -> list[str]:
+    """Assemble one ``sd-client.py`` invocation (spec 17: Image
+    generation example, flag by flag).
+
+    ``sys.executable`` leads: the script's shebang works on POSIX, but
+    running it under our own interpreter is the spec's guarantee the
+    call also works on Windows. The argument list never goes through a
+    shell, and ``--batch-count`` never appears: our prompt changes per
+    NPC, so batching would generate the same face N times.
+
+    ``--seed`` is only present for a real seed: the tool's ``-1``
+    sentinel means "the image generator picks one", and simply omitting
+    the flag lets sd-client omit the seed from the job payload instead
+    of shipping a literal -1 to the server.
+    """
+    command = [
+        sys.executable,
+        str(SD_CLIENT_SCRIPT),
+        prompt,
+        "--server",
+        settings.server,
+        "--steps",
+        str(settings.steps),
+        "--cfg-scale",
+        str(settings.cfg),
+        "--width",
+        str(settings.width),
+        "--height",
+        str(settings.height),
+    ]
+    if settings.seed >= 0:
+        command.extend(["--seed", str(settings.seed)])
+    command.extend(["-o", str(image_path), "--output-format", "png"])
+    return command
+
+
+def write_npc_directory_layout(
+    npc_directory: Path, npc_name: NpcName
+) -> None:
+    """Fill a freshly allocated NPC directory except for the image
+    itself (spec 17: NPC file storage): the empty ``audio/``
+    subdirectory and ``metadata.json``, whose only key is the *resolved*
+    sex - never the literal word "random".
+
+    The metadata is a placeholder by spec: game stats are undefined
+    today, so the file exists mostly to prove a directory is an NPC's.
+    """
+    (npc_directory / AUDIO_DIRECTORY_NAME).mkdir()
+    metadata = json.dumps({"sex": npc_name.sex}, indent=2) + "\n"
+    (npc_directory / METADATA_FILENAME).write_text(metadata, encoding="utf-8")
+
+
+def _invoke_sd_client(command: list[str]) -> int:
+    """Run one generation subprocess and report its exit code.
+
+    ``Popen.wait`` instead of ``subprocess.run`` on purpose: a ctrl+C
+    signals the whole foreground process group, and ``subprocess.run``
+    re-raises the parent's ``KeyboardInterrupt`` after cleanup, losing
+    the child's real exit code on the way out. The spec wants that
+    child code - 130 after an interrupt - handled like every other
+    non-zero failure, so the wait is retried once to collect it.
+    """
+    process = subprocess.Popen(command)
+    try:
+        return process.wait()
+    except KeyboardInterrupt:
+        return process.wait()
+
+
+def generate_npcs(settings: ResolvedSettings) -> int:
+    """Generate ``settings.count`` NPCs (spec 17: Image generation,
+    NPC Naming, NPC file storage, Error handling).
+
+    Per NPC: allocate a unique name directory, lay out ``metadata.json``
+    plus the empty ``audio/`` subdirectory, announce the NPC on stdout,
+    then hand the prompt to ``sd-client.py``. Any non-zero sd-client
+    exit - including 130 from a ctrl+C - is fatal: the half-filled NPC
+    directory is removed so the name stays free for a future attempt,
+    and already-generated NPCs are left untouched.
+
+    The name draws and the prompt draws share one plain ``random.Random``:
+    ``--seed`` is deliberately NOT used here (spec 17: Arguments - the
+    seed belongs to the image generator and "is not used for anything
+    else"), so reproducible images and reproducible names are separate
+    concerns.
+    """
+    if not SD_CLIENT_SCRIPT.is_file():
+        return _fail(
+            f"sd-client.py is missing: expected it beside npc_generator "
+            f"at {SD_CLIENT_SCRIPT}"
+        )
+
+    rng = random.Random()
+    name_pool = load_name_pool(settings, rng=rng)
+    for _ in range(settings.count):
+        try:
+            npc_name, npc_directory = allocate_npc_directory(
+                name_pool, settings.sex, settings.output_dir
+            )
+        except NamePoolExhaustedError as exc:
+            return _fail(str(exc))
+
+        write_npc_directory_layout(npc_directory, npc_name)
+        prompt = generate_prompt(npc_name.sex, settings.image_style, rng)
+        # flush so the announcement reaches the terminal before
+        # sd-client.py's own output, even when stdout is block-buffered.
+        print(f"Generating {npc_name.full_name}...", flush=True)
+        returncode = _invoke_sd_client(
+            build_sd_client_command(
+                settings, prompt, npc_directory / IMAGE_FILENAME
+            )
+        )
+        if returncode != 0:
+            try:
+                shutil.rmtree(npc_directory)
+            except OSError as cleanup_error:
+                _warn(
+                    f"could not clean up the partial NPC directory "
+                    f"{npc_directory}: {cleanup_error}"
+                )
+            return _fail(
+                f"generation failed for {npc_name.full_name}: "
+                f"sd-client.py exited with code {returncode}"
+            )
+    return 0
+
+
+# ------------------------------------------------------------------ #
 # top-level entry points
 # ------------------------------------------------------------------ #
 
@@ -713,35 +862,15 @@ def prepare(argv: list[str] | None = None) -> tuple[int, ResolvedSettings | None
     return 0, merge_settings(args, config)
 
 
-def generate_npcs(settings: ResolvedSettings) -> int:
-    """Generate ``settings.count`` NPC directories (spec 17: NPC file
-    storage, Image generation).
-
-    STUB - the spec 17 dev plan builds this out further in stages 4-5:
-    the stub image server (stage 4) and the sd-client.py wiring with
-    per-NPC directory layout and failure cleanup (stage 5). Name
-    drawing and prompt assembly (stages 2-3) are ready above -
-    ``load_name_pool``, ``allocate_npc_directory``, ``generate_prompt``
-    - but deliberately stay unwired here until the generation pipeline
-    exists, so this stage never leaves a half-filled NPC directory
-    behind. The stub warns instead of exiting silently green, so
-    nobody can mistake a code 0 for generated NPCs.
-    """
-    _warn(
-        "NPC generation is not implemented yet (spec 17 dev plan "
-        "stages 4-5); no NPCs were generated"
-    )
-    return 0
-
-
 def run(argv: list[str] | None = None) -> int:
     """Run the npc_generator tool (spec 17).
 
-    Returns the process exit code: 0 when the arguments, name files,
-    output directory, and config all check out (generation itself is
-    stubbed until dev stage 5), 1 on fatal read/validation problems,
-    and 2 on argparse-level problems - missing ``--output-dir`` or a
-    failing argument value (spec 17: Error handling special cases).
+    Returns the process exit code: 0 when all ``--count`` NPCs were
+    generated, 1 on fatal problems - name-file/output-dir/config
+    failures, an exhausted name pool, a missing ``sd-client.py``, or
+    any non-zero ``sd-client.py`` exit (interrupts included), and 2 on
+    argparse-level problems - missing ``--output-dir`` or a failing
+    argument value (spec 17: Error handling special cases).
     """
     exit_code, settings = prepare(argv)
     if exit_code != 0 or settings is None:

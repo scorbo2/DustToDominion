@@ -424,6 +424,31 @@ via the tool's `--server` config.
   with the stub's recording showing prompt/width/height/output_format
   arrived; full suite green at 1535 tests.)
 5. Wire up `npc_generator` to `sd-client.py` and test against the stub service.
+  **Completed 2026-11-04** (`generate_npcs` is live: per NPC, allocate
+  the unique-name directory, lay out `metadata.json` (resolved sex as
+  the only key) plus the empty `audio/` subdirectory, print
+  `Generating {name}...` to stdout, then invoke `sd-client.py` exactly
+  once - argument list, `sys.executable` leading, no shell, no
+  `--batch-count`, `--output-format png` always, and `--seed` only for
+  a real seed (the `-1` sentinel omits the flag so the job payload
+  carries no seed rather than a literal -1). Any non-zero sd-client
+  exit, 130 included, is fatal: the partial NPC directory is removed
+  so the name stays free, NPCs generated earlier survive untouched,
+  and the batch exits 1. One deliberate deviation from the Invocation
+  contract's letter: `Popen.wait` instead of `subprocess.run`, because
+  `subprocess.run` re-raises the parent's own `KeyboardInterrupt` and
+  loses the child's 130 that the spec insists on handling; the retry
+  `wait()` collects it. Name/prompt draws share one `random.Random`
+  never tied to `--seed`, per spec. Also corrected earlier drift: the
+  spec never asks for `--denoise`. 14 new tests (module total 113):
+  an autouse seam makes every non-generation test hermetic, a
+  recording fake pins the argv contract and the failure-cleanup rules
+  (including the spec's verbatim "John Smith" bullet), and the
+  end-to-end probe runs the real `npc_generator` shim driving the real
+  `sd-client.py` against the stage 4 stub - the saved image matches
+  the stub's PNG bytes exactly, and the stub's recorded payload proves
+  width/height/steps/cfg rode all the way through. Full suite green
+  at 1549 tests.)
 6. Verification pass: do all tests pass? Are all acceptance criteria met?
   If all is well, flip this document to "active" status.
 
