@@ -335,7 +335,7 @@ def _validate_output_dir(path: Path) -> str | None:
     for unwritable). Returns the stderr message, or None if usable."""
     if not path.is_dir():
         return f"output directory {path} does not exist or is not a directory"
-    if not os.access(path, os.W_OK):
+    if not os.access(path, os.W_OK | os.X_OK):
         return f"output directory {path} is not writable"
     return None
 
