@@ -407,6 +407,22 @@ via the tool's `--server` config.
   both sexes, and a scripted walk proving every spec'd option is
   selectable; full suite green at 1525 tests.)
 4. Implement the stub service for `sd-client.py` to hit.
+  **Completed 2026-11-04** (`tests/helpers_npc_generator_stub.py`, per
+  the Stub server section: an in-process `ThreadingHTTPServer` bound to
+  `127.0.0.1:0` so the OS hands out an ephemeral port the test passes
+  through the tool's `--server` config; the two response bodies are the
+  spec's verbatim; the blank PNG is encoded from scratch with stdlib
+  zlib/struct rather than a pasted base64 blob, and a test decodes the
+  IHDR and IDAT to prove it. Two stage-5 affordances: every request is
+  recorded (`method`, `path`, parsed Json body) for wiring
+  assertions, and `BaseHTTPRequestHandler.log_message` is silenced so
+  the handler thread can never poison `capsys`. `stop()` is idempotent,
+  and the port verifiably refuses connections afterwards - that is how
+  stage 5 will exercise the unreachable-server path. 10 tests, the
+  last one the acceptance probe: a real `sd-client.py` subprocess
+  against the stub exits 0 and writes the exact served PNG bytes,
+  with the stub's recording showing prompt/width/height/output_format
+  arrived; full suite green at 1535 tests.)
 5. Wire up `npc_generator` to `sd-client.py` and test against the stub service.
 6. Verification pass: do all tests pass? Are all acceptance criteria met?
   If all is well, flip this document to "active" status.
