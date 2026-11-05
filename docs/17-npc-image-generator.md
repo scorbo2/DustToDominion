@@ -315,10 +315,7 @@ This will be addressed in future, not now.
 
 For testing, our hermetic test suite will require a stub service that `sd-client.py`
 can hit:
-
-- `POST /sdcpp/v1/img_gen` returning `{"id":"stub1","status":"queued","poll_url":"/jobs/stub1"}`
-- `GET /jobs/stub1` returning `{"status":"completed","result":{"images":[{"index":0,b64_json":"<base64 blank PNG>"}]}}`
-- an in-process `http.server` on port 0; hermetic, no real network
+- `GET /jobs/stub1` returning `{"status":"completed","result":{"images":[{"index":0,"b64_json":"<base64 blank PNG>"}]}}`
 
 The stub server is owned by the test process, as opposed to `sd-client.py`, which is a subprocess.
 The stub must therefore run inside the test process with its ephemeral port being passed through
