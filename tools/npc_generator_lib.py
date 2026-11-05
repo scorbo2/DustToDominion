@@ -14,17 +14,19 @@ normal resource machinery). ``sd-client.py``, the one component that
 talks to an image server, is likewise stdlib-only (spec 17: Additional
 dependencies).
 
-Stage 1 of the spec 17 dev plan is live: the full argument surface with
-validation, ``npc_generator.json`` loading with the spec's fatal and
-non-fatal rules, and the merged-settings seam. Name drawing (stage 2),
-prompt assembly (stage 3), and the ``sd-client.py`` wiring (stages 4-5)
-sit behind the stubbed ``generate_npcs``.
+Stages 1-2 of the spec 17 dev plan are live: the full argument surface
+with validation, ``npc_generator.json`` loading with the spec's fatal
+and non-fatal rules, the merged-settings seam, and random name drawing
+with the output-dir uniqueness rule. Prompt assembly (stage 3) and the
+``sd-client.py`` wiring (stages 4-5) sit behind the stubbed
+``generate_npcs``.
 """
 from __future__ import annotations
 
 import argparse
 import json
 import os
+import random
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -66,6 +68,15 @@ CONFIG_KEY_DEFAULTS: dict[str, object] = {
 DEFAULT_COUNT = 10  # spec 17: Arguments - "--count ... Default: 10."
 DEFAULT_SEED = -1  # spec 17: Arguments - "-1 for a random seed"
 VALID_SEXES = ("male", "female", "random")  # spec 17: Arguments
+RANDOM_SEX = "random"
+#: The two sexes an NPC can actually resolve to; ``RANDOM_SEX`` is a
+#: request, never an outcome (spec 17: Testing - metadata.json must
+#: carry the resolved sex, not the literal word "random").
+RESOLVED_SEXES = ("male", "female")
+
+#: spec 17: NPC Naming - "If 100 random draws in a row fail to generate
+#: a unique name: fatal error."
+MAX_UNIQUE_NAME_DRAW_ATTEMPTS = 100
 
 
 class ConfigError(Exception):
@@ -419,6 +430,173 @@ def merge_settings(
 
 
 # ------------------------------------------------------------------ #
+# npc name drawing (spec 17: NPC Naming)
+# ------------------------------------------------------------------ #
+
+class NamePoolExhaustedError(Exception):
+    """The uniqueness rule failed MAX_UNIQUE_NAME_DRAW_ATTEMPTS draws in
+    a row for one NPC (spec 17: NPC Naming + Error handling - "Name pool
+    exhausted! You need more names.", exit code 1).
+
+    Same code/message convention as ConfigError, so stage 5's wiring can
+    funnel every tool-level fatal through the same exit path.
+    """
+
+    code = 1
+
+    def __init__(self) -> None:
+        super().__init__("Name pool exhausted! You need more names.")
+
+
+@dataclass(frozen=True)
+class NpcName:
+    """One drawn NPC name plus the sex it was drawn for.
+
+    ``sex`` is always resolved - ``random`` is a request, never an
+    outcome - so stage 5's metadata.json can carry it verbatim (spec
+    17: Testing). ``full_name`` is the uniqueness-check and directory
+    format: "{first_name} {last_name}" (spec 17: NPC Naming).
+    """
+
+    first_name: str
+    last_name: str
+    sex: str
+
+    @property
+    def full_name(self) -> str:
+        return f"{self.first_name} {self.last_name}"
+
+
+def load_name_list(path: Path) -> tuple[str, ...]:
+    """Read one ``*names*.txt`` file into a drawing pool (spec 17: NPC
+    Naming - sorted on disk, one name per line, no stray whitespace;
+    "When drawing a name, choose any random line from each file").
+
+    Stripping each line and skipping blank ones is defensive: the
+    shipped files already guarantee it, but a silent empty entry would
+    otherwise hand the image generator a name-less NPC. The on-disk
+    sort order is irrelevant to drawing (every line is equally likely),
+    which is exactly why generate_npc_names.py sorts for human
+    scanning only.
+    """
+    names = tuple(
+        stripped
+        for line in path.read_text(encoding="utf-8").splitlines()
+        if (stripped := line.strip())
+    )
+    if not names:
+        raise ValueError(f"name file {path} contains no names")
+    return names
+
+
+class NamePool:
+    """Random draws from the three name lists (spec 17: NPC Naming).
+
+    The injected ``random.Random`` mirrors the game code's rng seam
+    (``dtd/screens/title.py``), so tests draw reproducible names. Note
+    the rng is deliberately NOT seeded from the tool's ``--seed``: that
+    value belongs to the image generator and "is not used for anything
+    else" (spec 17: Arguments).
+
+    The rng consumption contract, per ``draw``, is what keeps seeded
+    test mirrors honest: with sex ``random`` the pool draws the sex
+    first, then a first name from the resolved sex's list, then a
+    surname; with a concrete sex, only the name draws happen. A
+    uniqueness-redraw is simply another ``draw``, re-rolling the sex as
+    well - the spec's redraw example redraws both name parts, and
+    re-rolling sex per redraw only widens the variety.
+    """
+
+    def __init__(
+        self,
+        female_first_names: tuple[str, ...] | list[str],
+        male_first_names: tuple[str, ...] | list[str],
+        last_names: tuple[str, ...] | list[str],
+        rng: random.Random | None = None,
+    ) -> None:
+        # prepare() rejects empty name files for the tool path; this
+        # guard covers direct library use and files that emptied
+        # between validation and drawing.
+        pools = {
+            "female first-name": female_first_names,
+            "male first-name": male_first_names,
+            "surname": last_names,
+        }
+        empty = [label for label, names in pools.items() if not names]
+        if empty:
+            raise ValueError(f"empty name pool(s): {', '.join(empty)}")
+        self._female_first_names = tuple(female_first_names)
+        self._male_first_names = tuple(male_first_names)
+        self._last_names = tuple(last_names)
+        self._rng = rng if rng is not None else random.Random()
+
+    def draw(self, requested_sex: str) -> NpcName:
+        """One random first+surname pair for the requested sex.
+
+        No uniqueness check here - that is ``allocate_npc_directory``'s
+        job (spec 17: NPC Naming); this method answers "what name would
+        this pool produce next".
+        """
+        sex = requested_sex
+        if sex == RANDOM_SEX:
+            sex = self._rng.choice(RESOLVED_SEXES)
+        if sex == "female":
+            first_names = self._female_first_names
+        elif sex == "male":
+            first_names = self._male_first_names
+        else:
+            raise ValueError(f"unknown sex: {requested_sex!r}")
+        return NpcName(
+            first_name=self._rng.choice(first_names),
+            last_name=self._rng.choice(self._last_names),
+            sex=sex,
+        )
+
+
+def load_name_pool(
+    settings: ResolvedSettings, rng: random.Random | None = None
+) -> NamePool:
+    """Build a NamePool from the three validated name files the
+    settings point at (spec 17: NPC Naming)."""
+    return NamePool(
+        female_first_names=load_name_list(settings.female_names_file),
+        male_first_names=load_name_list(settings.male_names_file),
+        last_names=load_name_list(settings.last_names_file),
+        rng=rng,
+    )
+
+
+def allocate_npc_directory(
+    name_pool: NamePool,
+    requested_sex: str,
+    output_dir: Path,
+) -> tuple[NpcName, Path]:
+    """Draw names until one is free in ``output_dir``, then create that
+    NPC's directory there (spec 17: NPC Naming).
+
+    The existence check and the creation are one ``mkdir`` call on
+    purpose: ``os.mkdir`` raises ``FileExistsError`` whether the taken
+    name belongs to a file or a directory, which is exactly the spec's
+    "file or directory by that name already exists" rule, without a
+    check-then-create race.
+
+    Raises ``NamePoolExhaustedError`` after 100 colliding draws in a
+    row. The freshly created directory is returned; stage 5's failure
+    path is responsible for cleaning it up if the image generation
+    then fails (spec 17: Invocation contract).
+    """
+    for _attempt in range(MAX_UNIQUE_NAME_DRAW_ATTEMPTS):
+        npc_name = name_pool.draw(requested_sex)
+        npc_directory = output_dir / npc_name.full_name
+        try:
+            npc_directory.mkdir()
+        except FileExistsError:
+            continue
+        return npc_name, npc_directory
+    raise NamePoolExhaustedError()
+
+
+# ------------------------------------------------------------------ #
 # top-level entry points
 # ------------------------------------------------------------------ #
 
@@ -463,16 +641,19 @@ def generate_npcs(settings: ResolvedSettings) -> int:
     """Generate ``settings.count`` NPC directories (spec 17: NPC file
     storage, Image generation).
 
-    STUB - the spec 17 dev plan builds this out in stages 2-5: random
-    name drawing with the uniqueness rule (stage 2), prompt assembly
-    (stage 3), the stub image server (stage 4), and the sd-client.py
-    wiring with per-NPC directory layout and failure cleanup (stage 5).
-    The stub warns instead of exiting silently green, so nobody can
-    mistake a code 0 for generated NPCs.
+    STUB - the spec 17 dev plan builds this out further in stages 3-5:
+    prompt assembly (stage 3), the stub image server (stage 4), and the
+    sd-client.py wiring with per-NPC directory layout and failure
+    cleanup (stage 5). Name drawing itself (stage 2) is ready above -
+    ``load_name_pool`` and ``allocate_npc_directory`` - but deliberately
+    stays unwired here until the generation pipeline exists, so this
+    stage never leaves a half-filled NPC directory behind. The stub
+    warns instead of exiting silently green, so nobody can mistake a
+    code 0 for generated NPCs.
     """
     _warn(
         "NPC generation is not implemented yet (spec 17 dev plan "
-        "stages 2-5); no NPCs were generated"
+        "stages 3-5); no NPCs were generated"
     )
     return 0
 

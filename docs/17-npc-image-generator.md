@@ -373,6 +373,22 @@ via the tool's `--server` config.
   `sd-client.py`. 66 tests in `tests/test_npc_generator.py`; full suite
   green at 1492 tests.)
 2. Add random name drawing functionality to `npc_generator_lib.py`.
+  **Completed 2026-11-04** (`load_name_list`, `NamePool` with an
+  injectable `random.Random` mirroring the game's rng-seam pattern -
+  deliberately NOT tied to `--seed`, which the spec restricts to the
+  image generator - `NpcName` carrying the sex resolved per draw so
+  stage 5's metadata can never write the literal "random", and
+  `allocate_npc_directory` implementing the uniqueness rule: the
+  existence check and directory creation are a single `mkdir` whose
+  `FileExistsError` covers the spec's "file or directory by that name"
+  collision without a check-then-create race, redraw re-rolls sex as
+  well as both name parts, and 100 colliding draws raise
+  `NamePoolExhaustedError` with the spec's exact message and code 1.
+  Allocation is deliberately not yet called from `generate_npcs` -
+  stage 5 wires it so no half-filled NPC directory can ever be left
+  behind. 19 new tests, including scripted-rng tests that pin the
+  per-draw rng consumption and the 100-draw boundary; full suite green
+  at 1511 tests.)
 3. Add prompt generation functionality to `npc_generator_lib.py`.
 4. Implement the stub service for `sd-client.py` to hit.
 5. Wire up `npc_generator` to `sd-client.py` and test against the stub service.
