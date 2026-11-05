@@ -14,10 +14,12 @@ normal resource machinery). ``sd-client.py``, the one component that
 talks to an image server, is likewise stdlib-only (spec 17: Additional
 dependencies).
 
-Stages 1-2 of the spec 17 dev plan are live: the full argument surface
+Stages 1-3 of the spec 17 dev plan are live: the full argument surface
 with validation, ``npc_generator.json`` loading with the spec's fatal
-and non-fatal rules, the merged-settings seam, and random name drawing
-with the output-dir uniqueness rule. Prompt assembly (stage 3) and the
+and non-fatal rules, the merged-settings seam, random name drawing
+with the output-dir uniqueness rule (``NamePool``,
+``allocate_npc_directory``), and prompt assembly (``generate_prompt``
+with the spec's category constants). The stub server and the
 ``sd-client.py`` wiring (stages 4-5) sit behind the stubbed
 ``generate_npcs``.
 """
@@ -597,6 +599,80 @@ def allocate_npc_directory(
 
 
 # ------------------------------------------------------------------ #
+# prompt generation (spec 17: Image generation)
+# ------------------------------------------------------------------ #
+
+#: The fixed leading segment of every prompt (spec 17: Common
+#: characteristics - verbatim).
+COMMON_CHARACTERISTICS = (
+    "head and shoulders closeup picture, simple background, white background"
+)
+
+#: Sex-specific appearance categories, keyed by the spec's category
+#: names with the option lists verbatim. Dict insertion order IS the
+#: prescribed category order (spec 17: Testing - "sex-specific
+#: attributes in the prescribed category order"); ``generate_prompt``
+#: draws them in that order, and the tests pin the positions.
+FEMALE_APPEARANCE_CATEGORIES: dict[str, tuple[str, ...]] = {
+    "age": ("young woman", "adult woman", "middle-aged woman", "old woman"),
+    "hair_length": ("long hair", "short hair"),
+    "hairstyle": ("wavy hair", "straight hair", "ponytail", "bangs"),
+    "clothing": ("blouse", "jacket", "coat", "tshirt"),
+    "expression": ("smiling", "laughing", "serious", "bored", "angry"),
+}
+MALE_APPEARANCE_CATEGORIES: dict[str, tuple[str, ...]] = {
+    "age": ("young man", "adult man", "middle-aged man", "old man"),
+    "hair_length": ("bald", "shaved head", "long hair", "short hair"),
+    "facial_hair": ("clean-shaven", "moustache", "beard"),
+    "clothing": ("jacket", "coat", "tshirt"),
+    "expression": ("smiling", "laughing", "serious", "bored", "angry"),
+}
+
+_APPEARANCE_CATEGORIES_BY_SEX = {
+    "female": FEMALE_APPEARANCE_CATEGORIES,
+    "male": MALE_APPEARANCE_CATEGORIES,
+}
+
+PROMPT_SEGMENT_SEPARATOR = ", "
+
+
+def generate_prompt(
+    resolved_sex: str, image_style: str, rng: random.Random
+) -> str:
+    """Assemble one image-generation prompt (spec 17: Image
+    generation).
+
+    Layout, per the spec: the fixed common characteristics first, then
+    one randomly-drawn option per appearance category in the
+    prescribed category order, then the configured ``image_style`` -
+    all joined with comma+space on a single line.
+
+    A blank ``image_style`` contributes no segment at all. Stage 1
+    already keeps the blank value out of the default's way (spec 17:
+    "Don't revert to default if the configured value is \\\"\\\".");
+    appending an empty style here would instead hand ``sd-client.py``
+    a dangling separator, so blank legitimately means "no style
+    directive" - and a whitespace-only value is treated the same.
+
+    The rng consumption contract, mirroring ``NamePool``'s: exactly one
+    ``choice()`` per appearance category (five per prompt), in
+    category order, and none for the common or style segments -
+    documented so the scripted-rng tests stay honest.
+    """
+    try:
+        categories = _APPEARANCE_CATEGORIES_BY_SEX[resolved_sex]
+    except KeyError:
+        # argparse guards the user path; the library seam stays loud.
+        raise ValueError(f"unknown sex: {resolved_sex!r}") from None
+
+    parts = [COMMON_CHARACTERISTICS]
+    parts.extend(rng.choice(options) for options in categories.values())
+    if image_style.strip():
+        parts.append(image_style)
+    return PROMPT_SEGMENT_SEPARATOR.join(parts)
+
+
+# ------------------------------------------------------------------ #
 # top-level entry points
 # ------------------------------------------------------------------ #
 
@@ -641,19 +717,19 @@ def generate_npcs(settings: ResolvedSettings) -> int:
     """Generate ``settings.count`` NPC directories (spec 17: NPC file
     storage, Image generation).
 
-    STUB - the spec 17 dev plan builds this out further in stages 3-5:
-    prompt assembly (stage 3), the stub image server (stage 4), and the
-    sd-client.py wiring with per-NPC directory layout and failure
-    cleanup (stage 5). Name drawing itself (stage 2) is ready above -
-    ``load_name_pool`` and ``allocate_npc_directory`` - but deliberately
-    stays unwired here until the generation pipeline exists, so this
-    stage never leaves a half-filled NPC directory behind. The stub
-    warns instead of exiting silently green, so nobody can mistake a
-    code 0 for generated NPCs.
+    STUB - the spec 17 dev plan builds this out further in stages 4-5:
+    the stub image server (stage 4) and the sd-client.py wiring with
+    per-NPC directory layout and failure cleanup (stage 5). Name
+    drawing and prompt assembly (stages 2-3) are ready above -
+    ``load_name_pool``, ``allocate_npc_directory``, ``generate_prompt``
+    - but deliberately stay unwired here until the generation pipeline
+    exists, so this stage never leaves a half-filled NPC directory
+    behind. The stub warns instead of exiting silently green, so
+    nobody can mistake a code 0 for generated NPCs.
     """
     _warn(
         "NPC generation is not implemented yet (spec 17 dev plan "
-        "stages 3-5); no NPCs were generated"
+        "stages 4-5); no NPCs were generated"
     )
     return 0
 

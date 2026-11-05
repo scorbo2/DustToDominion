@@ -1,9 +1,9 @@
-"""NPC image generator tool tests (spec 17, dev plan stages 1-2).
+"""NPC image generator tool tests (spec 17, dev plan stages 1-3).
 
-Stage 1 covered the tool's front door: the argument surface,
-argument validation, and npc_generator.json loading. Stage 2 added
-random name drawing with the output-dir uniqueness rule. The Testing
-bullets these stages make testable:
+Stages 1-2 covered the tool's front door (argument surface, argument
+validation, npc_generator.json loading) and random name drawing with
+the output-dir uniqueness rule. Stage 3 added prompt assembly. The
+Testing bullets these stages make testable:
 
 - missing ``npc_generator.json``: warning logged, defaults used
 - malformed/empty config Json: error and exit code 1
@@ -1234,3 +1234,194 @@ def test_allocate_npc_directory_withRandomSex_shouldNotReconsumeExhaustedScript(
         npc_generator_lib.allocate_npc_directory(pool, "random", output_dir)
 
     assert script.choice_calls == 3 * npc_generator_lib.MAX_UNIQUE_NAME_DRAW_ATTEMPTS
+
+
+# ------------------------------------------------------------------ #
+# prompt generation (spec 17: Image generation, dev plan stage 3)
+# ------------------------------------------------------------------ #
+
+_TEST_IMAGE_STYLE = "pixel art style, low resolution, pixels"
+
+
+def test_common_characteristics_should_be_the_specs_fixed_string() -> None:
+    # GIVEN the spec pins this segment verbatim (spec 17: Common
+    # characteristics):
+    assert (
+        npc_generator_lib.COMMON_CHARACTERISTICS
+        == "head and shoulders closeup picture, simple background, "
+        "white background"
+    )
+
+
+def test_female_appearance_categories_should_be_the_specs_verbatim() -> None:
+    # GIVEN the spec's female category lists, verbatim and in the
+    # prescribed category order (spec 17: Female characteristics):
+    assert npc_generator_lib.FEMALE_APPEARANCE_CATEGORIES == {
+        "age": (
+            "young woman",
+            "adult woman",
+            "middle-aged woman",
+            "old woman",
+        ),
+        "hair_length": ("long hair", "short hair"),
+        "hairstyle": ("wavy hair", "straight hair", "ponytail", "bangs"),
+        "clothing": ("blouse", "jacket", "coat", "tshirt"),
+        "expression": ("smiling", "laughing", "serious", "bored", "angry"),
+    }
+
+
+def test_male_appearance_categories_should_be_the_specs_verbatim() -> None:
+    # GIVEN the spec's male category lists, verbatim and in the
+    # prescribed category order (spec 17: Male characteristics):
+    assert npc_generator_lib.MALE_APPEARANCE_CATEGORIES == {
+        "age": ("young man", "adult man", "middle-aged man", "old man"),
+        "hair_length": ("bald", "shaved head", "long hair", "short hair"),
+        "facial_hair": ("clean-shaven", "moustache", "beard"),
+        "clothing": ("jacket", "coat", "tshirt"),
+        "expression": ("smiling", "laughing", "serious", "bored", "angry"),
+    }
+
+
+def test_generate_prompt_with_scripted_draws_should_assemble_common_then_categories_in_order_then_style() -> None:
+    # GIVEN a scripted rng selecting the last option of every female
+    # category (5 categories = 5 choices, in category order), and a
+    # configured image_style:
+    script = _ChoiceScriptRandom([3, 1, 3, 3, 4])
+    prompt = npc_generator_lib.generate_prompt("female", _TEST_IMAGE_STYLE, script)
+
+    # THEN the prompt is exactly: common segment, the five drawn
+    # options in prescribed category order, the style segment - joined
+    # with comma+space, one line (spec 17: Example prompt):
+    assert prompt == (
+        "head and shoulders closeup picture, simple background, "
+        "white background, old woman, short hair, bangs, tshirt, angry, "
+        + _TEST_IMAGE_STYLE
+    )
+    assert script.choice_calls == 5
+    assert "\n" not in prompt
+
+
+def test_generate_prompt_with_scripted_draws_should_use_male_categories_for_male_sex() -> None:
+    # GIVEN a scripted rng selecting index 0 of every male category -
+    # note the third category is facial hair, not hairstyle:
+    script = _ChoiceScriptRandom([0, 0, 0, 0, 0])
+    prompt = npc_generator_lib.generate_prompt("male", _TEST_IMAGE_STYLE, script)
+
+    # THEN the male options appear in the male category order:
+    assert prompt == (
+        "head and shoulders closeup picture, simple background, "
+        "white background, young man, bald, clean-shaven, jacket, smiling, "
+        + _TEST_IMAGE_STYLE
+    )
+    assert script.choice_calls == 5
+
+
+@pytest.mark.parametrize("sex", ["male", "female"])
+def test_generate_prompt_across_seeds_should_place_every_segment_in_its_spec_position(
+    sex: str,
+) -> None:
+    # GIVEN prompts from a spread of plain seeded rngs:
+    categories = (
+        npc_generator_lib.FEMALE_APPEARANCE_CATEGORIES
+        if sex == "female"
+        else npc_generator_lib.MALE_APPEARANCE_CATEGORIES
+    )
+    for seed in range(1, 13):
+        prompt = npc_generator_lib.generate_prompt(
+            sex, _TEST_IMAGE_STYLE, random.Random(seed)
+        )
+
+        # WHEN split on the comma+space separator (spec 17: Testing -
+        # "comma+space as separators"), THEN segment layout is: the 3
+        # common segments, then 5 sex-specific segments in category
+        # order, then the 3 style segments from the configuration:
+        segments = prompt.split(", ")
+        assert segments[:3] == [
+            "head and shoulders closeup picture",
+            "simple background",
+            "white background",
+        ]
+        appearance_segments = segments[3:8]
+        assert segments[8:] == _TEST_IMAGE_STYLE.split(", ")
+
+        # AND each drawn segment belongs to the category prescribed
+        # for that position:
+        for options, segment in zip(categories.values(), appearance_segments):
+            assert segment in options
+
+
+def test_generate_prompt_with_empty_image_style_should_omit_the_style_segment_entirely() -> None:
+    # GIVEN the blank image_style stage 1 kept verbatim in config (spec
+    # 17: "A blank or empty configured value is valid!"):
+    script = _ChoiceScriptRandom([0, 0, 0, 0, 0])
+    prompt = npc_generator_lib.generate_prompt("female", "", script)
+
+    # THEN the prompt ends cleanly on the expression category - no
+    # dangling comma+space separator, and the default style must NOT
+    # sneak back in:
+    assert prompt.endswith("smiling")
+    assert not prompt.endswith(", ")
+    assert npc_generator_lib.DEFAULT_IMAGE_STYLE not in prompt
+
+
+@pytest.mark.parametrize("blank_style", ["", "   ", "\t"])
+def test_generate_prompt_with_whitespace_only_image_style_should_omit_it_too(
+    blank_style: str,
+) -> None:
+    # GIVEN a whitespace-only style (same intent as empty: no style
+    # directive; the library seam treats them alike):
+    script = _ChoiceScriptRandom([0, 0, 0, 0, 0])
+    prompt = npc_generator_lib.generate_prompt("female", blank_style, script)
+
+    assert prompt.endswith("smiling")
+    assert script.choice_calls == 5
+
+
+def test_generate_prompt_with_identical_seed_should_replay_identical_prompts() -> None:
+    # GIVEN two plain rngs seeded alike, drawing male prompts:
+    for _ in range(5):
+        prompt_a = npc_generator_lib.generate_prompt(
+            "male", _TEST_IMAGE_STYLE, random.Random(2026)
+        )
+        prompt_b = npc_generator_lib.generate_prompt(
+            "male", _TEST_IMAGE_STYLE, random.Random(2026)
+        )
+
+        # THEN the prompts match exactly - the rng seam makes
+        # generation reproducible:
+        assert prompt_a == prompt_b
+
+
+def test_generate_prompt_should_reach_every_spec_option() -> None:
+    # GIVEN each sex, category and option index walked with a scripted
+    # rng that selects just that option:
+    for sex, categories in (
+        ("female", npc_generator_lib.FEMALE_APPEARANCE_CATEGORIES),
+        ("male", npc_generator_lib.MALE_APPEARANCE_CATEGORIES),
+    ):
+        for category_index, options in enumerate(categories.values()):
+            for option_index, option in enumerate(options):
+                script = _ChoiceScriptRandom(
+                    [
+                        option_index if position == category_index else 0
+                        for position in range(len(categories))
+                    ]
+                )
+
+                # THEN every option the spec lists is selectable in
+                # the prompt:
+                prompt = npc_generator_lib.generate_prompt(
+                    sex, "", script
+                )
+                assert option in prompt.split(", ")
+
+
+def test_generate_prompt_with_unknown_sex_should_raise_value_error() -> None:
+    # GIVEN a sex neither argparse nor NamePool would ever produce:
+    script = _ChoiceScriptRandom([])
+
+    # THEN the library seam refuses loudly, drawing nothing:
+    with pytest.raises(ValueError, match="unknown sex"):
+        npc_generator_lib.generate_prompt("alien", _TEST_IMAGE_STYLE, script)
+
+    assert script.choice_calls == 0

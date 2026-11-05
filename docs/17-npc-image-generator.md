@@ -390,6 +390,22 @@ via the tool's `--server` config.
   per-draw rng consumption and the 100-draw boundary; full suite green
   at 1511 tests.)
 3. Add prompt generation functionality to `npc_generator_lib.py`.
+  **Completed 2026-11-04** (`COMMON_CHARACTERISTICS` and the
+  female/male category constants copied verbatim from the spec, dict
+  insertion order carrying the prescribed category order;
+  `generate_prompt(sex, image_style, rng)` joins common segment + one
+  option drawn per category in order + style segment with comma+space
+  on one line, consuming exactly one rng `choice()` per category -
+  five per prompt - so the scripted-rng tests pin the consumption
+  contract. A blank (or whitespace-only) `image_style` contributes no
+  segment: stage 1 already stopped the default from replacing it, and
+  appending an empty value would hand `sd-client.py` a dangling
+  separator, so blank means "no style directive". Unknown sex raises
+  `ValueError` at the seam. Left unwired in `generate_npcs` alongside
+  the stage 2 machinery; stage 5 wires the pipeline. 14 new tests
+  include verbatim-constant pins, seeded segment-position checks across
+  both sexes, and a scripted walk proving every spec'd option is
+  selectable; full suite green at 1525 tests.)
 4. Implement the stub service for `sd-client.py` to hit.
 5. Wire up `npc_generator` to `sd-client.py` and test against the stub service.
 6. Verification pass: do all tests pass? Are all acceptance criteria met?
