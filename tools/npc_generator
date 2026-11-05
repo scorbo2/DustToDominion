@@ -1,0 +1,25 @@
+#!/usr/bin/env python3
+"""Thin executable shim for the NPC image generator tool (spec 17).
+
+Usage::
+
+    tools/npc_generator --output-dir resources/npc/ --count 25
+
+All logic lives in ``tools/npc_generator_lib`` so the tool is unit-
+testable in-process (spec 15: Script structure, the pattern spec 17's
+dev plan stage 1 says to follow).
+
+Unlike tools/ship_editor, this shim needs no ``sys.path`` bootstrap:
+the tool is stdlib-only - no ``dtd.*`` imports, because the game and
+this tool never touch each other's config or resources (spec 17: intro
+prose) - and Python already puts this script's own directory on
+``sys.path`` at startup, which is all ``import npc_generator_lib``
+needs.
+"""
+from __future__ import annotations
+
+import sys
+
+import npc_generator_lib
+
+sys.exit(npc_generator_lib.run())
