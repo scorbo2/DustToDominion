@@ -1,19 +1,31 @@
-"""NPC image generator tool tests (spec 17, dev plan stages 1-6).
+"""NPC image generator tool tests (spec 17, dev plan stages 1-8).
 
 Stages 1-2 covered the tool's front door (argument surface, argument
 validation, npc_generator.json loading) and random name drawing with
 the output-dir uniqueness rule. Stage 3 added prompt assembly. Stage 5
 wired the generation pipeline: per-NPC directory layout (``image.png``,
 ``metadata.json``, empty ``audio/``) and one ``sd-client.py``
-subprocess per NPC. The Testing bullets these stages make testable:
+subprocess per NPC. Stage 8 made every prompt part configurable: the
+``common_characteristics``, ``female_characteristics`` and
+``male_characteristics`` keys with their nested validation, per-
+category merge and suppression rules. The Testing bullets these
+stages make testable:
 
 - missing ``npc_generator.json``: warning logged, defaults used
 - malformed/empty config Json: error and exit code 1
 - top-level config Json that is not an object: error and exit code 1
-- unrecognized config key: error and exit code 1
+- unrecognized config key, top level or nested in the characteristics
+  objects: error and exit code 1
 - missing expected config key: warning naming the key and the default
-  in effect; not fatal
-- blank/empty ``image_style`` in config: honored, default NOT restored
+  in effect; not fatal (terse "Default values will be used" wording
+  for the two aggregate characteristics keys)
+- blank/empty ``image_style`` or ``common_characteristics`` in config:
+  honored, default NOT restored
+- characteristics objects that are not objects, categories that are
+  not string arrays: error and exit code 1
+- a missing expected category: silent, defaults filled in per category
+- an empty category: silently skipped when forming the prompt
+- user-specified characteristic values reach the prompt verbatim
 - ``--width``/``--height`` beat config values when both are given
 - no ``--output-dir``: error and exit code 2 (argparse convention)
 - ``--config`` pointing at a nonexistent file: warning, continue
@@ -208,23 +220,57 @@ def _flag_value(invocation: list[str], flag: str) -> str:
 def test_load_generator_config_withAllKeysPresent_shouldReturnThemVerbatimAndNotWarn(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    # GIVEN a config file supplying every recognized key, including a
-    # deliberately blank image_style:
+    # GIVEN a config file supplying every recognized key, custom
+    # characteristics everywhere, and a deliberately blank image_style:
     full = {
         "server": "http://srv:9000",
         "steps": 9,
         "cfg": 7.5,
         "width": 64,
         "height": 32,
+        "common_characteristics": "bust portrait, garage background",
+        "female_characteristics": {
+            "age": ["elder lady"],
+            "hair_length": ["braided hair"],
+            "hairstyle": ["mohawk"],
+            "clothing": ["spacesuit"],
+            "expression": ["winking"],
+            "other": ["aviator sunglasses"],
+        },
+        "male_characteristics": {
+            "age": ["elder gentleman"],
+            "hair_length": ["mullet"],
+            "facial_hair": ["mutton chops"],
+            "clothing": ["onesie"],
+            "expression": ["winking"],
+            "other": ["top hat"],
+        },
         "image_style": "",
     }
     config_path = _write_config(tmp_path, json.dumps(full))
 
-    # WHEN the config is loaded, THEN every value is used as given and
-    # nothing is logged (blank image_style is valid and must not warn):
+    # WHEN the config is loaded, THEN every value is used as given
+    # (characteristics normalized to tuple pools) and nothing is logged
+    # (blank image_style is valid and must not warn):
     config = npc_generator_lib.load_generator_config(config_path)
 
-    assert config == GeneratorConfig(**full)
+    assert config == GeneratorConfig(
+        server="http://srv:9000",
+        steps=9,
+        cfg=7.5,
+        width=64,
+        height=32,
+        common_characteristics="bust portrait, garage background",
+        female_characteristics={
+            category: tuple(options)
+            for category, options in full["female_characteristics"].items()
+        },
+        male_characteristics={
+            category: tuple(options)
+            for category, options in full["male_characteristics"].items()
+        },
+        image_style="",
+    )
     assert capsys.readouterr().err == ""
 
 
@@ -258,6 +304,9 @@ def test_load_generator_config_withMissingFile_shouldWarnAndReturnDefaults(
         cfg=npc_generator_lib.DEFAULT_CFG,
         width=npc_generator_lib.DEFAULT_WIDTH,
         height=npc_generator_lib.DEFAULT_HEIGHT,
+        common_characteristics=npc_generator_lib.DEFAULT_COMMON_CHARACTERISTICS,
+        female_characteristics=npc_generator_lib.DEFAULT_FEMALE_CHARACTERISTICS,
+        male_characteristics=npc_generator_lib.DEFAULT_MALE_CHARACTERISTICS,
         image_style=npc_generator_lib.DEFAULT_IMAGE_STYLE,
     )
     err = capsys.readouterr().err
@@ -291,12 +340,107 @@ def test_load_generator_config_withUnrecognizedKey_shouldRaiseConfigErrorNamingI
     assert "lora" in str(excinfo.value)
 
 
+def test_load_generator_config_withUnrecognizedNestedCharacteristicsKey_shouldRaiseConfigErrorNamingIt(
+    tmp_path: Path,
+) -> None:
+    # GIVEN a characteristics object carrying a category the spec's
+    # closed set does not know (spec 17 stage 8: unexpected child keys
+    # "are treated as unrecognized keys", and unrecognized keys are
+    # fatal):
+    config_path = _write_config(
+        tmp_path, '{"male_characteristics": {"glasses": ["round glasses"]}}'
+    )
+
+    # THEN loading is fatal and the message names the offending
+    # category:
+    with pytest.raises(npc_generator_lib.ConfigError) as excinfo:
+        npc_generator_lib.load_generator_config(config_path)
+
+    assert "glasses" in str(excinfo.value)
+
+
+def test_load_generator_config_withMissingCharacteristicsKeys_shouldWarnTerseWithoutListingEveryDefault(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # GIVEN a config that omits both aggregate characteristics keys
+    # (spec 17 stage 8: the warning must "just mention that 'Default
+    # values will be used' without listing all of them"):
+    config_path = _write_config(tmp_path, '{"server": "http://other:9"}')
+
+    # WHEN loaded, THEN both sexes' defaults are in effect:
+    config = npc_generator_lib.load_generator_config(config_path)
+
+    assert (
+        config.female_characteristics
+        == npc_generator_lib.DEFAULT_FEMALE_CHARACTERISTICS
+    )
+    assert (
+        config.male_characteristics
+        == npc_generator_lib.DEFAULT_MALE_CHARACTERISTICS
+    )
+
+    # AND each aggregate key warns with the terse wording, without
+    # reciting a single default option:
+    err = capsys.readouterr().err
+    assert repr("male_characteristics") in err
+    assert repr("female_characteristics") in err
+    assert err.count("Default values will be used") == 2
+    for option in ("young man", "blouse", "clean-shaven"):
+        assert option not in err
+
+
+def test_load_generator_config_withPartiallySpecifiedCharacteristics_shouldMergePerCategoryAndStaySilent(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # GIVEN a config carrying every top-level key, whose female
+    # characteristics specify only two categories (clothing custom,
+    # expression explicitly empty) and whose male object is entirely
+    # empty (spec 17 stage 8: a missing category silently accepts its
+    # default; an empty one explicitly suppresses itself):
+    contents = {
+        "server": "http://srv:1",
+        "steps": 3,
+        "cfg": 2.0,
+        "width": 16,
+        "height": 16,
+        "common_characteristics": "portrait",
+        "female_characteristics": {
+            "clothing": ["space suit"],
+            "expression": [],
+        },
+        "male_characteristics": {},
+        "image_style": "sketch",
+    }
+    config_path = _write_config(tmp_path, json.dumps(contents))
+
+    # WHEN loaded, THEN present categories replace their defaults
+    # wholesale, missing categories keep theirs, and the suppressed
+    # expression category stays empty:
+    config = npc_generator_lib.load_generator_config(config_path)
+
+    assert config.female_characteristics["clothing"] == ("space suit",)
+    assert config.female_characteristics["expression"] == ()
+    assert (
+        config.female_characteristics["age"]
+        == npc_generator_lib.DEFAULT_FEMALE_CHARACTERISTICS["age"]
+    )
+    assert config.male_characteristics == (
+        npc_generator_lib.DEFAULT_MALE_CHARACTERISTICS
+    )
+
+    # AND the category-level merge logs NOTHING: every top-level key
+    # was present, so a silent stderr proves missing categories are
+    # "neither an error nor a warning":
+    assert capsys.readouterr().err == ""
+
+
 def test_load_generator_config_withMissingKeys_shouldWarnPerKeyAndNameEachDefault(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    # GIVEN a config that only sets server, omitting the other five keys
+    # GIVEN a config that only sets server, omitting every other key
     # (spec 17: "Missing keys are not fatal" but must log the key and
-    # its default):
+    # its default - the characteristics aggregates excepted, see the
+    # terse-warning test):
     config_path = _write_config(tmp_path, '{"server": "http://other:9"}')
 
     # WHEN loaded, THEN the given key wins and the rest take defaults:
@@ -309,13 +453,19 @@ def test_load_generator_config_withMissingKeys_shouldWarnPerKeyAndNameEachDefaul
     assert config.height == npc_generator_lib.DEFAULT_HEIGHT
     assert config.image_style == npc_generator_lib.DEFAULT_IMAGE_STYLE
 
-    # AND each omitted key's warning names the key and its default:
+    # AND each omitted scalar key's warning names the key and its
+    # default (common_characteristics included: the terse wording is
+    # reserved for the two aggregate objects):
     err = capsys.readouterr().err
     for key, default in (
         ("steps", 6),
         ("cfg", 1.0),
         ("width", 512),
         ("height", 512),
+        (
+            "common_characteristics",
+            npc_generator_lib.DEFAULT_COMMON_CHARACTERISTICS,
+        ),
         ("image_style", "pixel art style, low resolution, pixels"),
     ):
         assert repr(key) in err
@@ -466,6 +616,122 @@ def test_prepare_withBlankImageStyleInConfig_shouldUseBlankValueNotDefault(
     assert settings is not None
     assert settings.image_style == ""
     assert repr("image_style") not in capsys.readouterr().err
+
+
+def test_prepare_withBlankCommonCharacteristicsInConfig_shouldUseBlankValueNotDefault(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # GIVEN a config that sets common_characteristics to the empty
+    # string (spec 17 stage 8 Testing: "common_characteristics is
+    # present in config but is blank or empty: do NOT revert to the
+    # default. Use the blank value."):
+    config_path = _write_config(tmp_path, '{"common_characteristics": ""}')
+    argv = _base_args(tmp_path, config_path=config_path)
+
+    # THEN the blank value survives into the resolved settings, with no
+    # warning about the key (it is present, just blank):
+    exit_code, settings = npc_generator_lib.prepare(argv)
+
+    assert exit_code == 0
+    assert settings is not None
+    assert settings.common_characteristics == ""
+    assert repr("common_characteristics") not in capsys.readouterr().err
+
+
+def test_prepare_withMissingCharacteristicsKeys_shouldWarnTerseAndContinue(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # GIVEN a config that sets none of the characteristics keys (spec
+    # 17 stage 8 Testing: "The male_characteristics or
+    # female_characteristics keys themselves are missing: no problem.
+    # Proceed with defaults."):
+    config_path = _write_config(tmp_path, '{"steps": 4}')
+    argv = _base_args(tmp_path, config_path=config_path)
+
+    # THEN the tool proceeds on full defaults:
+    exit_code, settings = npc_generator_lib.prepare(argv)
+
+    assert exit_code == 0
+    assert settings is not None
+    assert settings.female_characteristics == (
+        npc_generator_lib.DEFAULT_FEMALE_CHARACTERISTICS
+    )
+    assert settings.male_characteristics == (
+        npc_generator_lib.DEFAULT_MALE_CHARACTERISTICS
+    )
+
+    # AND the warnings stay terse - no option recited:
+    err = capsys.readouterr().err
+    assert err.count("Default values will be used") == 2
+    assert "young woman" not in err
+
+
+def test_prepare_withUnrecognizedNestedCharacteristicsKey_shouldExitCode1(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # GIVEN a config whose female object invents a category (spec 17
+    # stage 8 Testing: "The male_characteristics or
+    # female_characteristics objects contain an unrecognized key:
+    # fatal error and exit code 1."):
+    config_path = _write_config(
+        tmp_path, '{"female_characteristics": {"eyewear": ["goggles"]}}'
+    )
+    argv = _base_args(tmp_path, config_path=config_path)
+
+    # THEN prepare fails with code 1 and names the category:
+    exit_code, settings = npc_generator_lib.prepare(argv)
+
+    assert exit_code == 1
+    assert settings is None
+    err = capsys.readouterr().err
+    assert "error:" in err
+    assert "eyewear" in err
+
+
+_WRONG_TYPED_CHARACTERISTICS_CASES = [
+    pytest.param('"male_characteristics": "yes"', id="aggregate-string"),
+    pytest.param('"male_characteristics": []', id="aggregate-array"),
+    pytest.param('"male_characteristics": null', id="aggregate-null"),
+    pytest.param('"female_characteristics": 7', id="aggregate-number"),
+    pytest.param(
+        '"female_characteristics": {"age": "old"}', id="category-string"
+    ),
+    pytest.param(
+        '"female_characteristics": {"age": {"word": "old"}}',
+        id="category-object",
+    ),
+    pytest.param(
+        '"female_characteristics": {"age": ["young", 42]}',
+        id="category-array-with-number",
+    ),
+    pytest.param(
+        '"female_characteristics": {"age": [null]}', id="category-array-with-null"
+    ),
+    pytest.param(
+        '"female_characteristics": {"age": [true]}',
+        id="category-array-with-boolean",
+    ),
+]
+
+
+@pytest.mark.parametrize("fragment", _WRONG_TYPED_CHARACTERISTICS_CASES)
+def test_prepare_withWrongTypedCharacteristics_shouldExitCode1(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], fragment: str
+) -> None:
+    # GIVEN a config whose characteristics violate the nested shape
+    # rules (spec 17 stage 8: objects themselves not objects, or a
+    # category not an array of strings - fatal either way):
+    config_path = _write_config(tmp_path, "{" + fragment + "}")
+    argv = _base_args(tmp_path, config_path=config_path)
+
+    # THEN prepare fails with code 1 and an error naming the trouble:
+    exit_code, settings = npc_generator_lib.prepare(argv)
+
+    assert exit_code == 1
+    assert settings is None
+    err = capsys.readouterr().err
+    assert "error:" in err
+    assert "characteristics" in err
 
 
 _WRONG_TYPED_CONFIG_CASES = [
@@ -925,20 +1191,9 @@ def test_run_withValidArgumentsAndNoConfigFile_shouldExitZeroGenerateDefaultsWor
 def test_run_withFullyValidConfig_shouldExitZeroWarnNothingAndAnnounceEachNpc(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    # GIVEN a run with every config key supplied explicitly:
-    config_path = _write_config(
-        tmp_path,
-        json.dumps(
-            {
-                "server": "http://127.0.0.1:7777",
-                "steps": 6,
-                "cfg": 1.0,
-                "width": 512,
-                "height": 512,
-                "image_style": "",
-            }
-        ),
-    )
+    # GIVEN a run with every config key supplied explicitly (the nine
+    # keys of the stage 8 amended Configuration snippet):
+    config_path = _full_config(tmp_path, image_style="")
     argv = _base_args(tmp_path, config_path=config_path) + ["--count", "3"]
 
     # THEN the run exits 0 with a silent stderr - every config key was
@@ -1345,26 +1600,36 @@ def test_allocate_npc_directory_withRandomSex_shouldNotReconsumeExhaustedScript(
 
 
 # ------------------------------------------------------------------ #
-# prompt generation (spec 17: Image generation, dev plan stage 3)
+# prompt generation (spec 17: Image generation, dev plan stages 3+8)
 # ------------------------------------------------------------------ #
 
 _TEST_IMAGE_STYLE = "pixel art style, low resolution, pixels"
 
+#: The spec's default characteristics, spelled out at each
+#: ``generate_prompt`` call: since stage 8 the prompt engine knows no
+#: hard-coded pools, so even the default-behaving tests must inject
+#: them like any user config would.
+_DEFAULT_CHARACTERISTICS = {
+    "common_characteristics": npc_generator_lib.DEFAULT_COMMON_CHARACTERISTICS,
+    "female_characteristics": npc_generator_lib.DEFAULT_FEMALE_CHARACTERISTICS,
+    "male_characteristics": npc_generator_lib.DEFAULT_MALE_CHARACTERISTICS,
+}
 
-def test_common_characteristics_should_be_the_specs_fixed_string() -> None:
-    # GIVEN the spec pins this segment verbatim (spec 17: Common
-    # characteristics):
+
+def test_default_common_characteristics_should_be_the_specs_string() -> None:
+    # GIVEN the spec's Configuration snippet pins this default
+    # verbatim (spec 17 stage 8):
     assert (
-        npc_generator_lib.COMMON_CHARACTERISTICS
+        npc_generator_lib.DEFAULT_COMMON_CHARACTERISTICS
         == "head and shoulders closeup picture, simple background, "
         "white background"
     )
 
 
-def test_female_appearance_categories_should_be_the_specs_verbatim() -> None:
-    # GIVEN the spec's female category lists, verbatim and in the
-    # prescribed category order (spec 17: Female characteristics):
-    assert npc_generator_lib.FEMALE_APPEARANCE_CATEGORIES == {
+def test_default_female_characteristics_should_be_the_specs_verbatim() -> None:
+    # GIVEN the spec's female category lists, verbatim, "other"
+    # intentionally empty (spec 17: Configuration snippet):
+    assert npc_generator_lib.DEFAULT_FEMALE_CHARACTERISTICS == {
         "age": (
             "young woman",
             "adult woman",
@@ -1375,31 +1640,37 @@ def test_female_appearance_categories_should_be_the_specs_verbatim() -> None:
         "hairstyle": ("wavy hair", "straight hair", "ponytail", "bangs"),
         "clothing": ("blouse", "jacket", "coat", "tshirt"),
         "expression": ("smiling", "laughing", "serious", "bored", "angry"),
+        "other": (),
     }
 
 
-def test_male_appearance_categories_should_be_the_specs_verbatim() -> None:
-    # GIVEN the spec's male category lists, verbatim and in the
-    # prescribed category order (spec 17: Male characteristics):
-    assert npc_generator_lib.MALE_APPEARANCE_CATEGORIES == {
+def test_default_male_characteristics_should_be_the_specs_verbatim() -> None:
+    # GIVEN the spec's male category lists, verbatim - note facial_hair
+    # where the female set has hairstyle, and the empty "other" (spec
+    # 17: Configuration snippet):
+    assert npc_generator_lib.DEFAULT_MALE_CHARACTERISTICS == {
         "age": ("young man", "adult man", "middle-aged man", "old man"),
         "hair_length": ("bald", "shaved head", "long hair", "short hair"),
         "facial_hair": ("clean-shaven", "moustache", "beard"),
         "clothing": ("jacket", "coat", "tshirt"),
         "expression": ("smiling", "laughing", "serious", "bored", "angry"),
+        "other": (),
     }
 
 
 def test_generate_prompt_with_scripted_draws_should_assemble_common_then_categories_in_order_then_style() -> None:
     # GIVEN a scripted rng selecting the last option of every female
-    # category (5 categories = 5 choices, in category order), and a
-    # configured image_style:
+    # category (5 non-empty categories = 5 choices, in category order;
+    # the empty "other" is skipped and never draws), and a configured
+    # image_style:
     script = _ChoiceScriptRandom([3, 1, 3, 3, 4])
-    prompt = npc_generator_lib.generate_prompt("female", _TEST_IMAGE_STYLE, script)
+    prompt = npc_generator_lib.generate_prompt(
+        "female", _TEST_IMAGE_STYLE, script, **_DEFAULT_CHARACTERISTICS
+    )
 
     # THEN the prompt is exactly: common segment, the five drawn
-    # options in prescribed category order, the style segment - joined
-    # with comma+space, one line (spec 17: Example prompt):
+    # options, the style segment - joined with comma+space, one line
+    # (spec 17: Example prompt):
     assert prompt == (
         "head and shoulders closeup picture, simple background, "
         "white background, old woman, short hair, bangs, tshirt, angry, "
@@ -1413,7 +1684,9 @@ def test_generate_prompt_with_scripted_draws_should_use_male_categories_for_male
     # GIVEN a scripted rng selecting index 0 of every male category -
     # note the third category is facial hair, not hairstyle:
     script = _ChoiceScriptRandom([0, 0, 0, 0, 0])
-    prompt = npc_generator_lib.generate_prompt("male", _TEST_IMAGE_STYLE, script)
+    prompt = npc_generator_lib.generate_prompt(
+        "male", _TEST_IMAGE_STYLE, script, **_DEFAULT_CHARACTERISTICS
+    )
 
     # THEN the male options appear in the male category order:
     assert prompt == (
@@ -1425,24 +1698,30 @@ def test_generate_prompt_with_scripted_draws_should_use_male_categories_for_male
 
 
 @pytest.mark.parametrize("sex", ["male", "female"])
-def test_generate_prompt_across_seeds_should_place_every_segment_in_its_spec_position(
+def test_generate_prompt_across_seeds_should_place_every_segment_in_its_default_category_position(
     sex: str,
 ) -> None:
-    # GIVEN prompts from a spread of plain seeded rngs:
+    # GIVEN prompts from a spread of plain seeded rngs (the spec allows
+    # any category order; the implementation deterministically keeps
+    # the config's, and this pins that behavior):
     categories = (
-        npc_generator_lib.FEMALE_APPEARANCE_CATEGORIES
+        npc_generator_lib.DEFAULT_FEMALE_CHARACTERISTICS
         if sex == "female"
-        else npc_generator_lib.MALE_APPEARANCE_CATEGORIES
+        else npc_generator_lib.DEFAULT_MALE_CHARACTERISTICS
     )
     for seed in range(1, 13):
         prompt = npc_generator_lib.generate_prompt(
-            sex, _TEST_IMAGE_STYLE, random.Random(seed)
+            sex,
+            _TEST_IMAGE_STYLE,
+            random.Random(seed),
+            **_DEFAULT_CHARACTERISTICS,
         )
 
         # WHEN split on the comma+space separator (spec 17: Testing -
         # "comma+space as separators"), THEN segment layout is: the 3
-        # common segments, then 5 sex-specific segments in category
-        # order, then the 3 style segments from the configuration:
+        # common segments, then 5 sex-specific segments (the empty
+        # "other" category contributes nothing), then the 3 style
+        # segments from the configuration:
         segments = prompt.split(", ")
         assert segments[:3] == [
             "head and shoulders closeup picture",
@@ -1452,8 +1731,8 @@ def test_generate_prompt_across_seeds_should_place_every_segment_in_its_spec_pos
         appearance_segments = segments[3:8]
         assert segments[8:] == _TEST_IMAGE_STYLE.split(", ")
 
-        # AND each drawn segment belongs to the category prescribed
-        # for that position:
+        # AND each drawn segment belongs to the category occupying
+        # that position (zip stops before the trailing empty "other"):
         for options, segment in zip(categories.values(), appearance_segments):
             assert segment in options
 
@@ -1462,7 +1741,9 @@ def test_generate_prompt_with_empty_image_style_should_omit_the_style_segment_en
     # GIVEN the blank image_style stage 1 kept verbatim in config (spec
     # 17: "A blank or empty configured value is valid!"):
     script = _ChoiceScriptRandom([0, 0, 0, 0, 0])
-    prompt = npc_generator_lib.generate_prompt("female", "", script)
+    prompt = npc_generator_lib.generate_prompt(
+        "female", "", script, **_DEFAULT_CHARACTERISTICS
+    )
 
     # THEN the prompt ends cleanly on the expression category - no
     # dangling comma+space separator, and the default style must NOT
@@ -1479,20 +1760,110 @@ def test_generate_prompt_with_whitespace_only_image_style_should_omit_it_too(
     # GIVEN a whitespace-only style (same intent as empty: no style
     # directive; the library seam treats them alike):
     script = _ChoiceScriptRandom([0, 0, 0, 0, 0])
-    prompt = npc_generator_lib.generate_prompt("female", blank_style, script)
+    prompt = npc_generator_lib.generate_prompt(
+        "female", blank_style, script, **_DEFAULT_CHARACTERISTICS
+    )
 
     assert prompt.endswith("smiling")
     assert script.choice_calls == 5
+
+
+@pytest.mark.parametrize("blank_common", ["", "   ", "\t"])
+def test_generate_prompt_with_blank_common_characteristics_should_omit_the_leading_segment(
+    blank_common: str,
+) -> None:
+    # GIVEN a blank common_characteristics value - stage 8's mirror of
+    # the blank-style rule (spec 17: "don't revert to the default! It
+    # should be possible for the user to suppress the default"):
+    script = _ChoiceScriptRandom([0, 0, 0, 0, 0])
+    prompt = npc_generator_lib.generate_prompt(
+        "female",
+        _TEST_IMAGE_STYLE,
+        script,
+        **{
+            **_DEFAULT_CHARACTERISTICS,
+            "common_characteristics": blank_common,
+        },
+    )
+
+    # THEN the prompt starts on the first drawn category - no dangling
+    # separator, and the default common string must NOT sneak back in:
+    assert prompt.startswith("young woman")
+    assert not prompt.startswith(", ")
+    assert npc_generator_lib.DEFAULT_COMMON_CHARACTERISTICS not in prompt
+    assert script.choice_calls == 5
+
+
+def test_generate_prompt_with_empty_category_should_skip_it_without_an_rng_draw() -> None:
+    # GIVEN every female category EXCEPT clothing suppressed to empty
+    # (spec 17: "If a group ... is empty, skip it"):
+    suppressed = {
+        category: ()
+        if category != "clothing"
+        else options
+        for category, options in (
+            npc_generator_lib.DEFAULT_FEMALE_CHARACTERISTICS.items()
+        )
+    }
+    script = _ChoiceScriptRandom([2])
+
+    # WHEN the prompt is built with that config-shaped dict, THEN only
+    # the single non-empty category contributes and consumes exactly
+    # one rng draw (empty pools cannot be drawn from):
+    prompt = npc_generator_lib.generate_prompt(
+        "female",
+        "",
+        script,
+        common_characteristics="",
+        female_characteristics=suppressed,
+        male_characteristics=npc_generator_lib.DEFAULT_MALE_CHARACTERISTICS,
+    )
+
+    assert prompt == "coat"
+    assert script.choice_calls == 1
+
+
+def test_generate_prompt_with_custom_values_should_use_them_verbatim() -> None:
+    # GIVEN a fully custom characteristic set on every channel the
+    # config exposes (the acceptance criterion: "Can the user customize
+    # every part of the prompt via the config file"):
+    script = _ChoiceScriptRandom([0, 0, 0])
+    prompt = npc_generator_lib.generate_prompt(
+        "female",
+        "oil painting",
+        script,
+        common_characteristics="full body shot, neon background",
+        female_characteristics={
+            "age": ("timeless crone",),
+            "clothing": ("space suit",),
+            "other": ("round glasses",),
+        },
+        male_characteristics={},
+    )
+
+    # THEN every custom part rides into the prompt verbatim, and the
+    # "other" group draws like any other group:
+    assert prompt == (
+        "full body shot, neon background, timeless crone, space suit, "
+        "round glasses, oil painting"
+    )
+    assert script.choice_calls == 3
 
 
 def test_generate_prompt_with_identical_seed_should_replay_identical_prompts() -> None:
     # GIVEN two plain rngs seeded alike, drawing male prompts:
     for _ in range(5):
         prompt_a = npc_generator_lib.generate_prompt(
-            "male", _TEST_IMAGE_STYLE, random.Random(2026)
+            "male",
+            _TEST_IMAGE_STYLE,
+            random.Random(2026),
+            **_DEFAULT_CHARACTERISTICS,
         )
         prompt_b = npc_generator_lib.generate_prompt(
-            "male", _TEST_IMAGE_STYLE, random.Random(2026)
+            "male",
+            _TEST_IMAGE_STYLE,
+            random.Random(2026),
+            **_DEFAULT_CHARACTERISTICS,
         )
 
         # THEN the prompts match exactly - the rng seam makes
@@ -1504,22 +1875,25 @@ def test_generate_prompt_should_reach_every_spec_option() -> None:
     # GIVEN each sex, category and option index walked with a scripted
     # rng that selects just that option:
     for sex, categories in (
-        ("female", npc_generator_lib.FEMALE_APPEARANCE_CATEGORIES),
-        ("male", npc_generator_lib.MALE_APPEARANCE_CATEGORIES),
+        ("female", npc_generator_lib.DEFAULT_FEMALE_CHARACTERISTICS),
+        ("male", npc_generator_lib.DEFAULT_MALE_CHARACTERISTICS),
     ):
-        for category_index, options in enumerate(categories.values()):
+        non_empty = [
+            options for options in categories.values() if options
+        ]
+        for category_index, options in enumerate(non_empty):
             for option_index, option in enumerate(options):
                 script = _ChoiceScriptRandom(
                     [
                         option_index if position == category_index else 0
-                        for position in range(len(categories))
+                        for position in range(len(non_empty))
                     ]
                 )
 
                 # THEN every option the spec lists is selectable in
                 # the prompt:
                 prompt = npc_generator_lib.generate_prompt(
-                    sex, "", script
+                    sex, "", script, **_DEFAULT_CHARACTERISTICS
                 )
                 assert option in prompt.split(", ")
 
@@ -1530,7 +1904,9 @@ def test_generate_prompt_with_unknown_sex_should_raise_value_error() -> None:
 
     # THEN the library seam refuses loudly, drawing nothing:
     with pytest.raises(ValueError, match="unknown sex"):
-        npc_generator_lib.generate_prompt("alien", _TEST_IMAGE_STYLE, script)
+        npc_generator_lib.generate_prompt(
+            "alien", _TEST_IMAGE_STYLE, script, **_DEFAULT_CHARACTERISTICS
+        )
 
     assert script.choice_calls == 0
 
@@ -1546,13 +1922,30 @@ _SHIM_PATH = Path(npc_generator_lib.__file__).resolve().parent / "npc_generator"
 def _full_config(tmp_path: Path, **overrides: object) -> Path:
     """Config file carrying every recognized key, with overrides, so
     no generation test trips the missing-key warnings or depends on
-    defaults sneaking into an argv assertion."""
+    defaults sneaking into an argv assertion. The characteristics
+    defaults are derived from the library constants, one source of
+    truth and all."""
     values = {
         "server": "http://npc-srv:1234",
         "steps": 9,
         "cfg": 2.5,
         "width": 64,
         "height": 32,
+        "common_characteristics": (
+            npc_generator_lib.DEFAULT_COMMON_CHARACTERISTICS
+        ),
+        "female_characteristics": {
+            category: list(options)
+            for category, options in (
+                npc_generator_lib.DEFAULT_FEMALE_CHARACTERISTICS.items()
+            )
+        },
+        "male_characteristics": {
+            category: list(options)
+            for category, options in (
+                npc_generator_lib.DEFAULT_MALE_CHARACTERISTICS.items()
+            )
+        },
         "image_style": "chunky pixels",
     }
     values.update(overrides)
@@ -1573,6 +1966,15 @@ def test_build_sd_client_command_shouldLeadWithInterpreterAndTheBesideToolScript
             cfg=1.0,
             width=512,
             height=512,
+            common_characteristics=(
+                npc_generator_lib.DEFAULT_COMMON_CHARACTERISTICS
+            ),
+            female_characteristics=(
+                npc_generator_lib.DEFAULT_FEMALE_CHARACTERISTICS
+            ),
+            male_characteristics=(
+                npc_generator_lib.DEFAULT_MALE_CHARACTERISTICS
+            ),
             image_style="",
             female_names_file=Path("f.txt"),
             male_names_file=Path("m.txt"),
@@ -1612,7 +2014,7 @@ def test_run_withFakeSdClient_shouldInvokeItOncePerNpcWithTheSpecsInvocationCont
         # the fake records its own sys.argv[1:], so the positional
         # prompt leads (never a shell, spec: Invocation contract):
         prompt = invocation[0]
-        assert prompt.startswith(npc_generator_lib.COMMON_CHARACTERISTICS)
+        assert prompt.startswith(npc_generator_lib.DEFAULT_COMMON_CHARACTERISTICS)
         assert prompt.endswith("chunky pixels")
         assert "\n" not in prompt
 
@@ -1659,6 +2061,117 @@ def test_run_withRealSeed_shouldPassSeedFlagThroughToSdClient(
     assert exit_code == 0
     (invocation,) = _recorded_invocations(log)
     assert _flag_value(invocation, "--seed") == "20261104"
+
+
+def test_run_withFullyCustomCharacteristicsConfig_shouldPutEveryCustomPartInThePrompt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # GIVEN a config customizing every prompt channel at once: the
+    # common lead, single-option female age/clothing pools, an "other"
+    # hint pool, and the style tail (spec 17 acceptance criterion:
+    # "Can the user customize every part of the prompt via the config
+    # file"); categories the config omits must merge in from defaults:
+    config_path = _full_config(
+        tmp_path,
+        common_characteristics="full body shot, neon background",
+        female_characteristics={
+            "age": ["timeless crone"],
+            "clothing": ["space suit"],
+            "other": ["round glasses"],
+        },
+        image_style="oil painting",
+    )
+    argv = _base_args(tmp_path, config_path=config_path) + [
+        "--count", "2", "--sex", "female",
+    ]
+    log = _fake_sd_client(tmp_path, monkeypatch)
+
+    # WHEN the tool runs:
+    assert npc_generator_lib.run(argv) == 0
+
+    # THEN every prompt the recording fake received leads with the
+    # custom common segment and carries the single-option pools and
+    # the drawn "other" hint verbatim...
+    invocations = _recorded_invocations(log)
+    assert len(invocations) == 2
+    for invocation in invocations:
+        prompt = invocation[0]
+        assert prompt.startswith("full body shot, neon background, ")
+        assert "timeless crone" in prompt
+        assert "space suit" in prompt
+        assert "round glasses" in prompt
+        assert prompt.endswith(", oil painting")
+        assert "\n" not in prompt
+
+        # ...while the categories the config never mentioned still
+        # draw from their merged-in defaults:
+        assert any(
+            option in prompt
+            for option in ("wavy hair", "straight hair", "ponytail", "bangs")
+        )
+
+
+def test_run_withBlankCommonCharacteristics_shouldNotEmitTheLeadingSegmentOrTheDefault(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # GIVEN a config suppressing the common segment with an empty
+    # string (spec 17 stage 8 Testing: a blank common_characteristics
+    # is honored, NOT reverted to the default):
+    config_path = _full_config(tmp_path, common_characteristics="")
+    argv = _base_args(tmp_path, config_path=config_path) + ["--count", "1"]
+    log = _fake_sd_client(tmp_path, monkeypatch)
+
+    # WHEN the tool runs:
+    assert npc_generator_lib.run(argv) == 0
+
+    # THEN the prompt leads on the first drawn category - no dangling
+    # comma+space, and the default common segment must not sneak back
+    # in:
+    (invocation,) = _recorded_invocations(log)
+    prompt = invocation[0]
+    assert not prompt.startswith(", ")
+    assert "head and shoulders closeup picture" not in prompt
+
+
+def test_run_withEmptyCharacteristicsCategory_shouldSilentlySkipIt(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    # GIVEN a config explicitly suppressing the female expression
+    # category to empty, with a distinctive single-option clothing
+    # pool so no survivor category can collide with the removed
+    # options (spec 17: an empty category is skipped, and that is
+    # "neither an error nor a warning"):
+    config_path = _full_config(
+        tmp_path,
+        female_characteristics={
+            "clothing": ["space suit"],
+            "expression": [],
+        },
+    )
+    argv = _base_args(tmp_path, config_path=config_path) + [
+        "--count", "3", "--sex", "female",
+    ]
+    log = _fake_sd_client(tmp_path, monkeypatch)
+
+    # WHEN the tool runs, THEN it proceeds with three invocations...
+    assert npc_generator_lib.run(argv) == 0
+    invocations = _recorded_invocations(log)
+    assert len(invocations) == 3
+
+    # AND no prompt segment is an expression option - the suppressed
+    # category contributes nothing - while the custom clothing pool
+    # still rides along:
+    for invocation in invocations:
+        segments = invocation[0].split(", ")
+        assert not {
+            "smiling", "laughing", "serious", "bored", "angry",
+        } & set(segments)
+        assert "space suit" in segments
+
+    # AND stderr stayed silent about the suppression:
+    assert capsys.readouterr().err == ""
 
 
 def test_run_withSuccessfulGeneration_shouldFillNpcDirectoryWithImageMetadataAndEmptyAudio(
@@ -1769,7 +2282,7 @@ def test_run_withDebugFlag_shouldPrintEachFullPromptRightAfterItsGeneratingLine(
     ]
     assert printed_prompts == [invocation[0] for invocation in invocations]
     for prompt in printed_prompts:
-        assert prompt.startswith(npc_generator_lib.COMMON_CHARACTERISTICS)
+        assert prompt.startswith(npc_generator_lib.DEFAULT_COMMON_CHARACTERISTICS)
 
 
 def test_run_withoutDebugFlag_shouldNotPrintPromptLines(
@@ -2055,7 +2568,7 @@ def test_npcGeneratorShim_withStubServerAndRealSdClient_shouldGenerateTheFullNpc
     assert payload["sample_params"]["guidance"]["txt_cfg"] == 1.0
     assert "seed" not in payload
     prompt = payload["prompt"]
-    assert prompt.startswith(npc_generator_lib.COMMON_CHARACTERISTICS)
+    assert prompt.startswith(npc_generator_lib.DEFAULT_COMMON_CHARACTERISTICS)
     assert prompt.endswith(npc_generator_lib.DEFAULT_IMAGE_STYLE)
     assert "\n" not in prompt
     assert any(
