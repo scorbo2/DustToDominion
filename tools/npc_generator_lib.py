@@ -14,16 +14,17 @@ normal resource machinery). ``sd-client.py``, the one component that
 talks to an image server, is likewise stdlib-only (spec 17: Additional
 dependencies).
 
-Stages 1-6 of the spec 17 dev plan are live: the full argument surface
-with validation, ``npc_generator.json`` loading with the spec's fatal
-and non-fatal rules, the merged-settings seam, random name drawing
-with the output-dir uniqueness rule (``NamePool``,
-``allocate_npc_directory``), prompt assembly (``generate_prompt`` with
-the spec's category constants), the generation pipeline itself
-(``generate_npcs``): per-NPC directory layout (``image.png``,
-``metadata.json``, empty ``audio/``) plus one ``sd-client.py``
-subprocess per NPC, with the spec's fatal-failure cleanup, and the
-``--debug`` prompt echo on stdout.
+All eight stages of the spec 17 dev plan are live: the full argument
+surface with validation, ``npc_generator.json`` loading with the spec's
+fatal and non-fatal rules (stage 8 added the prompt-characteristics
+keys and their nested validation/merge rules), the merged-settings
+seam, random name drawing with the output-dir uniqueness rule
+(``NamePool``, ``allocate_npc_directory``), prompt assembly
+(``generate_prompt``, fully config-driven since stage 8), the
+generation pipeline itself (``generate_npcs``): per-NPC directory
+layout (``image.png``, ``metadata.json``, empty ``audio/``) plus one
+``sd-client.py`` subprocess per NPC, with the spec's fatal-failure
+cleanup, and the ``--debug`` prompt echo on stdout.
 """
 from __future__ import annotations
 
@@ -68,18 +69,59 @@ DEFAULT_STEPS = 6
 DEFAULT_CFG = 1.0
 DEFAULT_WIDTH = 512
 DEFAULT_HEIGHT = 512
+DEFAULT_COMMON_CHARACTERISTICS = (
+    "head and shoulders closeup picture, simple background, white background"
+)
 DEFAULT_IMAGE_STYLE = "pixel art style, low resolution, pixels"
+
+#: The sex-specific characteristic pools, verbatim from the spec 17
+#: Configuration snippet (stage 8 amendment: these values went from
+#: hard-coded constants to config defaults). These dicts play three
+#: roles at once: the defaults when the config omits a category, the
+#: closed set of *expected* nested category names (anything else is an
+#: unrecognized key and fatal), and - via dict insertion order - the
+#: order groups are processed in. The spec allows any order; this one
+#: is simply deterministic, which is kind to the seeded-rng tests.
+#: ``other`` starts empty on purpose: it exists so users can bolt on a
+#: hint without renaming anything, and empty means "skip it".
+DEFAULT_FEMALE_CHARACTERISTICS: dict[str, tuple[str, ...]] = {
+    "age": ("young woman", "adult woman", "middle-aged woman", "old woman"),
+    "hair_length": ("long hair", "short hair"),
+    "hairstyle": ("wavy hair", "straight hair", "ponytail", "bangs"),
+    "clothing": ("blouse", "jacket", "coat", "tshirt"),
+    "expression": ("smiling", "laughing", "serious", "bored", "angry"),
+    "other": (),
+}
+DEFAULT_MALE_CHARACTERISTICS: dict[str, tuple[str, ...]] = {
+    "age": ("young man", "adult man", "middle-aged man", "old man"),
+    "hair_length": ("bald", "shaved head", "long hair", "short hair"),
+    "facial_hair": ("clean-shaven", "moustache", "beard"),
+    "clothing": ("jacket", "coat", "tshirt"),
+    "expression": ("smiling", "laughing", "serious", "bored", "angry"),
+    "other": (),
+}
+
+#: The two aggregate config keys mapped to their expected-category
+#: defaults, so validation can look up either sex by key name.
+_CHARACTERISTICS_DEFAULTS: dict[str, dict[str, tuple[str, ...]]] = {
+    "female_characteristics": DEFAULT_FEMALE_CHARACTERISTICS,
+    "male_characteristics": DEFAULT_MALE_CHARACTERISTICS,
+}
 
 #: The config keys the tool recognizes, mapped to their defaults. Any
 #: key outside this mapping is fatal (spec 17: Configuration -
 #: "Unrecognized keys are fatal!"), and a key inside it that the file
-#: omits is a warning plus the mapped default.
+#: omits is a warning plus the mapped default (terse wording for the
+#: two aggregate characteristics keys, per the stage 8 amendment).
 CONFIG_KEY_DEFAULTS: dict[str, object] = {
     "server": DEFAULT_SERVER,
     "steps": DEFAULT_STEPS,
     "cfg": DEFAULT_CFG,
     "width": DEFAULT_WIDTH,
     "height": DEFAULT_HEIGHT,
+    "common_characteristics": DEFAULT_COMMON_CHARACTERISTICS,
+    "female_characteristics": DEFAULT_FEMALE_CHARACTERISTICS,
+    "male_characteristics": DEFAULT_MALE_CHARACTERISTICS,
     "image_style": DEFAULT_IMAGE_STYLE,
 }
 
@@ -112,14 +154,22 @@ class ConfigError(Exception):
 
 @dataclass(frozen=True)
 class GeneratorConfig:
-    """The six ``npc_generator.json`` keys after defaults and validation
-    (spec 17: Configuration)."""
+    """The nine ``npc_generator.json`` keys after defaults, nested
+    merge, and validation (spec 17: Configuration).
+
+    The characteristics values are normalized to ``dict[str,
+    tuple[...]]``: merged per-category with the defaults, and immune
+    to accidental mutation down the line.
+    """
 
     server: str
     steps: int
     cfg: float
     width: int
     height: int
+    common_characteristics: str
+    female_characteristics: dict[str, tuple[str, ...]]
+    male_characteristics: dict[str, tuple[str, ...]]
     image_style: str
 
 
@@ -143,6 +193,9 @@ class ResolvedSettings:
     cfg: float
     width: int
     height: int
+    common_characteristics: str
+    female_characteristics: dict[str, tuple[str, ...]]
+    male_characteristics: dict[str, tuple[str, ...]]
     image_style: str
     female_names_file: Path
     male_names_file: Path
@@ -355,7 +408,7 @@ def _validate_config_value(key: str, value: object, config_path: Path) -> object
     failure. bool is excluded from the numeric checks because Json
     true/false is not a number, however Python's type ladder sees it.
     """
-    if key in ("server", "image_style"):
+    if key in ("server", "image_style", "common_characteristics"):
         if not isinstance(value, str):
             raise ConfigError(
                 f"config key {key!r} in {config_path} must be a string, "
@@ -380,17 +433,75 @@ def _validate_config_value(key: str, value: object, config_path: Path) -> object
     return value
 
 
+def _validate_characteristics(
+    key: str, value: object, config_path: Path
+) -> dict[str, tuple[str, ...]]:
+    """Validate and merge one sex-specific characteristics object
+    (spec 17 stage 8: Configuration + Error handling).
+
+    - the value itself is not a Json object: fatal.
+    - unexpected nested keys are "treated as unrecognized keys": fatal,
+      same as unrecognized top-level keys.
+    - a category that is not an array, or an array holding anything
+      other than strings: fatal.
+    - a missing expected category: silent, NOT a warning - the user is
+      implicitly accepting that category's default.
+    - a present-but-empty category: kept as-is - the user is
+      explicitly suppressing it.
+
+    The merge is per category: a present category replaces that
+    category's default list wholesale; missing categories inherit
+    their default. Results are normalized to tuples, iterated in
+    default order - the spec permits any order, and deterministic is
+    free and kind to the seeded-rng tests.
+    """
+    if not isinstance(value, dict):
+        raise ConfigError(
+            f"config key {key!r} in {config_path} must be a Json object, "
+            f"got {value!r}"
+        )
+    expected = _CHARACTERISTICS_DEFAULTS[key]
+    unrecognized = sorted(set(value) - set(expected))
+    if unrecognized:
+        names = ", ".join(repr(category) for category in unrecognized)
+        raise ConfigError(
+            f"unrecognized key(s) in config key {key!r} of {config_path}: "
+            f"{names}"
+        )
+    merged: dict[str, tuple[str, ...]] = {}
+    for category, default_options in expected.items():
+        if category not in value:
+            merged[category] = default_options
+            continue
+        options = value[category]
+        if not isinstance(options, list) or any(
+            not isinstance(option, str) for option in options
+        ):
+            raise ConfigError(
+                f"config key {key!r} category {category!r} in "
+                f"{config_path} must be an array of strings, got {options!r}"
+            )
+        merged[category] = tuple(options)
+    return merged
+
+
 def load_generator_config(config_path: Path) -> GeneratorConfig:
     """Load npc_generator.json (spec 17: Configuration).
 
     - missing file: warning + full defaults (explicitly not an error).
     - unreadable file, empty file, or malformed Json: ConfigError.
     - top level that is not a Json object: ConfigError.
-    - unrecognized key: ConfigError ("Unrecognized keys are fatal!").
-    - missing expected key: warning naming the key and the default in
-      effect, then that default.
-    - blank/empty image_style: honored verbatim; the default is NOT
-      substituted (spec 17: Image style options).
+    - unrecognized key, at top level or inside the characteristics
+      objects: ConfigError ("Unrecognized keys are fatal!").
+    - missing expected key: warning naming the key - with the default
+      in effect, except for the two aggregate characteristics keys,
+      whose warning stays terse instead of reciting every option
+      (stage 8 amendment).
+    - characteristics objects: nested validation and per-category
+      merge, see ``_validate_characteristics``.
+    - blank/empty ``image_style`` or ``common_characteristics``:
+      honored verbatim; the default is NOT substituted (spec 17:
+      "don't revert to the default!").
     """
     try:
         text = config_path.read_text(encoding="utf-8")
@@ -423,7 +534,21 @@ def load_generator_config(config_path: Path) -> GeneratorConfig:
     values: dict[str, object] = {}
     for key, default in CONFIG_KEY_DEFAULTS.items():
         if key in raw:
-            values[key] = _validate_config_value(key, raw[key], config_path)
+            if key in _CHARACTERISTICS_DEFAULTS:
+                values[key] = _validate_characteristics(
+                    key, raw[key], config_path
+                )
+            else:
+                values[key] = _validate_config_value(key, raw[key], config_path)
+        elif key in _CHARACTERISTICS_DEFAULTS:
+            # Stage 8: these defaults run to dozens of options; reciting
+            # them at the user helps nobody, so the spec pins the terse
+            # message instead.
+            _warn(
+                f"config file {config_path} has no {key!r} key; Default "
+                f"values will be used"
+            )
+            values[key] = default
         else:
             _warn(
                 f"config file {config_path} has no {key!r} key; using "
@@ -450,6 +575,9 @@ def merge_settings(
         cfg=config.cfg,
         width=config.width if args.width is None else args.width,
         height=config.height if args.height is None else args.height,
+        common_characteristics=config.common_characteristics,
+        female_characteristics=config.female_characteristics,
+        male_characteristics=config.male_characteristics,
         image_style=config.image_style,
         female_names_file=Path(args.first_names_female),
         male_names_file=Path(args.first_names_male),
@@ -629,71 +757,60 @@ def allocate_npc_directory(
 # prompt generation (spec 17: Image generation)
 # ------------------------------------------------------------------ #
 
-#: The fixed leading segment of every prompt (spec 17: Common
-#: characteristics - verbatim).
-COMMON_CHARACTERISTICS = (
-    "head and shoulders closeup picture, simple background, white background"
-)
-
-#: Sex-specific appearance categories, keyed by the spec's category
-#: names with the option lists verbatim. Dict insertion order IS the
-#: prescribed category order (spec 17: Testing - "sex-specific
-#: attributes in the prescribed category order"); ``generate_prompt``
-#: draws them in that order, and the tests pin the positions.
-FEMALE_APPEARANCE_CATEGORIES: dict[str, tuple[str, ...]] = {
-    "age": ("young woman", "adult woman", "middle-aged woman", "old woman"),
-    "hair_length": ("long hair", "short hair"),
-    "hairstyle": ("wavy hair", "straight hair", "ponytail", "bangs"),
-    "clothing": ("blouse", "jacket", "coat", "tshirt"),
-    "expression": ("smiling", "laughing", "serious", "bored", "angry"),
-}
-MALE_APPEARANCE_CATEGORIES: dict[str, tuple[str, ...]] = {
-    "age": ("young man", "adult man", "middle-aged man", "old man"),
-    "hair_length": ("bald", "shaved head", "long hair", "short hair"),
-    "facial_hair": ("clean-shaven", "moustache", "beard"),
-    "clothing": ("jacket", "coat", "tshirt"),
-    "expression": ("smiling", "laughing", "serious", "bored", "angry"),
-}
-
-_APPEARANCE_CATEGORIES_BY_SEX = {
-    "female": FEMALE_APPEARANCE_CATEGORIES,
-    "male": MALE_APPEARANCE_CATEGORIES,
-}
-
+#: The joiner between prompt segments (spec 17: Image generation -
+#: "a single line, with elements separated by comma+space").
 PROMPT_SEGMENT_SEPARATOR = ", "
 
 
 def generate_prompt(
-    resolved_sex: str, image_style: str, rng: random.Random
+    resolved_sex: str,
+    image_style: str,
+    rng: random.Random,
+    *,
+    common_characteristics: str,
+    female_characteristics: dict[str, tuple[str, ...]],
+    male_characteristics: dict[str, tuple[str, ...]],
 ) -> str:
     """Assemble one image-generation prompt (spec 17: Image
     generation).
 
-    Layout, per the spec: the fixed common characteristics first, then
-    one randomly-drawn option per appearance category in the
-    prescribed category order, then the configured ``image_style`` -
-    all joined with comma+space on a single line.
+    Layout, per the spec: the configured common characteristics first,
+    then one randomly-drawn option per non-empty sex-specific group,
+    then the configured ``image_style`` - all joined with comma+space
+    on a single line. Nothing is hard-coded here anymore (stage 8
+    amendment): every segment flows in from config.
 
-    A blank ``image_style`` contributes no segment at all. Stage 1
-    already keeps the blank value out of the default's way (spec 17:
-    "Don't revert to default if the configured value is \\\"\\\".");
-    appending an empty style here would instead hand ``sd-client.py``
-    a dangling separator, so blank legitimately means "no style
-    directive" - and a whitespace-only value is treated the same.
+    Suppression rules: a blank (or whitespace-only) common segment or
+    style contributes no segment at all - never a dangling separator,
+    and the defaults must NOT sneak back in (spec 17: "don't revert to
+    the default!"). An empty category is skipped the same way, which
+    also means it consumes no rng draw: you cannot draw from an empty
+    pool.
 
     The rng consumption contract, mirroring ``NamePool``'s: exactly one
-    ``choice()`` per appearance category (five per prompt), in
-    category order, and none for the common or style segments -
-    documented so the scripted-rng tests stay honest.
+    ``choice()`` per non-empty category, in category order, and none
+    for the common or style segments - documented so the scripted-rng
+    tests stay honest.
+
+    Category order is whatever order the incoming dicts iterate in;
+    the spec explicitly allows "groups can be processed in any order",
+    so the config's default order flows through untouched.
     """
     try:
-        categories = _APPEARANCE_CATEGORIES_BY_SEX[resolved_sex]
+        categories = {
+            "female": female_characteristics,
+            "male": male_characteristics,
+        }[resolved_sex]
     except KeyError:
         # argparse guards the user path; the library seam stays loud.
         raise ValueError(f"unknown sex: {resolved_sex!r}") from None
 
-    parts = [COMMON_CHARACTERISTICS]
-    parts.extend(rng.choice(options) for options in categories.values())
+    parts: list[str] = []
+    if common_characteristics.strip():
+        parts.append(common_characteristics)
+    for options in categories.values():
+        if options:
+            parts.append(rng.choice(options))
     if image_style.strip():
         parts.append(image_style)
     return PROMPT_SEGMENT_SEPARATOR.join(parts)
@@ -809,7 +926,14 @@ def generate_npcs(settings: ResolvedSettings) -> int:
             return _fail(str(exc))
 
         write_npc_directory_layout(npc_directory, npc_name)
-        prompt = generate_prompt(npc_name.sex, settings.image_style, rng)
+        prompt = generate_prompt(
+            npc_name.sex,
+            settings.image_style,
+            rng,
+            common_characteristics=settings.common_characteristics,
+            female_characteristics=settings.female_characteristics,
+            male_characteristics=settings.male_characteristics,
+        )
         # flush so the announcements reach the terminal before
         # sd-client.py's own output, even when stdout is block-buffered.
         print(f"Generating {npc_name.full_name}...", flush=True)

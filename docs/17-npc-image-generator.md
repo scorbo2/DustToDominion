@@ -1,6 +1,6 @@
 ---
 description: Specifies the standalone `npc_generator` tool that pre-generates NPC profile images and metadata directories for the game
-status: proposed
+status: active
 ---
 
 # NPC Image Generator
@@ -370,7 +370,7 @@ via the tool's `--server` config.
 - An expected category within `male_characteristics` or `female_characteristics` is not an array, or is an array that contains anything other than string values: fatal error and exit code 1.
 - The `male_characteristics` or `female_characteristics` keys themselves are missing: no problem. Proceed with defaults.
 - The `male_characteristics` or `female_characteristics` keys are an unexpected type (example: `"male_characteristics": "yes"`): fatal error and exit code 1.
-- The `male_characterstics` or `female_characteristics` objects contain an unrecognized key: fatal error and exit code 1.
+- The `male_characteristics` or `female_characteristics` objects contain an unrecognized key: fatal error and exit code 1.
 
 ## Acceptance criteria
 
@@ -519,8 +519,45 @@ via the tool's `--server` config.
 8. **Amendment 2026-11-04**: make the "common characteristics" and
   the sex-specific characteristics configurable. The original document
   had these values hard-coded. Previous assumptions around drawing
-  exactly one value from each characteristic category are no longer valid,
-  as it is now possible for a category to be empty, in which case that
-  category should be silently skipped. Update existing code and tests
-  as needed to accommodate this change. If all tests pass, flip this document
-  back to "active" status.
+  exactly one value from each characteristic category are no longer
+  valid, as it is now possible for a category to be empty, in which
+  case that category should be silently skipped. Update existing code
+  and tests as needed to accommodate this change. If all tests pass,
+  flip this document back to "active" status.
+  **Completed 2026-11-05** (`npc_generator.json` grew to the nine-key
+  Configuration snippet: `common_characteristics` plus the two
+  aggregate objects, validated by a new `_validate_characteristics` -
+  non-object aggregates, unrecognized nested categories, and
+  non-string-array categories all land in `ConfigError` with code 1;
+  the merge is per-category (present category replaces its default
+  wholesale, missing category silently inherits it, empty category is
+  kept as explicit suppression) and normalizes to tuples iterated in
+  default order - the spec allows any order, deterministic is free.
+  Missing `male_characteristics`/`female_characteristics` top-level
+  keys warn with the pinned terse "Default values will be used"
+  wording, no options recited; missing nested categories stay silent.
+  `generate_prompt` now takes `common_characteristics`,
+  `female_characteristics` and `male_characteristics` as explicit
+  keyword arguments - the prompt layer keeps no hard-coded pools; a
+  blank (or whitespace-only) common segment contributes nothing, no
+  dangling separator, default never restored (mirroring the blank
+  `image_style` rule), and an empty category is skipped without
+  consuming an rng draw - the scripted-rng tests pin the new
+  one-choice-per-*non-empty*-category contract. The stage 3 constant
+  pins survive as `DEFAULT_COMMON_CHARACTERISTICS` /
+  `DEFAULT_FEMALE_CHARACTERISTICS` / `DEFAULT_MALE_CHARACTERISTICS`
+  verbatim pins ("other" included, intentionally empty). New tests
+  cover every amended Testing bullet plus the positive pin: a config
+  with distinctive values proves every prompt channel - common, each
+  category, `other`, style - reaches the prompt verbatim end to end
+  through the recording fake. One pre-existing "fully valid config"
+  test updated to the nine-key shape. 26 new tests (module total
+  139); full suite green at 1575. Acceptance re-verified with a live
+  audit: the real `tools/npc_generator` shim driving the real
+  `sd-client.py` against the stage 4 stub with a fully custom
+  characteristics config - custom common lead, single-option
+  clothing/other pools verbatim, custom style tail, unmentioned
+  categories drawing from merged defaults, terse stderr. Document
+  flipped `proposed` -> `active` per the stage's own instruction;
+  the Testing-section typo `male_characterstics` repaired during
+  sync.)
