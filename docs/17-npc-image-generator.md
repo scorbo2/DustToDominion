@@ -1,6 +1,6 @@
 ---
 description: Specifies the standalone `npc_generator` tool that pre-generates NPC profile images and metadata directories for the game
-status: active
+status: proposed
 ---
 
 # NPC Image Generator
@@ -62,9 +62,40 @@ config, located in `tools/npc_generator.json`:
   "cfg": 1.0,
   "width": 512,
   "height": 512,
+  "common_characteristics": "head and shoulders closeup picture, simple background, white background",
+  "female_characteristics": {
+    "age": [ "young woman", "adult woman", "middle-aged woman", "old woman" ],
+    "hair_length": [ "long hair", "short hair" ],
+    "hairstyle": [ "wavy hair", "straight hair", "ponytail", "bangs" ],
+    "clothing": [ "blouse", "jacket", "coat", "tshirt" ],
+    "expression": [ "smiling", "laughing", "serious", "bored", "angry" ],
+    "other": [ ]
+  },
+  "male_characteristics": {
+    "age": [ "young man", "adult man", "middle-aged man", "old man" ],
+    "hair_length": [ "bald", "shaved head", "long hair", "short hair" ],
+    "facial_hair": [ "clean-shaven", "moustache", "beard" ],
+    "clothing": [ "jacket", "coat", "tshirt" ],
+    "expression": [ "smiling", "laughing", "serious", "bored", "angry" ],
+    "other": [ ]
+  },
   "image_style": "pixel art style, low resolution, pixels"
 }
 ```
+
+The expected child keys for `female_characteristics` are as shown
+above. Unexpected keys (any not listed in the snippet above) are treated
+as unrecognized keys. Missing keys use the defaults shown above.
+
+The expected child keys for `male_characteristics` are likewise as
+shown above, but note that they differ from `female_characteristics`.
+
+Note that `other` is intentionally empty in both. The user can specify
+additional image generation hints here if needed. Only one entry from
+the `other` array is randomly selected to be included in the prompt.
+Users have the option therefore of specifying multiple string values if
+they don't care *which* value is used, or a single string value to ensure
+that every generated image will receive that hint.
 
 It is not an error if this configuration file does not exist: the snippet
 above represents the default values to use. Json parsing problems (malformed
@@ -209,55 +240,29 @@ Our tool is responsible for generating this prompt by assembling randomly-select
 elements from a pool of visual characteristics specific to the sex of the NPC
 that we are generating.
 
-The prompt consists of:
-- common characteristics (listed first)
-- appearance options (sex-specific)
-- image style options (listed last)
+The prompt consists of the following, in this order, joined with comma+space:
+- common characteristics
+- sex-specific characteristics: one item randomly from each non-empty group (groups can be processed in any order)
+- image style
 
-The resulting string should be comma-separated.
+For example, given the default configuration shown in the "Configuration" section,
+a possible prompt would look like this:
+
+```
+head and shoulders closeup picture, simple background, white background, adult woman, long hair, straight hair, jacket, serious, pixel art style, low resolution, pixels
+```
+
+If a group (for example, "Other") is empty, skip it.
+
+If "common characteristics" or "image style" is blank or empty string, don't revert
+to the default! It should be possible for the user to suppress the default without
+replacing it with something else.
+
+The prompt is always a single line, with elements separated by comma+space.
 
 Example invocation:
 
 `tools/sd-client.py "generated image prompt here" --server {server} --steps {steps} --cfg-scale {cfg} --width {width} --height {height} -o "{output-dir}/{NPC Name}/image.png" --output-format png`
-
-### Common characteristics
-
-A fixed string: "head and shoulders closeup picture, simple background, white background"
-
-### Female characteristics
-
-Pick one characteristic randomly from each of the following categories:
-
-- Age: one of "young woman", "adult woman", "middle-aged woman", "old woman"
-- Hair length: one of "long hair", "short hair"
-- Hairstyle: one of "wavy hair", "straight hair", "ponytail", "bangs"
-- Clothing: one of "blouse", "jacket", "coat", "tshirt"
-- Expression: one of "smiling", "laughing", "serious", "bored", "angry"
-
-### Male characteristics
-
-Pick one characteristic randomly from each of the following categories:
-
-- Age: one of "young man", "adult man", "middle-aged man", "old man"
-- Hair length: one of "bald", "shaved head", "long hair", "short hair"
-- Facial hair: one of "clean-shaven", "moustache", "beard"
-- Clothing: one of "jacket", "coat", "tshirt"
-- Expression: one of "smiling", "laughing", "serious", "bored", "angry"
-
-### Image style options
-
-The value of our `image_style` config key, or the default value
-shown in the "Configuration" section's snippet. A blank or empty
-configured value is valid! Don't revert to default if the
-configured value is "".
-
-### Example prompt
-
-An example of a randomly-generated prompt might look like this:
-
-"head and shoulders closeup picture, simple background, white background, young woman, long hair, wavy hair, jacket, serious, pixel art style, low resolution, pixels"
-
-One line, space-and-comma separated.
 
 ### Invocation contract
 
@@ -296,10 +301,20 @@ The following errors are fatal (output error message to stderr and exit with cod
 - the `sd-client.py` script does not exist in the same directory as `npc_generator`.
 - any invocation of `sd-client.py` returns a non-zero exit code.
 - any argument value fails validation (special case: exit code 2).
+- the `male_characteristics` or `female_characteristics` config objects contain an unrecognized key.
+- the `male_characteristics` or `female_characteristics` config objects themselves are not objects, or any key that they contain is not an array, or any array contains anything other than strings.
 
 The following are NOT fatal (log a warning to stderr and continue):
 - `npc_generator.json` is missing.
 - an expected key in `npc_generator.json` is missing (log the key in question and mention its default value).
+  If the key in question is `male_characteristics` or `female_characteristics`, just mention that
+  "Default values will be used" without listing all of them.
+
+Neither an error nor a warning:
+- an expected category key in `male_characteristics` or `female_characteristics` is missing.
+  Use default values for that category when forming the prompt. (User is implicitly accepting defaults for it)
+- an expected category key in `male_characteristics` or `female_characteristics` is present but empty.
+  Skip that category when forming the prompt. (User is explicitly suppressing it)
 
 ## Explicitly out of scope
 
@@ -332,7 +347,8 @@ via the tool's `--server` config.
 - an unrecognized config key in `npc_generator.json`: error and exit code 1.
 - a missing expected key in `npc_generator.json`: warning that mentions the default value in effect. NOT fatal.
 - `image_style` is present in config but is blank or empty: do NOT revert to the default. Use the blank value.
-- the generated prompt uses comma+space as separators and contains: common attributes, sex-specific attributes in the prescribed category order, and style attribute from configuration.
+- `common_characteristics` is present in config but is blank or empty: do NOT revert to the default. Use the blank value.
+- the generated prompt uses comma+space as separators and contains: common attributes, sex-specific attributes in any category order, and style attribute from configuration.
 - no `--output-dir` is specified: error and exit code 2.
 - `--config` is given a file that does not exist: warning and continue. NOT fatal.
 - if `--sex random` is given, the resulting `metadata.json` contains the RESOLVED sex, not the literal word "random".
@@ -348,7 +364,13 @@ via the tool's `--server` config.
 - interrupting a batch halfway through does NOT clean up the NPCs already successfully generated.
 - `sd-client.py` is missing from the `tools/` directory: error and exit code 1.
 - if `--debug` is not specified, a `Generating {first_name} {last_name}` message is output to stdout for each NPC.
-- if `--debug` is specified, an additional output line containing the full prompt is also output to stdout for each NPC..
+- if `--debug` is specified, an additional output line containing the full prompt is also output to stdout for each NPC.
+- An expected category within `male_characteristics` or `female_characteristics` is missing: no problem. Proceed with default values for that category.
+- An expected category within `male_characteristics` or `female_characteristics` is empty: skip that category when forming the prompt.
+- An expected category within `male_characteristics` or `female_characteristics` is not an array, or is an array that contains anything other than string values: fatal error and exit code 1.
+- The `male_characteristics` or `female_characteristics` keys themselves are missing: no problem. Proceed with defaults.
+- The `male_characteristics` or `female_characteristics` keys are an unexpected type (example: `"male_characteristics": "yes"`): fatal error and exit code 1.
+- The `male_characterstics` or `female_characteristics` objects contain an unrecognized key: fatal error and exit code 1.
 
 ## Acceptance criteria
 
@@ -357,6 +379,7 @@ via the tool's `--server` config.
 - Does each generated NPC directory contain an `image.png`?
 - Does each generated NPC directory contain a companion Json file with the correct sex?
 - Does each generated NPC directory contain an empty `audio` subdirectory?
+- Can the user customize every part of the prompt via the config file (common characteristics, sex-specific characteristics, and image style)?
 
 ## Dev plan
 
@@ -493,4 +516,11 @@ via the tool's `--server` config.
   rules, the invocation contract, and the `--debug` stdout rule.
   Document flipped `proposed` -> `active`; the intro prose now says
   "specifies", as it officially does.)
-
+8. **Amendment 2026-11-04**: make the "common characteristics" and
+  the sex-specific characteristics configurable. The original document
+  had these values hard-coded. Previous assumptions around drawing
+  exactly one value from each characteristic category are no longer valid,
+  as it is now possible for a category to be empty, in which case that
+  category should be silently skipped. Update existing code and tests
+  as needed to accommodate this change. If all tests pass, flip this document
+  back to "active" status.
