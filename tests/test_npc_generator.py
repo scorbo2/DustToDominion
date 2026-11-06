@@ -472,6 +472,10 @@ def test_load_generator_config_withMissingKeys_shouldWarnPerKeyAndNameEachDefaul
         assert repr(default) in err
 
 
+@pytest.mark.skipif(
+    _SKIP_PERMISSION_TESTS,
+    reason="file permission checks are bypassed (root) or N/A (no os.geteuid, e.g. Windows)",
+)
 def test_load_generator_config_withUnreadableFile_shouldRaiseConfigError(
     tmp_path: Path,
 ) -> None:
@@ -1032,6 +1036,10 @@ def test_prepare_withNameFileBeingADirectory_shouldExitCode1(
     assert "not a regular file" in capsys.readouterr().err
 
 
+@pytest.mark.skipif(
+    _SKIP_PERMISSION_TESTS,
+    reason="file permission checks are bypassed (root) or N/A (no os.geteuid, e.g. Windows)",
+)
 def test_prepare_withUnreadableNameFile_shouldExitCode1(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
