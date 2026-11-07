@@ -1,5 +1,5 @@
-"""NPC image generator logic: pre-generate NPC profile images and
-metadata directories for the game (spec 17).
+"""NPC generator logic: pre-generate NPC profile images and metadata
+directories for the game (spec 17).
 
 The thin executable shim ``tools/npc_generator`` forwards to ``run``.
 All logic lives in this module so the tool is unit-testable in-process
@@ -14,7 +14,7 @@ normal resource machinery). ``sd-client.py``, the one component that
 talks to an image server, is likewise stdlib-only (spec 17: Additional
 dependencies).
 
-All eight stages of the spec 17 dev plan are live: the full argument
+All nine stages of the spec 17 dev plan are live: the full argument
 surface with validation, ``npc_generator.json`` loading with the spec's
 fatal and non-fatal rules (stage 8 added the prompt-characteristics
 keys and their nested validation/merge rules), the merged-settings
@@ -24,7 +24,9 @@ seam, random name drawing with the output-dir uniqueness rule
 generation pipeline itself (``generate_npcs``): per-NPC directory
 layout (``image.png``, ``metadata.json``, empty ``audio/``) plus one
 ``sd-client.py`` subprocess per NPC, with the spec's fatal-failure
-cleanup, and the ``--debug`` prompt echo on stdout.
+cleanup, the ``--debug`` prompt echo on stdout, and the stage 9 age
+stat (``resolve_npc_age``) recorded alongside the resolved sex in
+``metadata.json``.
 """
 from __future__ import annotations
 
@@ -762,7 +764,24 @@ def allocate_npc_directory(
 PROMPT_SEGMENT_SEPARATOR = ", "
 
 
-def generate_prompt(
+@dataclass(frozen=True)
+class GeneratedPrompt:
+    """One assembled prompt plus the option it drew from the "age"
+    category (spec 17 stage 9).
+
+    ``age_value`` is the *resolved "age" value* the companion Json
+    file's age bucket is derived from - the exact option that landed
+    in the prompt - or None when the user suppressed the category.
+    Carrying it out of the draw keeps stage 9 honest: re-searching the
+    joined prompt string would let unrelated hint text (style
+    directives, "other" hints) masquerade as an age cue.
+    """
+
+    prompt: str
+    age_value: str | None
+
+
+def generate_prompt_with_age(
     resolved_sex: str,
     image_style: str,
     rng: random.Random,
@@ -770,9 +789,10 @@ def generate_prompt(
     common_characteristics: str,
     female_characteristics: dict[str, tuple[str, ...]],
     male_characteristics: dict[str, tuple[str, ...]],
-) -> str:
-    """Assemble one image-generation prompt (spec 17: Image
-    generation).
+) -> GeneratedPrompt:
+    """Assemble one image-generation prompt and report its resolved
+    "age" value (spec 17: Image generation + stage 9's NPC file
+    storage).
 
     Layout, per the spec: the configured common characteristics first,
     then one randomly-drawn option per non-empty sex-specific group,
@@ -785,7 +805,9 @@ def generate_prompt(
     and the defaults must NOT sneak back in (spec 17: "don't revert to
     the default!"). An empty category is skipped the same way, which
     also means it consumes no rng draw: you cannot draw from an empty
-    pool.
+    pool. A suppressed "age" category therefore yields ``age_value``
+    None - "no resolved age value exists", which stage 9 records as
+    "unknown".
 
     The rng consumption contract, mirroring ``NamePool``'s: exactly one
     ``choice()`` per non-empty category, in category order, and none
@@ -808,12 +830,91 @@ def generate_prompt(
     parts: list[str] = []
     if common_characteristics.strip():
         parts.append(common_characteristics)
-    for options in categories.values():
+    age_value: str | None = None
+    for category, options in categories.items():
         if options:
-            parts.append(rng.choice(options))
+            drawn = rng.choice(options)
+            parts.append(drawn)
+            if category == "age":
+                age_value = drawn
     if image_style.strip():
         parts.append(image_style)
-    return PROMPT_SEGMENT_SEPARATOR.join(parts)
+    return GeneratedPrompt(
+        prompt=PROMPT_SEGMENT_SEPARATOR.join(parts),
+        age_value=age_value,
+    )
+
+
+def generate_prompt(
+    resolved_sex: str,
+    image_style: str,
+    rng: random.Random,
+    *,
+    common_characteristics: str,
+    female_characteristics: dict[str, tuple[str, ...]],
+    male_characteristics: dict[str, tuple[str, ...]],
+) -> str:
+    """The prompt string alone - the documented simple seam, delegating
+    to ``generate_prompt_with_age``. Callers that never touch the age
+    stat (and the stage 3/8 scripted-rng pins) keep calling this."""
+    return generate_prompt_with_age(
+        resolved_sex,
+        image_style,
+        rng,
+        common_characteristics=common_characteristics,
+        female_characteristics=female_characteristics,
+        male_characteristics=male_characteristics,
+    ).prompt
+
+
+# ------------------------------------------------------------------ #
+# age generation (spec 17: NPC file storage, dev plan stage 9)
+# ------------------------------------------------------------------ #
+
+#: Stage 9's keyword -> inclusive age-range table, listed in the
+#: spec's search order because the first match wins: a user-authored
+#: pool value like "young adult" is classified by "young" because it
+#: comes first in this table - not because it is the youngest range
+#: ("middle-aged adult" would land on "adult", the *younger* of the
+#: two matches). Matching is case-insensitive substring containment against
+#: the resolved "age" value - the option drawn from the "age" category
+#: - NOT against the whole prompt: stage 9 deliberately narrowed the
+#: match surface so a style directive like "mature adult concept art"
+#: can never masquerade as an age cue. "old man"/"old woman" share one
+#: range because the spec buckets them together.
+AGE_KEYWORD_RANGES: tuple[tuple[str, tuple[int, int]], ...] = (
+    ("young", (19, 24)),
+    ("adult", (25, 36)),
+    ("middle-aged", (37, 48)),
+    ("old man", (49, 75)),
+    ("old woman", (49, 75)),
+)
+
+#: Recorded when no keyword matches the resolved age value, or when
+#: there is no resolved age value at all (spec 17: the user suppressed
+#: the "age" category via config).
+UNKNOWN_AGE = "unknown"
+
+
+def resolve_npc_age(age_value: str | None, rng: random.Random) -> str:
+    """Map one resolved "age" value onto the age string recorded in the
+    companion Json file (spec 17: NPC file storage, stage 9).
+
+    The age is one uniform draw from the inclusive range of the first
+    matching keyword, recorded as a string - never a number, per spec,
+    with "unknown" standing in when nothing matches.
+
+    The rng consumption contract, per ``generate_prompt_with_age``
+    and ``NamePool``: exactly one ``randint()`` when a keyword matches,
+    and zero draws for "unknown" - an age the config declined to
+    specify cannot be conjured from an empty pool.
+    """
+    if age_value is not None:
+        lowered = age_value.lower()
+        for keyword, (low, high) in AGE_KEYWORD_RANGES:
+            if keyword in lowered:
+                return str(rng.randint(low, high))
+    return UNKNOWN_AGE
 
 
 # ------------------------------------------------------------------ #
@@ -860,18 +961,19 @@ def build_sd_client_command(
 
 
 def write_npc_directory_layout(
-    npc_directory: Path, npc_name: NpcName
+    npc_directory: Path, npc_name: NpcName, age: str
 ) -> None:
     """Fill a freshly allocated NPC directory except for the image
     itself (spec 17: NPC file storage): the empty ``audio/``
-    subdirectory and ``metadata.json``, whose only key is the *resolved*
-    sex - never the literal word "random".
+    subdirectory and ``metadata.json``, whose only keys are the
+    *resolved* sex - never the literal word "random" - and the
+    generated age (stage 9).
 
     The metadata is a placeholder by spec: game stats are undefined
     today, so the file exists mostly to prove a directory is an NPC's.
     """
     (npc_directory / AUDIO_DIRECTORY_NAME).mkdir()
-    metadata = json.dumps({"sex": npc_name.sex}, indent=2) + "\n"
+    metadata = json.dumps({"sex": npc_name.sex, "age": age}, indent=2) + "\n"
     (npc_directory / METADATA_FILENAME).write_text(metadata, encoding="utf-8")
 
 
@@ -896,18 +998,27 @@ def generate_npcs(settings: ResolvedSettings) -> int:
     """Generate ``settings.count`` NPCs (spec 17: Image generation,
     NPC Naming, NPC file storage, Error handling).
 
-    Per NPC: allocate a unique name directory, lay out ``metadata.json``
-    plus the empty ``audio/`` subdirectory, announce the NPC on stdout,
-    then hand the prompt to ``sd-client.py``. Any non-zero sd-client
-    exit - including 130 from a ctrl+C - is fatal: the half-filled NPC
+    Per NPC: allocate a unique name directory, draw the prompt and the
+    resolved "age" value it came from, generate the age bucket from
+    that value, lay out ``metadata.json`` (resolved sex + age) plus the
+    empty ``audio/`` subdirectory, announce the NPC on stdout, then
+    hand the prompt to ``sd-client.py``. Any non-zero sd-client exit -
+    including 130 from a ctrl+C - is fatal: the half-filled NPC
     directory is removed so the name stays free for a future attempt,
     and already-generated NPCs are left untouched.
 
-    The name draws and the prompt draws share one plain ``random.Random``:
-    ``--seed`` is deliberately NOT used here (spec 17: Arguments - the
-    seed belongs to the image generator and "is not used for anything
-    else"), so reproducible images and reproducible names are separate
-    concerns.
+    The name draws, the prompt draws and the age draw share one plain
+    ``random.Random``: ``--seed`` is deliberately NOT used here (spec
+    17: Arguments - the seed belongs to the image generator and "is
+    not used for anything else"), so reproducible images and
+    reproducible names/ages are separate concerns - re-running with
+    the same ``--seed`` guarantees the same image but NOT the same
+    age (spec 17: NPC file storage).
+
+    The per-NPC rng consumption contract: one ``choice()`` per name
+    draw component, one ``choice()`` per non-empty prompt category,
+    then one ``randint()`` for the age - zero draws if the age is
+    "unknown".
     """
     if not SD_CLIENT_SCRIPT.is_file():
         return _fail(
@@ -925,8 +1036,7 @@ def generate_npcs(settings: ResolvedSettings) -> int:
         except NamePoolExhaustedError as exc:
             return _fail(str(exc))
 
-        write_npc_directory_layout(npc_directory, npc_name)
-        prompt = generate_prompt(
+        generated_prompt = generate_prompt_with_age(
             npc_name.sex,
             settings.image_style,
             rng,
@@ -934,6 +1044,12 @@ def generate_npcs(settings: ResolvedSettings) -> int:
             female_characteristics=settings.female_characteristics,
             male_characteristics=settings.male_characteristics,
         )
+        prompt = generated_prompt.prompt
+        # stage 9: classify the age from the very option the prompt
+        # drew from the "age" category, never from the prompt string -
+        # the metadata layout therefore waits on the draw.
+        age = resolve_npc_age(generated_prompt.age_value, rng)
+        write_npc_directory_layout(npc_directory, npc_name, age)
         # flush so the announcements reach the terminal before
         # sd-client.py's own output, even when stdout is block-buffered.
         print(f"Generating {npc_name.full_name}...", flush=True)
