@@ -73,3 +73,13 @@ runtime to toggle between windowed and fullscreen modes; switching to
 fullscreen uses the display's current resolution if it is one of the
 supported ones, otherwise it falls back to `1920x1080`. Successful switches
 are written back to `game.json`.
+
+## Known issues
+
+1. On a Windows system, when playing in windows mode (not fullscreen), clicking and dragging the
+  main window's title bar to move the window will cause music to pause until the mouse is released.
+  This is a GIL starvation issue caused by the mechanism we use to load and play audio resources.
+  This is neither SDL's fault nor Pygame's fault. On Windows, our main thread is parked during a
+  window drag operation, preventing our code from keeping the audio buffer full. Note that this
+  seems to only be an issue on Windows.
+
