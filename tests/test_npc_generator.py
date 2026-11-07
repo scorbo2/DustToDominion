@@ -1,4 +1,4 @@
-"""NPC image generator tool tests (spec 17, dev plan stages 1-8).
+"""NPC generator tool tests (spec 17, dev plan stages 1-9).
 
 Stages 1-2 covered the tool's front door (argument surface, argument
 validation, npc_generator.json loading) and random name drawing with
@@ -8,8 +8,12 @@ wired the generation pipeline: per-NPC directory layout (``image.png``,
 subprocess per NPC. Stage 8 made every prompt part configurable: the
 ``common_characteristics``, ``female_characteristics`` and
 ``male_characteristics`` keys with their nested validation, per-
-category merge and suppression rules. The Testing bullets these
-stages make testable:
+category merge and suppression rules. Stage 9 added the age stat:
+``metadata.json`` carries ``sex`` and ``age`` as its only keys, the
+age drawn from the range the *resolved "age" value* (the option drawn
+from the "age" category) maps onto via case-insensitive first match,
+with "unknown" when no keyword matches or the category is suppressed.
+The Testing bullets these stages make testable:
 
 - missing ``npc_generator.json``: warning logged, defaults used
 - malformed/empty config Json: error and exit code 1
@@ -43,8 +47,12 @@ stages make testable:
   cleans up the partial NPC directory without touching NPCs already
   generated; ``sd-client.py`` missing beside the tool is fatal
 - a successful generation fills the NPC directory with ``image.png``,
-  ``metadata.json`` (resolved sex as the only key) and an empty
-  ``audio/`` subdirectory
+  ``metadata.json`` (``sex`` and ``age`` as the only keys) and an
+  empty ``audio/`` subdirectory
+- each NPC's age is recorded correctly: the resolved "age" value
+  selects one of the spec's four inclusive ranges by case-insensitive
+  first match, an unmatched value or a suppressed "age" category
+  records "unknown", and ages are always strings, never numbers
 - without ``--debug`` stdout carries only the per-NPC "Generating..."
   announcements; with ``--debug`` the exact prompt used for each NPC
   follows on its own line (and matches what sd-client.py received)
@@ -1244,6 +1252,25 @@ class _ChoiceScriptRandom(random.Random):
         return list(seq)[index]
 
 
+class _RecordingRandom(random.Random):
+    """``random.Random`` subclass that records every ``randint()`` call
+    with its arguments while still drawing real values.
+
+    Stage 9's rng contract is about WHICH range gets drawn from, and
+    about not drawing at all for "unknown" - statistics would be a
+    slow, flaky way to pin that, so the calls are captured verbatim
+    instead. ``randint_calls`` mirrors ``_ChoiceScriptRandom``'s
+    ``choice_calls`` for the same honesty purpose."""
+
+    def __init__(self, seed: int = 0) -> None:
+        super().__init__(seed)
+        self.randint_calls: list[tuple[int, int]] = []
+
+    def randint(self, a, b):
+        self.randint_calls.append((a, b))
+        return super().randint(a, b)
+
+
 def _pool(
     *pools: list[str], rng: random.Random | None = None
 ) -> npc_generator_lib.NamePool:
@@ -1920,6 +1947,216 @@ def test_generate_prompt_with_unknown_sex_should_raise_value_error() -> None:
 
 
 # ------------------------------------------------------------------ #
+# age generation (spec 17: NPC file storage, dev plan stage 9)
+# ------------------------------------------------------------------ #
+
+def test_age_keyword_ranges_should_be_the_specs_ranges_in_search_order() -> None:
+    # GIVEN the spec's four inclusive age ranges, listed in the
+    # "first match wins" search order, "old man"/"old woman" sharing
+    # the one old bucket (spec 17: NPC file storage):
+    assert npc_generator_lib.AGE_KEYWORD_RANGES == (
+        ("young", (19, 24)),
+        ("adult", (25, 36)),
+        ("middle-aged", (37, 48)),
+        ("old man", (49, 75)),
+        ("old woman", (49, 75)),
+    )
+    assert npc_generator_lib.UNKNOWN_AGE == "unknown"
+
+
+@pytest.mark.parametrize(
+    ("age_value", "expected_range"),
+    [
+        ("young woman", (19, 24)),
+        ("young man", (19, 24)),
+        # all matching is case-insensitive (spec 17 stage 9 Testing):
+        ("YOUNG woman", (19, 24)),
+        ("adult woman", (25, 36)),
+        ("Adult Man", (25, 36)),
+        ("middle-aged woman", (37, 48)),
+        ("MIDDLE-AGED man", (37, 48)),
+        ("old man", (49, 75)),
+        ("old woman", (49, 75)),
+        ("Old Woman", (49, 75)),
+    ],
+)
+def test_resolve_npc_age_withMatchingAgeValue_shouldDrawFromThatInclusiveRange(
+    age_value: str,
+    expected_range: tuple[int, int],
+) -> None:
+    # GIVEN the keyword-matching rng contract: exactly one randint,
+    # called with the range's inclusive bounds (spec 17: NPC file
+    # storage - "19-24 inclusive" and friends):
+    for seed in range(1, 13):
+        rng = _RecordingRandom(seed)
+
+        age = npc_generator_lib.resolve_npc_age(age_value, rng)
+
+        # THEN the age is a string (never a number) holding a number
+        # inside the expected inclusive range, drawn with a single
+        # rng call pinned to the exact bounds:
+        assert isinstance(age, str)
+        assert age.isdigit()
+        low, high = expected_range
+        assert low <= int(age) <= high
+        assert rng.randint_calls == [expected_range]
+
+
+@pytest.mark.parametrize(
+    ("age_value", "expected_range"),
+    [
+        ("young woman", (19, 24)),
+        ("adult woman", (25, 36)),
+        ("middle-aged woman", (37, 48)),
+        ("old woman", (49, 75)),
+    ],
+)
+def test_resolve_npc_age_withRangeBounds_shouldProduceBothEndpointsOfEveryRange(
+    age_value: str,
+    expected_range: tuple[int, int],
+) -> None:
+    # GIVEN the "inclusive" wording taken literally: fixed seed, 600
+    # draws per range (missing a fixed endpoint across a range of at
+    # most 27 values has probability ~3e-10, and the seed is pinned
+    # anyway, so the outcome is deterministic):
+    rng = random.Random(20261106)
+
+    ages = {
+        int(npc_generator_lib.resolve_npc_age(age_value, rng))
+        for _ in range(600)
+    }
+
+    # THEN both endpoints of the range actually occur:
+    low, high = expected_range
+    assert low in ages
+    assert high in ages
+
+
+@pytest.mark.parametrize(
+    ("age_value", "expected_range"),
+    [
+        # "young" is checked first, so it wins however the value
+        # spells the rest (spec 17: "the first match wins"):
+        ("young adult", (19, 24)),
+        ("adult young", (19, 24)),
+        # adult precedes middle-aged in the spec's order - and IS the
+        # younger of the two matches here, proving "first in table",
+        # not "youngest match":
+        ("middle-aged adult", (25, 36)),
+        # old man/old woman come last, so middle-aged wins over them:
+        ("old man, middle-aged at heart", (37, 48)),
+    ],
+)
+def test_resolve_npc_age_withMultipleKeywordMatches_shouldUseTheFirstMatchInTheSpecsOrder(
+    age_value: str,
+    expected_range: tuple[int, int],
+) -> None:
+    # GIVEN an age value containing several age keywords at once:
+    rng = _RecordingRandom()
+
+    age = npc_generator_lib.resolve_npc_age(age_value, rng)
+
+    # THEN the range comes from the first keyword in the spec's
+    # search order, and only that one draw happens:
+    assert int(age) in range(expected_range[0], expected_range[1] + 1)
+    assert rng.randint_calls == [expected_range]
+
+
+@pytest.mark.parametrize(
+    "age_value",
+    ["timeless crone", "", "ancient mariner", "elderly statesman", "grown"],
+)
+def test_resolve_npc_age_withNoMatchingAgeValue_shouldRecordUnknownWithoutAnRngDraw(
+    age_value: str,
+) -> None:
+    # GIVEN a user-supplied pool value carrying none of the spec's
+    # keywords: matching is literal and substring-based, not fuzzy -
+    # "elderly" and "grown" are semantically age-ish but keyword-free:
+    rng = _RecordingRandom()
+
+    age = npc_generator_lib.resolve_npc_age(age_value, rng)
+
+    # THEN the age is "unknown" and NO rng draw was consumed:
+    assert age == "unknown"
+    assert rng.randint_calls == []
+
+
+def test_resolve_npc_age_withNoResolvedAgeValue_shouldRecordUnknownWithoutAnRngDraw() -> None:
+    # GIVEN None: the stage 8 suppression path, where the user
+    # emptied the "age" category so no resolved age value exists at
+    # all (spec 17 stage 9 Testing: "if there is no resolved 'age'
+    # value ... recorded as 'unknown'"):
+    rng = _RecordingRandom()
+
+    age = npc_generator_lib.resolve_npc_age(None, rng)
+
+    # THEN same contract as a keyword miss: "unknown", zero draws:
+    assert age == "unknown"
+    assert rng.randint_calls == []
+
+
+def test_generate_prompt_with_age_should_reportTheDrawnAgeCategoryOption() -> None:
+    # GIVEN scripted female draws selecting "old woman" from the age
+    # category (script index 3 is the first draw, the age category is
+    # first in the default order):
+    script = _ChoiceScriptRandom([3, 1, 3, 3, 4])
+
+    generated = npc_generator_lib.generate_prompt_with_age(
+        "female", _TEST_IMAGE_STYLE, script, **_DEFAULT_CHARACTERISTICS
+    )
+
+    # THEN the resolved age value is exactly the option that landed
+    # in the prompt - not a re-search of the prompt string - and the
+    # rng consumption matches the plain generate_prompt contract:
+    assert generated.age_value == "old woman"
+    assert "old woman" in generated.prompt.split(", ")
+    assert script.choice_calls == 5
+
+
+def test_generate_prompt_with_age_withSuppressedAgeCategory_shouldReportNoAgeValue() -> None:
+    # GIVEN a female category set with the "age" category suppressed
+    # to empty (the stage 8 explicit-suppression rule):
+    suppressed = {
+        category: () if category == "age" else options
+        for category, options in (
+            npc_generator_lib.DEFAULT_FEMALE_CHARACTERISTICS.items()
+        )
+    }
+    script = _ChoiceScriptRandom([0, 0, 0, 0])
+
+    generated = npc_generator_lib.generate_prompt_with_age(
+        "female",
+        "",
+        script,
+        common_characteristics="",
+        female_characteristics=suppressed,
+        male_characteristics=npc_generator_lib.DEFAULT_MALE_CHARACTERISTICS,
+    )
+
+    # THEN no age value exists - the empty pool draws nothing, and the
+    # prompt carries no age segment:
+    assert generated.age_value is None
+    assert script.choice_calls == 4
+    assert not {
+        "young woman", "adult woman", "middle-aged woman", "old woman",
+    } & set(generated.prompt.split(", "))
+
+
+def test_generate_prompt_with_age_shouldKeepThePlainPromptSeamIdentical() -> None:
+    # GIVEN the same seed drawn through both seams:
+    prompt_only = npc_generator_lib.generate_prompt(
+        "male", _TEST_IMAGE_STYLE, random.Random(77), **_DEFAULT_CHARACTERISTICS
+    )
+    generated = npc_generator_lib.generate_prompt_with_age(
+        "male", _TEST_IMAGE_STYLE, random.Random(77), **_DEFAULT_CHARACTERISTICS
+    )
+
+    # THEN generate_prompt is exactly the prompt half of the pair -
+    # the stage 3/8 scripted pins stay valid through the refactor:
+    assert generated.prompt == prompt_only
+
+
+# ------------------------------------------------------------------ #
 # generation wiring: sd-client.py invocation contract (spec 17: Image
 # generation, Invocation contract, dev plan stage 5)
 # ------------------------------------------------------------------ #
@@ -2193,15 +2430,20 @@ def test_run_withSuccessfulGeneration_shouldFillNpcDirectoryWithImageMetadataAnd
     exit_code = npc_generator_lib.run(argv)
 
     # THEN the NPC directory holds exactly the spec 17 layout: the
-    # image, a metadata.json whose only key is the sex, and an empty
-    # audio subdirectory:
+    # image, a metadata.json whose only keys are the resolved sex and
+    # the generated age, and an empty audio subdirectory:
     assert exit_code == 0
     (npc_directory,) = (tmp_path / "npc-out").iterdir()
     assert (npc_directory / "image.png").read_bytes().startswith(b"\x89PNG")
     metadata = json.loads(
         (npc_directory / "metadata.json").read_text(encoding="utf-8")
     )
-    assert metadata == {"sex": "female"}
+    assert set(metadata) == {"sex", "age"}
+    assert metadata["sex"] == "female"
+    # the default age pool spans young through old, whose four
+    # contiguous ranges cover exactly 19-75:
+    assert metadata["age"].isdigit()
+    assert 19 <= int(metadata["age"]) <= 75
     audio = npc_directory / "audio"
     assert audio.is_dir()
     assert not any(audio.iterdir())
@@ -2225,6 +2467,122 @@ def test_run_withRandomSex_metadataShouldCarryResolvedSexNeverTheLiteralRandom(
         assert "random" not in metadata_text
         sex = json.loads(metadata_text)["sex"]
         assert sex in npc_generator_lib.RESOLVED_SEXES
+
+
+def test_run_withSingleOptionYoungAgePool_metadataShouldCarryAnAgeInTheYoungRange(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # GIVEN a config pinning the male "age" category to one option,
+    # so every NPC's resolved "age" value contains "young" (spec 17
+    # stage 9 Testing: young -> 19-24 inclusive):
+    config_path = _full_config(
+        tmp_path, male_characteristics={"age": ["young man"]}
+    )
+    argv = _base_args(tmp_path, config_path=config_path) + [
+        "--count", "3", "--sex", "male",
+    ]
+    _fake_sd_client(tmp_path, monkeypatch)
+
+    exit_code = npc_generator_lib.run(argv)
+
+    # THEN every generated NPC records a string age inside 19-24:
+    assert exit_code == 0
+    npc_directories = list((tmp_path / "npc-out").iterdir())
+    assert len(npc_directories) == 3
+    for npc_directory in npc_directories:
+        metadata = json.loads(
+            (npc_directory / "metadata.json").read_text(encoding="utf-8")
+        )
+        assert metadata["sex"] == "male"
+        assert metadata["age"].isdigit()
+        assert 19 <= int(metadata["age"]) <= 24
+
+
+def test_run_withSuppressedAgeCategory_metadataShouldCarryUnknownAge(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # GIVEN a config explicitly suppressing the female "age" category
+    # to empty, so no resolved age value ever exists (spec 17 stage 9
+    # Testing: "if there is no resolved 'age' value (suppressed by the
+    # user via config), then the NPC's age is recorded as 'unknown'"):
+    config_path = _full_config(
+        tmp_path, female_characteristics={"age": []}
+    )
+    argv = _base_args(tmp_path, config_path=config_path) + [
+        "--count", "2", "--sex", "female",
+    ]
+    _fake_sd_client(tmp_path, monkeypatch)
+
+    exit_code = npc_generator_lib.run(argv)
+
+    # THEN sex and "unknown" are the metadata, string included:
+    assert exit_code == 0
+    npc_directories = list((tmp_path / "npc-out").iterdir())
+    assert len(npc_directories) == 2
+    for npc_directory in npc_directories:
+        assert json.loads(
+            (npc_directory / "metadata.json").read_text(encoding="utf-8")
+        ) == {"sex": "female", "age": "unknown"}
+
+
+def test_run_withKeywordFreeCustomAgePool_metadataShouldCarryUnknownAge(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # GIVEN a user-replaced "age" category whose option matches none
+    # of the spec's keywords (spec 17 stage 9 Testing: "contains none
+    # of these" -> "unknown"):
+    config_path = _full_config(
+        tmp_path, female_characteristics={"age": ["timeless crone"]}
+    )
+    argv = _base_args(tmp_path, config_path=config_path) + [
+        "--count", "1", "--sex", "female",
+    ]
+    _fake_sd_client(tmp_path, monkeypatch)
+
+    exit_code = npc_generator_lib.run(argv)
+
+    assert exit_code == 0
+    (npc_directory,) = (tmp_path / "npc-out").iterdir()
+    assert json.loads(
+        (npc_directory / "metadata.json").read_text(encoding="utf-8")
+    ) == {"sex": "female", "age": "unknown"}
+
+
+def test_run_withAgeKeywordsInUnrelatedPromptParts_shouldClassifyFromTheAgeCategoryOnly(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # GIVEN the stage 9 narrowing made explicit: the age category
+    # resolves to "adult woman" while the common characteristics shout
+    # "young" and the image style shouts "old man" - decoy keywords
+    # that would misclassify a prompt-string search (whole prompt
+    # contains "young" -> 19-24):
+    config_path = _full_config(
+        tmp_path,
+        common_characteristics="young at heart portrait",
+        image_style="in the style of a wise old man",
+        female_characteristics={"age": ["adult woman"]},
+    )
+    argv = _base_args(tmp_path, config_path=config_path) + [
+        "--count", "2", "--sex", "female",
+    ]
+    log = _fake_sd_client(tmp_path, monkeypatch)
+
+    exit_code = npc_generator_lib.run(argv)
+
+    # THEN the prompts really do carry the decoys (the fake proves it),
+    # while the recorded ages land in the adult 25-36 range because
+    # only the resolved "age" value was consulted:
+    assert exit_code == 0
+    for invocation in _recorded_invocations(log):
+        assert "young at heart portrait" in invocation[0]
+        assert "wise old man" in invocation[0]
+    npc_directories = list((tmp_path / "npc-out").iterdir())
+    assert len(npc_directories) == 2
+    for npc_directory in npc_directories:
+        metadata = json.loads(
+            (npc_directory / "metadata.json").read_text(encoding="utf-8")
+        )
+        assert 25 <= int(metadata["age"]) <= 36
 
 
 def test_run_withCountTwo_shouldPrintOneGeneratingLinePerNpcOnStdout(
@@ -2550,16 +2908,22 @@ def test_npcGeneratorShim_withStubServerAndRealSdClient_shouldGenerateTheFullNpc
     assert [line for line in result.stdout.splitlines() if line.startswith("Generating ")]
 
     # AND the acceptance criteria hold on disk: one unique directory
-    # holding the image the stub served (byte for byte), the sex
-    # metadata, and an empty audio subdirectory:
+    # holding the image the stub served (byte for byte), the sex and
+    # age metadata, and an empty audio subdirectory:
     (npc_directory,) = (tmp_path / "npc-out").iterdir()
     first_name, _, last_name = npc_directory.name.partition(" ")
     assert first_name in ("Ada", "Bo")
     assert last_name in ("Dee", "Eff")
     assert (npc_directory / "image.png").read_bytes() == BLANK_PNG_BYTES
-    assert json.loads(
+    metadata = json.loads(
         (npc_directory / "metadata.json").read_text(encoding="utf-8")
-    ) == {"sex": "female"}
+    )
+    assert set(metadata) == {"sex", "age"}
+    assert metadata["sex"] == "female"
+    # default config, default age pool: the contiguous ranges span
+    # 19-75, and the age is the string form the spec demands:
+    assert metadata["age"].isdigit()
+    assert 19 <= int(metadata["age"]) <= 75
     assert (npc_directory / "audio").is_dir()
     assert not any((npc_directory / "audio").iterdir())
 

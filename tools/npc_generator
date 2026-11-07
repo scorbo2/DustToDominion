@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Thin executable shim for the NPC image generator tool (spec 17).
+"""Thin executable shim for the NPC generator tool (spec 17).
 
 Usage::
 

@@ -1,25 +1,24 @@
 ---
-description: Specifies the standalone `npc_generator` tool that pre-generates NPC profile images and metadata directories for the game
+description: Specifies the standalone `npc_generator` tool that pre-generates NPC profile images and metadata for the game
 status: active
 ---
 
-# NPC Image Generator
+# NPC Generator
 
 This document specifies the `tools/npc_generator` standalone
 Python script that can be used to easily generate profile images
-for all NPC characters.
+and metadata for all NPC characters.
 
-The intention is NOT to dynamically generate images while the game
+The intention is NOT to dynamically generate NPCs while the game
 is running. Rather, this supplemental tool can be used to **pre-generate**
-images that can then either be bundled with the game, or distributed
-as extra downloadable resource package files. The game will load
-NPC images as regular image resources.
+NPCs that can then either be bundled with the game, or distributed
+as extra downloadable resource package files.
 
-The NPC Image Generator will defer to a `sd-client.py` script
-borrowed from another project. The details of `sd-client.py` are
-NOT covered in this spec doc - we treat it as a black box that
-connects to an image generation model on our behalf to generate
-images for us.
+The NPC Generator will defer to a `sd-client.py` script
+borrowed from another project for image generation. The details
+of `sd-client.py` are NOT covered in this spec doc - we treat it
+as a black box that connects to an image generation model on our
+behalf to generate images for us.
 
 What the `npc_generator` brings to the table is the ability
 to generate large numbers of NPCs with many variations, without
@@ -204,16 +203,33 @@ structure will be created:
 - `resources/npc/Kate Stevenson/metadata.json`: the companion Json file.
 - `resources/npc/Kate Stevenson/audio/`: audio subdirectory (initially empty).
 
-The companion Json file will be used to contain NPC stats
-that will be used in the game. These stats are not defined
+The companion Json file is used to contain NPC stats
+intended for the game. These stats are not defined
 yet, so this file is largely a placeholder. Current
-content only includes the NPC's sex:
+content only includes the NPC's sex and age:
 
 ```json
 {
-  "sex": "female"
+  "sex": "female",
+  "age": "25"
 }
 ```
+
+`sex` is the resolved sex that was chosen for the NPC (either "male" or "female",
+never "random").
+
+`age` is a random number generated from one of these ranges:
+- if the resolved "age" value contains "young": 19-24 inclusive
+- if the resolved "age" value contains "adult": 25-36 inclusive
+- if the resolved "age" value contains "middle-aged": 37-48 inclusive
+- if the resolved "age" value contains "old man" or "old woman": 49-75 inclusive
+
+The age value is searched case-insensitively in the above order, and the first match wins.
+If no matches are found, the age should be recorded as "unknown".
+Age is always recorded as a string, never a number.
+
+Note that our `--seed` parameter is ONLY used for image generation. Re-running the tool
+with the same seed guarantees the same image but NOT the same age.
 
 ## Image generation
 
@@ -360,7 +376,7 @@ via the tool's `--server` config.
 - a failed "John Smith" image generation does not leave behind an empty/partially filled "John Smith" directory.
 - any tool argument value fails validation: error and exit code 2.
 - `sd-client.py` returns a nonzero exit code: error and exit code 1. This includes `130` returned from an interrupt.
-- a successful generation creates a new directory with the expected name containing `image.png`, `metadata.json`, and an empty `audio` subdirectory. The metadata file contains sex as the only key.
+- a successful generation creates a new directory with the expected name containing `image.png`, `metadata.json`, and an empty `audio` subdirectory. The metadata file contains `sex` and `age` as the only keys.
 - interrupting a batch halfway through does NOT clean up the NPCs already successfully generated.
 - `sd-client.py` is missing from the `tools/` directory: error and exit code 1.
 - if `--debug` is not specified, a `Generating {first_name} {last_name}` message is output to stdout for each NPC.
@@ -371,13 +387,20 @@ via the tool's `--server` config.
 - The `male_characteristics` or `female_characteristics` keys themselves are missing: no problem. Proceed with defaults.
 - The `male_characteristics` or `female_characteristics` keys are an unexpected type (example: `"male_characteristics": "yes"`): fatal error and exit code 1.
 - The `male_characteristics` or `female_characteristics` objects contain an unrecognized key: fatal error and exit code 1.
+- Each NPC's age is recorded correctly (all matching is case-insensitive):
+  - if the resolved "age" value contains "young", the NPC's age is a random number from 19-24 (inclusive).
+  - if the resolved "age" value contains "adult", the NPC's age is a random number from 25-36 (inclusive).
+  - if the resolved "age" value contains "middle-aged", the NPC's age is a random number from 37-48 (inclusive).
+  - if the resolved "age" value contains "old man" or "old woman", the NPC's age is a random number from 49-75 (inclusive).
+  - if the resolved "age" value contains none of these, or if there is no resolved "age" value (suppressed by the user via config), then the NPC's age is recorded as "unknown".
+  - if the resolved "age" value contains more than one of these, the first match in the above order is used.
 
 ## Acceptance criteria
 
 - Can the `tools/npc_generator` script be used to generate unique NPCs?
 - Does each generated NPC get stored in its own unique directory within `--output-dir`?
 - Does each generated NPC directory contain an `image.png`?
-- Does each generated NPC directory contain a companion Json file with the correct sex?
+- Does each generated NPC directory contain a companion Json file with the correct sex and age?
 - Does each generated NPC directory contain an empty `audio` subdirectory?
 - Can the user customize every part of the prompt via the config file (common characteristics, sex-specific characteristics, and image style)?
 
@@ -561,3 +584,37 @@ via the tool's `--server` config.
   flipped `proposed` -> `active` per the stage's own instruction;
   the Testing-section typo `male_characterstics` repaired during
   sync.)
+9. **Amendment 2026-11-06**: add `age` to the generated NPC
+  companion Json file and ensure it is recorded correctly.
+  Change the test module docstring to replace "NPC image generator
+  tool tests" to "NPC generator tool tests".
+  If all tests pass, flip this document back to "active" status.
+  **Completed 2026-11-06** (`generate_prompt_with_age` returns a
+  `GeneratedPrompt` carrying the prompt *and* the resolved "age"
+  value - the option the prompt engine drew from the "age" category.
+  Deliberate narrowing: stage 9 classifies from that drawn option,
+  never from the assembled prompt string, so decoy keywords in
+  `common_characteristics` or `image_style` can never masquerade as
+  an age cue. `generate_prompt` survives as the documented str seam
+  by delegation, so every stage 3/8 scripted-rng pin rode the
+  refactor untouched. New `AGE_KEYWORD_RANGES` / `UNKNOWN_AGE` /
+  `resolve_npc_age`: case-insensitive first match in the spec's
+  order, one uniform `randint` from the matched inclusive range, and
+  zero rng draws when nothing matches or the category is suppressed
+  - the rng-consumption contract pinned by a new `_RecordingRandom`.
+  `metadata.json` now carries exactly the `sex` and `age` keys,
+  ages always strings, "unknown" standing in otherwise; the layout
+  write moved after the draw it depends on. 32 new tests (module
+  total 171): verbatim spec-order range pins, per-bucket draws with
+  case-insensitive variants, both endpoints of every range at a
+  fixed seed, first-match-wins over multi-keyword pool values,
+  "unknown" for keyword-free values and suppressed categories, and
+  the decoy-keyword config proving classification consults only the
+  age category while the prompt demonstrably carries the decoys.
+  Test module, lib and shim docstrings renamed per the amendment -
+  "NPC generator tool tests", stages 1-9. Renamed this document
+  from `17-npc-image-generator.md` and retitled it "NPC Generator";
+  no other file referenced the old name. Full suite green twice
+  back to back at 1607 tests. Document flipped `proposed` ->
+  `active` per the stage's own instruction; the companion-file
+  prose now speaks in the present, as it officially does.)
